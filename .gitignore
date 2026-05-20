@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.env
+.sync/
+.superpowers/
+docs-site/.vitepress/dist/
+docs-site/.vitepress/cache/

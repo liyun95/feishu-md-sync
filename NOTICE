@@ -1,0 +1,5 @@
+This project is an independent Markdown-to-Feishu CLI.
+
+Feishu API endpoint shapes and block-conversion behavior were informed by local
+reference tooling in /Users/liyun/sdk-doc-sync. No runtime dependency on that
+repository is used.
