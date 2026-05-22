@@ -14,7 +14,7 @@ const BLOCK_TYPES = {
   table: 31
 } as const;
 
-const LANG_IDS: Record<string, number> = {
+export const LANG_IDS: Record<string, number> = {
   plaintext: 1,
   text: 1,
   bash: 7,
@@ -22,19 +22,29 @@ const LANG_IDS: Record<string, number> = {
   sh: 62,
   cpp: 9,
   c: 10,
+  go: 22,
+  golang: 22,
   json: 28,
   java: 29,
   javascript: 30,
   js: 30,
+  nodejs: 30,
+  node: 30,
   markdown: 40,
-  python: 50,
-  py: 50,
+  python: 49,
+  py: 49,
+  restful: 7,
+  rest: 7,
   sql: 57,
   typescript: 64,
   ts: 64,
   yaml: 67,
   yml: 67
 };
+
+export function languageIdForMarkdownLanguage(language: string): number {
+  return LANG_IDS[language.toLowerCase()] ?? LANG_IDS.plaintext;
+}
 
 type ListMarker = {
   ordered: boolean;
@@ -203,7 +213,7 @@ function codeBlock(text: string, lang: string): FeishuBlock {
     code: {
       elements: [textElement(text)],
       style: {
-        language: LANG_IDS[lang.toLowerCase()] ?? 1
+        language: languageIdForMarkdownLanguage(lang)
       }
     }
   };

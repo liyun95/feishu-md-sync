@@ -58,3 +58,33 @@ md2feishu merge <markdown-file> <feishu-doc>
 ```
 
 Writes a `.merged.md` file that combines the last receipt snapshot, current local Markdown, and current Feishu Markdown export.
+
+## `code-blocks`
+
+Inspect, plan, export, apply, and audit code blocks without rewriting the whole document.
+
+```bash
+md2feishu code-blocks inspect <feishu-doc> --format json
+md2feishu code-blocks plan <feishu-doc> --expect java,javascript,go,restful --out manifest.json --format json
+md2feishu code-blocks export <feishu-doc> --out ./snippets --manifest manifest.json --expect java,javascript,go,restful
+md2feishu code-blocks apply <feishu-doc> --manifest manifest.json --format json
+md2feishu code-blocks apply <feishu-doc> --manifest manifest.json --write -y --format json
+md2feishu code-blocks audit <feishu-doc> --expect java,javascript,go,restful --allow-placeholders java --format json
+```
+
+Supported canonical language order is `python > java > javascript > go > restful`. Aliases `nodejs`, `node`, and `js` normalize to `javascript`; `rest` normalizes to `restful`.
+
+`apply` defaults to dry-run. Writes require `--write -y`.
+
+## `reference`
+
+Publish SDK reference docs to Feishu Drive and Bitable from explicit manifests.
+
+```bash
+md2feishu reference plan --impact impact.json --out reference-manifest.json --format json
+md2feishu reference apply --manifest reference-manifest.json --format json
+md2feishu reference apply --manifest reference-manifest.json --write -y --format json
+md2feishu reference audit --manifest reference-manifest.json --format json
+```
+
+Manifests must use `kind: "sdk-reference-publish-manifest"`. They must not write the SDK reference `Slug` field. Tracker rows require a pre-existing, shared release audit Base via `targets.releaseAuditBaseToken`; the CLI does not create a new Base.

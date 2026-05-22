@@ -35,6 +35,11 @@ export default defineConfig({
           { text: 'Safe Write Policy', link: '/agent/safe-write-policy' },
           { text: 'Merge Decision Tree', link: '/agent/merge-decision-tree' },
           { text: 'Error Handling', link: '/agent/error-handling' },
+          { text: 'Feishu Codeblock Writer', link: '/agent/skills/feishu-codeblock-writer' },
+          { text: 'Feishu Markdown Sync', link: '/agent/skills/feishu-markdown-sync' },
+          { text: 'SDK Source Verifier', link: '/agent/skills/sdk-source-verifier' },
+          { text: 'SDK Reference Publisher', link: '/agent/skills/sdk-reference-publisher' },
+          { text: 'Milvus Multi-SDK Sync', link: '/agent/skills/milvus-multisdk-example-sync' },
           { text: 'Skill Roadmap', link: '/agent/skill-roadmap' }
         ]
       },

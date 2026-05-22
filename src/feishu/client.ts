@@ -1,4 +1,12 @@
-import type { FeishuBlock, FeishuDocClient } from './types.js';
+import type {
+  BitableField,
+  BitableRecord,
+  BitableTable,
+  FeishuBlock,
+  FeishuBlockUpdateRequest,
+  FeishuDocClient,
+  FeishuDriveFile
+} from './types.js';
 import { FeishuTokenProvider } from './token.js';
 
 type FeishuResponse<T> = {
@@ -86,7 +94,12 @@ export class FeishuClient implements FeishuDocClient {
     );
   }
 
-  async createChildren(documentId: string, parentBlockId: string, blocks: FeishuBlock[]): Promise<FeishuBlock[]> {
+  async createChildren(
+    documentId: string,
+    parentBlockId: string,
+    blocks: FeishuBlock[],
+    options: { index?: number } = {}
+  ): Promise<FeishuBlock[]> {
     const created: FeishuBlock[] = [];
     const batchSize = 50;
     const segments = segmentBlocksForCreate(blocks, batchSize);
@@ -96,7 +109,7 @@ export class FeishuClient implements FeishuDocClient {
       const data = await this.request<{ children?: FeishuBlock[] }>(
         'POST',
         `/open-apis/docx/v1/documents/${documentId}/blocks/${parentBlockId}/children`,
-        { children: batch }
+        createChildrenBody(batch, options.index === undefined ? undefined : options.index + created.length)
       );
       const createdBatch = data.children ?? [];
       created.push(...createdBatch);
@@ -111,6 +124,125 @@ export class FeishuClient implements FeishuDocClient {
     }
 
     return created;
+  }
+
+  async batchUpdateBlocks(documentId: string, requests: FeishuBlockUpdateRequest[]): Promise<FeishuBlock[]> {
+    if (requests.length === 0) return [];
+
+    const data = await this.request<{ blocks?: FeishuBlock[] }>(
+      'PATCH',
+      `/open-apis/docx/v1/documents/${documentId}/blocks/batch_update`,
+      { requests }
+    );
+
+    return data.blocks ?? [];
+  }
+
+  async listFolder(folderToken: string, type?: string): Promise<FeishuDriveFile[]> {
+    const params = new URLSearchParams({ folder_token: folderToken });
+    if (type) params.set('type', type);
+    const data = await this.request<{ files?: FeishuDriveFile[]; items?: FeishuDriveFile[] }>(
+      'GET',
+      `/open-apis/drive/v1/files?${params.toString()}`
+    );
+    return data.files ?? data.items ?? [];
+  }
+
+  async createFolder(name: string, parentToken: string): Promise<FeishuDriveFile> {
+    const data = await this.request<{ file?: FeishuDriveFile }>(
+      'POST',
+      '/open-apis/drive/v1/files/create_folder',
+      { name, folder_token: parentToken }
+    );
+    return data.file ?? data;
+  }
+
+  async copyFile(token: string, targetFolderToken: string, name?: string, type?: string): Promise<FeishuDriveFile> {
+    const data = await this.request<{ file?: FeishuDriveFile }>(
+      'POST',
+      `/open-apis/drive/v1/files/${token}/copy`,
+      { folder_token: targetFolderToken, name, type }
+    );
+    return data.file ?? {};
+  }
+
+  async moveFile(token: string, targetFolderToken: string, type?: string): Promise<FeishuDriveFile> {
+    const data = await this.request<{ file?: FeishuDriveFile }>(
+      'POST',
+      `/open-apis/drive/v1/files/${token}/move`,
+      { folder_token: targetFolderToken, type }
+    );
+    return data.file ?? data;
+  }
+
+  async createDocxDocument(title: string, folderToken: string): Promise<FeishuDriveFile> {
+    const data = await this.request<{ document?: FeishuDriveFile; file?: FeishuDriveFile }>(
+      'POST',
+      '/open-apis/docx/v1/documents',
+      { title, folder_token: folderToken }
+    );
+    return data.document ?? data.file ?? {};
+  }
+
+  async listBitableTables(appToken: string): Promise<BitableTable[]> {
+    const data = await this.request<{ items?: BitableTable[] }>(
+      'GET',
+      `/open-apis/bitable/v1/apps/${appToken}/tables`
+    );
+    return data.items ?? [];
+  }
+
+  async listBitableFields(appToken: string, tableId: string): Promise<BitableField[]> {
+    const data = await this.request<{ items?: BitableField[] }>(
+      'GET',
+      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/fields`
+    );
+    return data.items ?? [];
+  }
+
+  async listBitableRecords(appToken: string, tableId: string): Promise<BitableRecord[]> {
+    const records: BitableRecord[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const params = new URLSearchParams({ page_size: '500' });
+      if (pageToken) params.set('page_token', pageToken);
+      const data = await this.request<{ items?: BitableRecord[]; has_more?: boolean; page_token?: string }>(
+        'GET',
+        `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records?${params.toString()}`
+      );
+      records.push(...(data.items ?? []));
+      pageToken = data.has_more ? data.page_token : undefined;
+    } while (pageToken);
+
+    return records;
+  }
+
+  async createBitableRecord(
+    appToken: string,
+    tableId: string,
+    fields: Record<string, unknown>
+  ): Promise<BitableRecord> {
+    const data = await this.request<{ record?: BitableRecord }>(
+      'POST',
+      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`,
+      { fields }
+    );
+    return data.record ?? {};
+  }
+
+  async updateBitableRecord(
+    appToken: string,
+    tableId: string,
+    recordId: string,
+    fields: Record<string, unknown>
+  ): Promise<BitableRecord> {
+    const data = await this.request<{ record?: BitableRecord }>(
+      'PUT',
+      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`,
+      { fields }
+    );
+    return data.record ?? {};
   }
 
   private async populateTableCells(documentId: string, sourceBlock: FeishuBlock, createdBlock: FeishuBlock): Promise<void> {
@@ -190,6 +322,10 @@ function toCreateBlock(block: FeishuBlock): FeishuBlock {
   }
 
   return cleanBlock;
+}
+
+function createChildrenBody(children: FeishuBlock[], index?: number): { children: FeishuBlock[]; index?: number } {
+  return index === undefined ? { children } : { children, index };
 }
 
 function segmentBlocksForCreate(blocks: FeishuBlock[], batchSize: number): Array<{ blocks: FeishuBlock[] }> {
