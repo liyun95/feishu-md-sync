@@ -3,6 +3,7 @@ import path from 'node:path';
 import { hashBlocks, hashSource } from '../core/hash.js';
 import type { FeishuDocClient } from '../feishu/types.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
+import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { readReceipt, receiptPath, type SyncReceipt, writeReceipt } from '../receipts/receipt.js';
 import { comparableDirectChildBlocks, directChildBlocks, findPageBlock } from './block-state.js';
@@ -18,6 +19,7 @@ export type SyncOptions = {
   yes?: boolean;
   strategy?: SyncStrategy;
   forceInitialOverwrite?: boolean;
+  publishTransform?: PublishTransformOptions;
   confirm?: (question: string) => Promise<boolean>;
 };
 
@@ -35,6 +37,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   const rootDir = options.rootDir ?? process.cwd();
   const absoluteSourcePath = path.resolve(options.sourcePath);
   const sourceContent = await readFile(absoluteSourcePath, 'utf8');
+  const transformedSourceContent = applyPublishTransform(sourceContent, options.publishTransform);
   const existingBlocks = await client.getDocumentBlocks(options.documentId);
   const pageBlock = findPageBlock(existingBlocks, options.documentId);
   const currentChildren = comparableDirectChildBlocks(existingBlocks, pageBlock);
@@ -64,7 +67,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   const conflict = detectConflict(previousReceipt, currentHash);
   const mode = options.dryRun === false ? 'write' : 'dry-run';
   const strategy = options.strategy ?? 'fail';
-  let effectiveSourceContent = sourceContent;
+  let effectiveSourceContent = transformedSourceContent;
   let shouldWriteMergedSource = false;
 
   if (!conflict.ok && strategy === 'merge') {
@@ -75,7 +78,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     const remoteMarkdown = feishuBlocksToMarkdown(currentChildren);
     const mergeResult = threeWayMerge({
       base: previousReceipt.sourceSnapshot,
-      local: sourceContent,
+      local: transformedSourceContent,
       remote: remoteMarkdown
     });
 

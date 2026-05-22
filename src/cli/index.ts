@@ -7,6 +7,7 @@ import { stdin as input, stdout } from 'node:process';
 import { Command } from 'commander';
 import { parseFeishuTarget } from '../core/doc-id.js';
 import { FeishuClient } from '../feishu/client.js';
+import { applyPublishTransform, type PublishTransformOptions, type PublishTransformProfile } from '../markdown/publish-transform.js';
 import {
   buildCodeBlockInventory,
   findTargetCodeBlocks,
@@ -49,6 +50,7 @@ program
   .option('-y, --yes', 'skip write confirmation')
   .option('--strategy <strategy>', 'conflict strategy: fail | local-wins | merge', 'fail')
   .option('--force-initial-overwrite', 'allow first write to replace an existing non-empty Feishu doc')
+  .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
   .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
   .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
   .action(async (markdownFile: string | undefined, feishuDoc: string | undefined, opts: SyncCommandOptions) => {
@@ -68,6 +70,7 @@ program
   .option('-y, --yes', 'skip write confirmation')
   .option('--strategy <strategy>', 'conflict strategy: fail | local-wins | merge', 'fail')
   .option('--force-initial-overwrite', 'allow first write to replace an existing non-empty Feishu doc')
+  .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
   .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
   .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
   .action(async (markdownFile: string, feishuDoc: string, opts: SyncCommandOptions) => {
@@ -81,11 +84,12 @@ program
   .argument('<feishu-doc>', 'Feishu docx ID or URL')
   .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
   .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
-  .action(async (markdownFile: string, feishuDoc: string, opts: BaseCommandOptions) => {
-    const normalized = normalizeBaseOptions(opts);
+  .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+  .action(async (markdownFile: string, feishuDoc: string, opts: StatusCommandOptions) => {
+    const normalized = normalizeStatusOptions(opts);
     const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
     const documentId = await resolveDocumentId(client, feishuDoc);
-    const status = await getSyncStatus(client, { sourcePath: markdownFile, documentId });
+    const status = await getSyncStatus(client, { sourcePath: markdownFile, documentId, publishTransform: normalized.publishTransform });
     printStatus(status);
   });
 
@@ -116,11 +120,12 @@ program
   .argument('<feishu-doc>', 'Feishu docx ID or URL')
   .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
   .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
-  .action(async (markdownFile: string, feishuDoc: string, opts: BaseCommandOptions) => {
-    const normalized = normalizeBaseOptions(opts);
+  .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+  .action(async (markdownFile: string, feishuDoc: string, opts: StatusCommandOptions) => {
+    const normalized = normalizeStatusOptions(opts);
     const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
     const documentId = await resolveDocumentId(client, feishuDoc);
-    const local = await readFile(markdownFile, 'utf8');
+    const local = applyPublishTransform(await readFile(markdownFile, 'utf8'), normalized.publishTransform);
     const remote = await pullRemoteMarkdown(client, documentId);
     stdout.write(unifiedDiff(markdownFile, 'feishu', local, remote));
   });
@@ -594,10 +599,15 @@ type SyncCommandOptions = BaseCommandOptions & {
   yes?: boolean;
   strategy?: string;
   forceInitialOverwrite?: boolean;
+  publishProfile?: string;
 };
 
 type PullCommandOptions = BaseCommandOptions & {
   output?: string;
+};
+
+type StatusCommandOptions = BaseCommandOptions & {
+  publishProfile?: string;
 };
 
 type CodeBlockUpdateCommandOptions = BaseCommandOptions & {
@@ -672,7 +682,7 @@ type ReferenceAuditCommandOptions = BaseCommandOptions & FormatCommandOptions & 
   manifest: string;
 };
 
-type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOptions> & { strategy: string };
+type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOptions> & { strategy: string; publishTransform?: PublishTransformOptions };
 
 function normalizeBaseOptions(opts: BaseCommandOptions): Required<BaseCommandOptions> {
   const globals = program.opts<BaseCommandOptions>();
@@ -687,12 +697,24 @@ function normalizeBaseOptions(opts: BaseCommandOptions): Required<BaseCommandOpt
 function normalizeSyncOptions(opts: SyncCommandOptions): NormalizedSyncCommandOptions {
   const globals = program.opts<SyncCommandOptions>();
   const base = normalizeBaseOptions(opts);
+  const publishProfile = opts.publishProfile ?? globals.publishProfile;
   return {
     ...base,
     write: opts.write ?? globals.write,
     yes: opts.yes ?? globals.yes,
     strategy: globals.strategy && globals.strategy !== 'fail' ? globals.strategy : opts.strategy ?? 'fail',
-    forceInitialOverwrite: opts.forceInitialOverwrite ?? globals.forceInitialOverwrite
+    forceInitialOverwrite: opts.forceInitialOverwrite ?? globals.forceInitialOverwrite,
+    publishProfile,
+    publishTransform: parsePublishTransform(publishProfile)
+  };
+}
+
+function normalizeStatusOptions(opts: StatusCommandOptions): StatusCommandOptions & Required<BaseCommandOptions> & { publishTransform?: PublishTransformOptions } {
+  const base = normalizeBaseOptions(opts);
+  return {
+    ...base,
+    publishProfile: opts.publishProfile,
+    publishTransform: parsePublishTransform(opts.publishProfile)
   };
 }
 
@@ -783,6 +805,7 @@ async function runSyncCommand(markdownFile: string, feishuDoc: string, opts: Nor
     yes: opts.yes,
     strategy,
     forceInitialOverwrite: opts.forceInitialOverwrite,
+    publishTransform: opts.publishTransform,
     confirm
   });
 
@@ -799,6 +822,14 @@ function parseStrategy(value: string): SyncStrategy {
     return value;
   }
   throw new Error(`Invalid --strategy ${value}. Expected fail, local-wins, or merge.`);
+}
+
+function parsePublishTransform(value: string | undefined): PublishTransformOptions | undefined {
+  if (!value) return undefined;
+  if (value === 'milvus') {
+    return { profile: value as PublishTransformProfile };
+  }
+  throw new Error(`Invalid --publish-profile ${value}. Expected milvus.`);
 }
 
 function parseCodeBlockLanguage(value: string): CanonicalCodeBlockLanguage {

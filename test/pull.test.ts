@@ -33,9 +33,24 @@ describe('feishuBlocksToMarkdown', () => {
   it('marks unsupported blocks instead of silently dropping them', () => {
     expect(feishuBlocksToMarkdown([{ block_type: 99 }])).toContain('unsupported Feishu block_type 99');
   });
+
+  it('renders Feishu callout blocks as note admonitions', () => {
+    const markdown = feishuBlocksToMarkdown([
+      {
+        block_type: 19,
+        callout: { background_color: 2, border_color: 2, emoji_id: 'blue_book' },
+        children: [
+          { block_type: 2, text: { elements: [run('Notes')], style: {} } },
+          { block_type: 2, text: { elements: [run('Behavior change', { bold: true }), run(' in '), run('AUTOINDEX', { inline_code: true })], style: {} } }
+        ]
+      }
+    ]);
+
+    expect(markdown).toBe(':::note\n**Behavior change** in `AUTOINDEX`\n:::\n');
+  });
 });
 
-function run(content: string): TextElement {
+function run(content: string, style: Partial<NonNullable<TextElement['text_run']>['text_element_style']> = {}): TextElement {
   return {
     text_run: {
       content,
@@ -44,7 +59,8 @@ function run(content: string): TextElement {
         italic: false,
         strikethrough: false,
         underline: false,
-        inline_code: false
+        inline_code: false,
+        ...style
       }
     }
   };
