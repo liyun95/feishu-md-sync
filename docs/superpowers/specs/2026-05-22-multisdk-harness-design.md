@@ -1,12 +1,12 @@
-# Dogfood Harness Design
+# Multi-SDK Harness Design
 
 Date: 2026-05-22
 
 ## Context
 
-The first real multi-SDK dogfood workflow completed one Milvus Feishu document, but it took roughly two hours and depended heavily on chat context. The work succeeded, yet the execution state was not durable enough: SDK validation evidence, per-language progress, Feishu write status, and cleanup state were spread across terminal output, local ad hoc files, and session memory.
+The first real multi-SDK workflow completed one Milvus Feishu document, but it took roughly two hours and depended heavily on chat context. The work succeeded, yet the execution state was not durable enough: SDK validation evidence, per-language progress, Feishu write status, and cleanup state were spread across terminal output, local ad hoc files, and session memory.
 
-The V2 design introduces a lightweight repo-native harness for Feishu multi-SDK code-block work. It keeps the existing `code-blocks` primitives as the write engine and adds task-level orchestration, persistent state, and per-language execution lanes.
+The V2 design introduces a lightweight repo-native harness for Feishu multi-SDK code-block work. It keeps the existing `code-blocks` primitives as the write engine and adds task-level orchestration, persistent state, and per-language execution lanes. The workflow may be dogfooded by maintainers, but the CLI surface is named for the real user task: multi-SDK example completion.
 
 ## Goals
 
@@ -30,20 +30,20 @@ The V2 design introduces a lightweight repo-native harness for Feishu multi-SDK 
 Add a new CLI group:
 
 ```bash
-md2feishu dogfood <command>
+md2feishu multisdk <command>
 ```
 
 The V2 command surface is:
 
 ```bash
-md2feishu dogfood init <feishu-doc> --out dogfood/<doc-token>
-md2feishu dogfood status <task-dir>
-md2feishu dogfood export <task-dir> --language <language>
-md2feishu dogfood verify <task-dir> --language <language> --evidence <file> --command <command>
-md2feishu dogfood apply <task-dir> --language <language>
-md2feishu dogfood apply <task-dir> --language <language> --write -y
-md2feishu dogfood audit <task-dir> --language <language>
-md2feishu dogfood finalize <task-dir>
+md2feishu multisdk init <feishu-doc> --out runs/<doc-token>
+md2feishu multisdk status <task-dir>
+md2feishu multisdk export <task-dir> --language <language>
+md2feishu multisdk verify <task-dir> --language <language> --evidence <file> --command <command>
+md2feishu multisdk apply <task-dir> --language <language>
+md2feishu multisdk apply <task-dir> --language <language> --write -y
+md2feishu multisdk audit <task-dir> --language <language>
+md2feishu multisdk finalize <task-dir>
 ```
 
 Supported language values are `java`, `javascript`, `go`, and `restful`. Aliases `node`, `nodejs`, and `js` normalize to `javascript`.
@@ -53,7 +53,7 @@ Supported language values are `java`, `javascript`, `go`, and `restful`. Aliases
 Each document gets one task directory:
 
 ```text
-dogfood/<doc-token>/
+runs/<doc-token>/
   task.json
   manifest.json
   snippets/
@@ -62,7 +62,7 @@ dogfood/<doc-token>/
   handoff.md
 ```
 
-`dogfood/` remains an operator workspace. It is not committed by default unless the user explicitly asks to preserve a dogfood run in git.
+`runs/` remains an operator workspace. It is not committed by default unless the user explicitly asks to preserve a run in git.
 
 ## Task State
 
@@ -70,11 +70,11 @@ dogfood/<doc-token>/
 
 ```json
 {
-  "kind": "feishu-multisdk-dogfood-task",
+  "kind": "feishu-multisdk-task",
   "version": 1,
   "document": "https://zilliverse.feishu.cn/wiki/example",
   "documentId": "doc-id",
-  "taskDir": "dogfood/doc-id",
+  "taskDir": "runs/doc-id",
   "languageOrder": ["python", "java", "javascript", "go", "restful"],
   "languages": {
     "java": {
@@ -105,17 +105,17 @@ Language status values are:
 
 ## Data Flow
 
-`dogfood init` resolves the Feishu document, inspects code blocks, creates the task directory, writes `manifest.json`, exports snippet files, and initializes per-language state.
+`multisdk init` resolves the Feishu document, inspects code blocks, creates the task directory, writes `manifest.json`, exports snippet files, and initializes per-language state.
 
-`dogfood export --language` refreshes only that language's snippet files from the current Feishu document and updates the task state. This avoids forcing all SDK work to start at once.
+`multisdk export --language` refreshes only that language's snippet files from the current Feishu document and updates the task state. This avoids forcing all SDK work to start at once.
 
-`dogfood verify --language` records evidence that the language snippets were checked. V2 accepts an evidence file and the validation command string. It does not run validators itself unless a future language adapter is added.
+`multisdk verify --language` records evidence that the language snippets were checked. V2 accepts an evidence file and the validation command string. It does not run validators itself unless a future language adapter is added.
 
-`dogfood apply --language` creates a temporary language-scoped manifest from `manifest.json`, then delegates to existing `code-blocks apply`. Without `--write`, it performs a dry run. With `--write -y`, it writes only that language's blocks.
+`multisdk apply --language` creates a temporary language-scoped manifest from `manifest.json`, then delegates to existing `code-blocks apply`. Without `--write`, it performs a dry run. With `--write -y`, it writes only that language's blocks.
 
-`dogfood audit --language` delegates to existing `code-blocks audit` with `--expect <language>` and updates the language state.
+`multisdk audit --language` delegates to existing `code-blocks audit` with `--expect <language>` and updates the language state.
 
-`dogfood finalize` runs a full audit for `java,javascript,go,restful`, writes `handoff.md`, and reports any incomplete language or cleanup item.
+`multisdk finalize` runs a full audit for `java,javascript,go,restful`, writes `handoff.md`, and reports any incomplete language or cleanup item.
 
 ## Safety Rules
 
@@ -128,7 +128,7 @@ Language status values are:
 
 ## Error Handling
 
-Every command updates `task.json` only after its operation succeeds. On failure, the command prints the failed phase, language, and next suggested command. If a write succeeds but audit fails, the language status remains `written`, not `audited`, so the next session can resume with `dogfood audit`.
+Every command updates `task.json` only after its operation succeeds. On failure, the command prints the failed phase, language, and next suggested command. If a write succeeds but audit fails, the language status remains `written`, not `audited`, so the next session can resume with `multisdk audit`.
 
 Blocked states include a free-text `reason` field and do not prevent other languages from proceeding.
 
@@ -149,8 +149,8 @@ Integration tests should use a fake Feishu client and verify that language-scope
 
 Update the docs site with:
 
-- A dogfood harness guide.
-- Command reference for `dogfood`.
+- A multi-SDK harness guide.
+- Command reference for `multisdk`.
 - Updated `milvus-multisdk-example-sync` skill text.
 - Updated `feishu-codeblock-writer` text clarifying that it remains the low-level code-block engine.
 
