@@ -35,6 +35,10 @@ function blockMapById(blocks: FeishuBlock[]): Map<string, FeishuBlock> {
 }
 
 function renderableBlocks(block: FeishuBlock, byId: Map<string, FeishuBlock>): FeishuBlock[] {
+  if (block.block_type === 19 && Array.isArray(block.children)) {
+    return [resolveChildContainer(block, byId)];
+  }
+
   if (block.block_type !== 49 || !Array.isArray(block.children)) {
     return [comparableBlock(block, byId)];
   }
@@ -43,6 +47,20 @@ function renderableBlocks(block: FeishuBlock, byId: Map<string, FeishuBlock>): F
     const child = typeof childRef === 'string' ? byId.get(childRef) : asBlock(childRef);
     return child ? renderableBlocks(child, byId) : [];
   });
+}
+
+function resolveChildContainer(block: FeishuBlock, byId: Map<string, FeishuBlock>): FeishuBlock {
+  const children = Array.isArray(block.children)
+    ? block.children
+      .map((childRef) => (typeof childRef === 'string' ? byId.get(childRef) : asBlock(childRef)))
+      .filter((child): child is FeishuBlock => Boolean(child))
+      .map((child) => comparableBlock(child, byId))
+    : [];
+
+  return {
+    ...block,
+    children
+  };
 }
 
 function comparableBlock(block: FeishuBlock, byId: Map<string, FeishuBlock>): FeishuBlock {

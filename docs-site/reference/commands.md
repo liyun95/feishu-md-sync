@@ -24,13 +24,16 @@ Options:
 - `-y, --yes` - skip write confirmation.
 - `--strategy <strategy>` - `fail`, `local-wins`, or `merge`.
 - `--force-initial-overwrite` - allow first write to replace existing non-empty Feishu content.
+- `--publish-profile <profile>` - apply a publish transform before diffing or writing. Currently supports `milvus`.
 - `--host <url>` - Feishu API host.
 - `--timeout-ms <number>` - Feishu API timeout.
+
+The `milvus` publish profile strips frontmatter, drops a first H1 when it duplicates the frontmatter title, rewrites standalone `Milvus` references for shared Milvus/Zilliz Cloud publishing, and wraps versioned names such as `Milvus 3.0` in a Milvus-only include.
 
 ## `status`
 
 ```bash
-md2feishu status <markdown-file> <feishu-doc>
+md2feishu status <markdown-file> <feishu-doc> [--publish-profile milvus]
 ```
 
 Shows local/remote sync state without writing.
@@ -38,7 +41,7 @@ Shows local/remote sync state without writing.
 ## `diff`
 
 ```bash
-md2feishu diff <markdown-file> <feishu-doc>
+md2feishu diff <markdown-file> <feishu-doc> [--publish-profile milvus]
 ```
 
 Shows a best-effort diff between local Markdown and current Feishu content exported as Markdown.

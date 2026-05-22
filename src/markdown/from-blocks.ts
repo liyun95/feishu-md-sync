@@ -49,6 +49,10 @@ function renderBlock(block: FeishuBlock): string {
     return renderTable(block);
   }
 
+  if (block.block_type === 19) {
+    return renderCallout(block);
+  }
+
   return `<!-- unsupported Feishu block_type ${block.block_type} omitted by pull -->`;
 }
 
@@ -92,4 +96,22 @@ function renderTable(block: FeishuBlock): string {
   });
   const separator = `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`;
   return [renderedRows[0], separator, ...renderedRows.slice(1)].join('\n');
+}
+
+function renderCallout(block: FeishuBlock): string {
+  const children = Array.isArray(block.children) ? block.children.filter(isBlock) : [];
+  const rendered = children.map(renderBlock).filter((part) => part.trim() !== '');
+  const body = dropCalloutTitle(rendered).join('\n\n');
+  return body ? `:::note\n${body}\n:::` : ':::note\n:::';
+}
+
+function dropCalloutTitle(rendered: string[]): string[] {
+  if (rendered.length > 1 && /^notes?$/i.test(rendered[0]?.trim() ?? '')) {
+    return rendered.slice(1);
+  }
+  return rendered;
+}
+
+function isBlock(value: unknown): value is FeishuBlock {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'block_type' in value);
 }

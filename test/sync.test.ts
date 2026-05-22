@@ -57,6 +57,32 @@ describe('runSync', () => {
     expect(receipt.verificationResult.ok).toBe(true);
   });
 
+  it('applies a publish transform before planning Feishu blocks', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `---
+title: "JSON Indexing"
+---
+
+# JSON Indexing
+
+Milvus 3.0 updates Milvus behavior.
+`);
+    const desired = markdownToFeishuBlocks('<include target="milvus">Milvus 3.0</include> updates <include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> behavior.\n');
+    const client = fakeClient(desired);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      publishTransform: { profile: 'milvus' }
+    });
+
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', desired);
+    expect(result.receipt.blockCounts.source).toBe(1);
+  });
+
   it('fails when verification readback does not match desired blocks', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, '# Title\n');
