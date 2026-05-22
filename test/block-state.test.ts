@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { comparableDirectChildBlocks, directChildBlocks, findPageBlock } from '../src/sync/block-state.js';
+import { comparableDirectChildBlocks, directChildBlocks, findPageBlock, renderableDirectChildBlocks } from '../src/sync/block-state.js';
 
 describe('block-state helpers', () => {
   it('throws when a page block cannot be found', () => {
@@ -27,5 +27,20 @@ describe('block-state helpers', () => {
         cells: [{ block_id: 'text', block_type: 2, text: { elements: [] } }]
       }
     });
+  });
+
+  it('expands Feishu source-synced containers for rendering', () => {
+    const page = { block_id: 'page', block_type: 1, children: ['source'] };
+    const blocks = [
+      page,
+      { block_id: 'source', block_type: 49, children: ['python', 'java'] },
+      { block_id: 'python', block_type: 14, code: { elements: [] } },
+      { block_id: 'java', block_type: 14, code: { elements: [] } }
+    ];
+
+    expect(renderableDirectChildBlocks(blocks, page)).toEqual([
+      { block_id: 'python', block_type: 14, code: { elements: [] } },
+      { block_id: 'java', block_type: 14, code: { elements: [] } }
+    ]);
   });
 });

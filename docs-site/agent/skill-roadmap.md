@@ -1,39 +1,22 @@
 # Skill Roadmap
 
-The future `md2feishu` Skill should let an agent safely sync Markdown to Feishu using this CLI.
+V1 splits Feishu documentation work into focused skills instead of one generic sync skill.
 
-The Skill is not implemented yet. This page defines the expected behavior.
+## V1 Skills
 
-## Intended Purpose
+- `feishu-markdown-sync`: whole-document Markdown sync with receipts, status, diff, pull, merge, and sync.
+- `feishu-codeblock-writer`: inspect, plan, export, apply, and audit code blocks inside an existing Feishu document.
+- `sdk-source-verifier`: confirm SDK support from source, tags, tests, and commits.
+- `sdk-reference-publisher`: publish SDK reference docs to Feishu Drive and Bitable from approved manifests.
+- `milvus-multisdk-example-sync`: orchestrate Milvus user-guide multi-SDK example completion from Python baselines.
 
-- Install or locate the `md2feishu` CLI.
-- Sync a local Markdown file to a Feishu docx document.
-- Detect remote edits before writing.
-- Use the merge workflow when both local and Feishu changed.
-- Stop on unresolved conflicts.
+## Boundaries
 
-## Expected Inputs
+Whole-document sync must not patch individual code blocks. Code-block writes must not judge SDK correctness. SDK source verification must not write Feishu. SDK reference publishing must not scan source or infer doc impact. Milvus multi-SDK workflow composes source verification and code-block writing.
 
-- Local Markdown path.
-- Feishu doc token, docx URL, or wiki URL.
-- Whether writes are authorized.
-- Conflict policy:
-  - fail
-  - merge
-  - local wins only after explicit approval
+## Follow-Ups
 
-## Expected Behavior
-
-1. Verify the CLI is available.
-2. Run `status` or dry-run first.
-3. Refuse unsafe first overwrites unless explicitly authorized.
-4. Prefer `--strategy merge` for automated writes.
-5. Generate `.merged.md` when conflicts exist.
-6. Ask the human to resolve conflict markers.
-7. Publish resolved `.merged.md` with `--strategy local-wins`.
-
-## Non-Goals
-
-- The Skill should not decide semantic content conflicts by itself.
-- The Skill should not use `--force-initial-overwrite` without explicit human approval.
-- The Skill should not publish files that still contain conflict markers.
+- Install repo skill templates into the team Codex skill root.
+- Add durable receipts for code-block manifests.
+- Expand reference audit coverage for table creation and post-action scripts.
+- Add live Feishu smoke tests against approved disposable docs, folders, and Bases.

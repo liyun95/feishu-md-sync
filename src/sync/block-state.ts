@@ -11,7 +11,7 @@ export function findPageBlock(blocks: FeishuBlock[], documentId: string): PageBl
 }
 
 export function directChildBlocks(blocks: FeishuBlock[], pageBlock: FeishuBlock): FeishuBlock[] {
-  const byId = new Map(blocks.filter((block) => block.block_id).map((block) => [block.block_id, block]));
+  const byId = blockMapById(blocks);
   const children = Array.isArray(pageBlock.children) ? pageBlock.children : [];
 
   return children
@@ -20,29 +20,51 @@ export function directChildBlocks(blocks: FeishuBlock[], pageBlock: FeishuBlock)
 }
 
 export function comparableDirectChildBlocks(blocks: FeishuBlock[], pageBlock: FeishuBlock): FeishuBlock[] {
-  const byId = new Map(blocks.filter((block) => block.block_id).map((block) => [block.block_id, block]));
+  const byId = blockMapById(blocks);
 
-  return directChildBlocks(blocks, pageBlock).map((block) => {
-    if (block.block_type !== 31 || !isTableBlock(block)) {
-      return block;
-    }
+  return directChildBlocks(blocks, pageBlock).map((block) => comparableBlock(block, byId));
+}
 
-    const cellRefs = block.table.cells ?? [];
-    const resolvedCells = cellRefs.map((cellRef) => {
-      const cellBlock = typeof cellRef === 'string' ? byId.get(cellRef) : asBlock(cellRef);
-      const firstChildRef = Array.isArray(cellBlock?.children) ? cellBlock.children[0] : undefined;
-      const firstChild = typeof firstChildRef === 'string' ? byId.get(firstChildRef) : asBlock(firstChildRef);
-      return firstChild ?? { block_type: 2, text: { elements: [], style: { align: 1 } } };
-    });
+export function renderableDirectChildBlocks(blocks: FeishuBlock[], pageBlock: FeishuBlock): FeishuBlock[] {
+  const byId = blockMapById(blocks);
+  return directChildBlocks(blocks, pageBlock).flatMap((block) => renderableBlocks(block, byId));
+}
 
-    return {
-      ...block,
-      table: {
-        ...block.table,
-        cells: resolvedCells
-      }
-    };
+function blockMapById(blocks: FeishuBlock[]): Map<string, FeishuBlock> {
+  return new Map(blocks.flatMap((block) => block.block_id ? [[block.block_id, block] as const] : []));
+}
+
+function renderableBlocks(block: FeishuBlock, byId: Map<string, FeishuBlock>): FeishuBlock[] {
+  if (block.block_type !== 49 || !Array.isArray(block.children)) {
+    return [comparableBlock(block, byId)];
+  }
+
+  return block.children.flatMap((childRef) => {
+    const child = typeof childRef === 'string' ? byId.get(childRef) : asBlock(childRef);
+    return child ? renderableBlocks(child, byId) : [];
   });
+}
+
+function comparableBlock(block: FeishuBlock, byId: Map<string, FeishuBlock>): FeishuBlock {
+  if (block.block_type !== 31 || !isTableBlock(block)) {
+    return block;
+  }
+
+  const cellRefs = block.table.cells ?? [];
+  const resolvedCells = cellRefs.map((cellRef) => {
+    const cellBlock = typeof cellRef === 'string' ? byId.get(cellRef) : asBlock(cellRef);
+    const firstChildRef = Array.isArray(cellBlock?.children) ? cellBlock.children[0] : undefined;
+    const firstChild = typeof firstChildRef === 'string' ? byId.get(firstChildRef) : asBlock(firstChildRef);
+    return firstChild ?? { block_type: 2, text: { elements: [], style: { align: 1 } } };
+  });
+
+  return {
+    ...block,
+    table: {
+      ...block.table,
+      cells: resolvedCells
+    }
+  };
 }
 
 function isTableBlock(block: FeishuBlock): block is FeishuBlock & { table: { cells?: unknown[] } } {

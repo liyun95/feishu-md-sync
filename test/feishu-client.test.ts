@@ -111,6 +111,24 @@ describe('FeishuClient', () => {
     expect(firstCreateBody.children[0]).not.toHaveProperty('children');
   });
 
+  it('creates children at an explicit index', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0,
+      data: { children: [{ block_id: 'created', block_type: 14 }] }
+    }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await client.createChildren('doc', 'page', [{ block_type: 14, code: { elements: [] } }], { index: 4 });
+
+    expect(fetchImpl.mock.calls[0][0]).toContain('/blocks/page/children');
+    expect(JSON.parse(fetchImpl.mock.calls[0][1]?.body as string)).toEqual({
+      children: [{ block_type: 14, code: { elements: [] } }],
+      index: 4
+    });
+  });
+
+
   it('creates tables without inline cells and then populates returned cell blocks', async () => {
     const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
     const fetchImpl = vi.fn()
@@ -141,6 +159,95 @@ describe('FeishuClient', () => {
     expect(fetchImpl.mock.calls[1][0]).toContain('/blocks/cell-1/children');
     expect(cellBody).toEqual({ children: [{ block_type: 2, text: { elements: [] } }], index: 0 });
   });
+
+  it('batch-updates document blocks', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0,
+      data: { blocks: [{ block_id: 'java-1', block_type: 14 }] }
+    }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await expect(client.batchUpdateBlocks('doc', [{
+      block_id: 'java-1',
+      update_text_elements: { elements: [] }
+    }])).resolves.toEqual([{ block_id: 'java-1', block_type: 14 }]);
+
+    expect(fetchImpl.mock.calls[0][0]).toContain('/open-apis/docx/v1/documents/doc/blocks/batch_update');
+    expect(fetchImpl.mock.calls[0][1]?.method).toBe('PATCH');
+    expect(JSON.parse(fetchImpl.mock.calls[0][1]?.body as string)).toEqual({
+      requests: [{
+        block_id: 'java-1',
+        update_text_elements: { elements: [] }
+      }]
+    });
+  });
+
+  it('wraps Drive file helper APIs', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { files: [{ token: 'file' }] } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { token: 'folder-created' } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { file: { token: 'copy' } } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { token: 'moved' } }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await expect(client.listFolder('folder', 'docx')).resolves.toEqual([{ token: 'file' }]);
+    await expect(client.createFolder('SDK Reference', 'parent')).resolves.toEqual({ token: 'folder-created' });
+    await expect(client.copyFile('doc', 'folder', 'Copied Doc', 'docx')).resolves.toEqual({ token: 'copy' });
+    await expect(client.moveFile('doc', 'folder', 'docx')).resolves.toEqual({ token: 'moved' });
+
+    expect(fetchImpl.mock.calls[0][0]).toContain('/open-apis/drive/v1/files?');
+    expect(fetchImpl.mock.calls[0][0]).toContain('folder_token=folder');
+    expect(fetchImpl.mock.calls[1][0]).toContain('/open-apis/drive/v1/files/create_folder');
+    expect(fetchImpl.mock.calls[2][0]).toContain('/open-apis/drive/v1/files/doc/copy');
+    expect(fetchImpl.mock.calls[3][0]).toContain('/open-apis/drive/v1/files/doc/move');
+  });
+
+  it('returns document_id from docx creation responses', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0,
+      data: { document: { document_id: 'doc-created', revision_id: 1 } }
+    }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await expect(client.createDocxDocument('Doc', 'folder')).resolves.toEqual({
+      document_id: 'doc-created',
+      revision_id: 1
+    });
+  });
+
+  it('wraps Bitable table, field, and record helper APIs', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { items: [{ table_id: 'tbl' }] } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { items: [{ field_id: 'fld' }] } }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { items: [{ record_id: 'rec-1' }], has_more: true, page_token: 'next' }
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { items: [{ record_id: 'rec-2' }], has_more: false }
+      }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { record: { record_id: 'created' } } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { record: { record_id: 'updated' } } }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await expect(client.listBitableTables('app')).resolves.toEqual([{ table_id: 'tbl' }]);
+    await expect(client.listBitableFields('app', 'tbl')).resolves.toEqual([{ field_id: 'fld' }]);
+    await expect(client.listBitableRecords('app', 'tbl')).resolves.toEqual([{ record_id: 'rec-1' }, { record_id: 'rec-2' }]);
+    await expect(client.createBitableRecord('app', 'tbl', { Name: 'Doc' })).resolves.toEqual({ record_id: 'created' });
+    await expect(client.updateBitableRecord('app', 'tbl', 'rec', { Name: 'Doc' })).resolves.toEqual({ record_id: 'updated' });
+
+    expect(fetchImpl.mock.calls[0][0]).toContain('/open-apis/bitable/v1/apps/app/tables');
+    expect(fetchImpl.mock.calls[1][0]).toContain('/open-apis/bitable/v1/apps/app/tables/tbl/fields');
+    expect(fetchImpl.mock.calls[3][0]).toContain('page_token=next');
+    expect(fetchImpl.mock.calls[4][1]?.method).toBe('POST');
+    expect(fetchImpl.mock.calls[5][1]?.method).toBe('PUT');
+  });
+
 
   it('throws on 429 API responses', async () => {
     const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;

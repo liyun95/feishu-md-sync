@@ -2,9 +2,13 @@ import type { FeishuBlock, TextElement } from '../feishu/types.js';
 
 const LANGUAGE_BY_ID: Record<number, string> = {
   7: 'bash',
+  9: 'cpp',
+  22: 'go',
   28: 'json',
+  29: 'java',
   30: 'javascript',
   40: 'markdown',
+  49: 'python',
   50: 'python',
   57: 'sql',
   64: 'typescript',
@@ -51,6 +55,10 @@ function renderBlock(block: FeishuBlock): string {
 function renderElements(elements: TextElement[] = []): string {
   return elements.map((element) => {
     const run = element.text_run;
+    if (!run) {
+      return renderNonTextElement(element);
+    }
+
     const style = run.text_element_style ?? {};
     let text = run.content;
     if (style.inline_code) text = `\`${text}\``;
@@ -58,6 +66,17 @@ function renderElements(elements: TextElement[] = []): string {
     if (style.link?.url) text = `[${text}](${style.link.url})`;
     return text;
   }).join('');
+}
+
+function renderNonTextElement(element: TextElement): string {
+  const mentionDoc = element.mention_doc;
+  if (mentionDoc?.title && mentionDoc.url) {
+    return `[${mentionDoc.title}](${mentionDoc.url})`;
+  }
+  if (mentionDoc?.title) {
+    return mentionDoc.title;
+  }
+  return '';
 }
 
 function renderTable(block: FeishuBlock): string {
