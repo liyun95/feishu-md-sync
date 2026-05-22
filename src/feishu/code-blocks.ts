@@ -217,7 +217,10 @@ function codeBlockLanguageName(block: FeishuBlock, text: string): string {
 
 function isLikelyRestfulSnippet(text: string): boolean {
   const normalized = text.trim().toLowerCase();
-  return normalized.startsWith('curl ') &&
+  return (
+    normalized.startsWith('curl ') ||
+    normalized.includes('\ncurl ')
+  ) &&
     (
       normalized.includes('/v2/vectordb/') ||
       normalized.includes('--request ') ||
