@@ -72,6 +72,7 @@ export async function exportMultisdkLanguage(input: {
     snippetsReady: true,
     validated: false,
     dryRunPassed: false,
+    dryRunHashes: [],
     writePassed: false,
     auditPassed: false,
     evidence: [],
@@ -102,6 +103,8 @@ export async function recordMultisdkVerification(input: {
     status: 'ready',
     sourceVerified: true,
     validated: true,
+    dryRunPassed: false,
+    dryRunHashes: [],
     reason: undefined,
     evidence: [
       ...task.languages[input.language].evidence,
@@ -136,6 +139,16 @@ export async function applyMultisdkLanguage(input: {
 
   const manifest = await loadCodeBlockManifest(join(input.taskDir, 'manifest.json'));
   const scopedManifestPath = await writeLanguageScopedManifest(input.taskDir, manifest, input.language);
+  if (input.write) {
+    const currentDryRun = await applyCodeBlockManifest(input.client, {
+      manifestPath: scopedManifestPath,
+      write: false,
+      expectedDocumentId: task.documentId
+    });
+    if (!sameSnippetHashes(task.languages[input.language].dryRunHashes, snippetHashesFromReport(currentDryRun))) {
+      throw new Error(`${input.language} write requires a fresh dry-run because snippet content changed.`);
+    }
+  }
   const report = await applyCodeBlockManifest(input.client, {
     manifestPath: scopedManifestPath,
     write: input.write,
@@ -164,6 +177,7 @@ export async function applyMultisdkLanguage(input: {
       ...task.languages[input.language],
       status: 'dry-run-passed',
       dryRunPassed: true,
+      dryRunHashes: snippetHashesFromReport(report),
       reason: undefined
     };
   }
@@ -232,10 +246,27 @@ function invalidateLaterLanguages(task: MultisdkTask, language: MultisdkLanguage
       snippetsReady: false,
       validated: false,
       dryRunPassed: false,
+      dryRunHashes: [],
       writePassed: false,
       auditPassed: false,
       evidence: [],
       reason: `Re-export after ${language} write because document anchors changed.`
     };
   }
+}
+
+function snippetHashesFromReport(report: CodeBlockApplyReport): Array<{ file: string; contentHash: string }> {
+  return [...report.updated, ...report.inserted].map((item) => ({
+    file: item.file,
+    contentHash: item.contentHash
+  }));
+}
+
+function sameSnippetHashes(
+  expected: Array<{ file: string; contentHash: string }>,
+  actual: Array<{ file: string; contentHash: string }>
+): boolean {
+  if (expected.length === 0 || expected.length !== actual.length) return false;
+  const actualByFile = new Map(actual.map((item) => [item.file, item.contentHash]));
+  return expected.every((item) => actualByFile.get(item.file) === item.contentHash);
 }

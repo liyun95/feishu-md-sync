@@ -18,12 +18,18 @@ export type MultisdkEvidence = {
   recordedAt: string;
 };
 
+export type MultisdkSnippetHash = {
+  file: string;
+  contentHash: string;
+};
+
 export type MultisdkLanguageState = {
   status: MultisdkLanguageStatus;
   sourceVerified: boolean;
   snippetsReady: boolean;
   validated: boolean;
   dryRunPassed: boolean;
+  dryRunHashes: MultisdkSnippetHash[];
   writePassed: boolean;
   auditPassed: boolean;
   evidence: MultisdkEvidence[];
@@ -131,6 +137,7 @@ function initialLanguageState(): MultisdkLanguageState {
     snippetsReady: false,
     validated: false,
     dryRunPassed: false,
+    dryRunHashes: [],
     writePassed: false,
     auditPassed: false,
     evidence: []
