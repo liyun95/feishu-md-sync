@@ -7,11 +7,12 @@ import type { CodeBlockManifest } from '../src/sync/code-block-plan.js';
 import {
   applyMultisdkLanguage,
   auditMultisdkLanguage,
+  exportMultisdkLanguage,
   finalizeMultisdkTask,
   initMultisdkTask,
   recordMultisdkVerification
 } from '../src/multisdk/workflow.js';
-import { createInitialMultisdkTask, saveMultisdkTask } from '../src/multisdk/task.js';
+import { createInitialMultisdkTask, loadMultisdkTask, saveMultisdkTask } from '../src/multisdk/task.js';
 
 const tempDirs: string[] = [];
 
@@ -43,7 +44,14 @@ describe('multisdk workflow', () => {
     const dir = await tempDir();
     const evidencePath = join(dir, 'java-smoke.log');
     await writeFile(evidencePath, 'PASS java smoke\n', 'utf8');
-    await saveMultisdkTask(createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir }));
+    const initial = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    await saveMultisdkTask({
+      ...initial,
+      languages: {
+        ...initial.languages,
+        java: { ...initial.languages.java, status: 'exported', snippetsReady: true }
+      }
+    });
 
     const task = await recordMultisdkVerification({
       taskDir: dir,
@@ -65,7 +73,14 @@ describe('multisdk workflow', () => {
     await mkdir(join(dir, 'snippets'), { recursive: true });
     await writeFile(join(dir, 'snippets/java-01.java'), 'System.out.println("ok");', 'utf8');
     await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest(), null, 2)}\n`, 'utf8');
-    await saveMultisdkTask(createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir }));
+    const task = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    await saveMultisdkTask({
+      ...task,
+      languages: {
+        ...task.languages,
+        java: { ...task.languages.java, status: 'exported', snippetsReady: true }
+      }
+    });
     const client = fakeApplyClient();
 
     await expect(applyMultisdkLanguage({ taskDir: dir, language: 'java', write: true, client }))
@@ -86,7 +101,108 @@ describe('multisdk workflow', () => {
 
     const write = await applyMultisdkLanguage({ taskDir: dir, language: 'java', write: true, client });
     expect(write.task.languages.java.status).toBe('written');
+    expect(write.task.languages.javascript.snippetsReady).toBe(false);
     expect(client.batchUpdateBlocks).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears stale verification evidence when a language is exported again', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'snippets'), { recursive: true });
+    await writeFile(join(dir, 'snippets/java-01.java'), 'System.out.println("ok");', 'utf8');
+    await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest(), null, 2)}\n`, 'utf8');
+    const initial = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    await saveMultisdkTask({
+      ...initial,
+      languages: {
+        ...initial.languages,
+        java: { ...initial.languages.java, status: 'exported', snippetsReady: true }
+      }
+    });
+    await writeFile(join(dir, 'java-smoke.log'), 'PASS\n', 'utf8');
+    await recordMultisdkVerification({
+      taskDir: dir,
+      language: 'java',
+      evidencePath: join(dir, 'java-smoke.log'),
+      command: 'java Smoke'
+    });
+
+    const exported = await exportMultisdkLanguage({
+      document: 'doc-url',
+      taskDir: dir,
+      language: 'java',
+      inventory: inventoryWithLanguages(['python', 'java'])
+    });
+
+    expect(exported.task.languages.java.status).toBe('exported');
+    expect(exported.task.languages.java.validated).toBe(false);
+    expect(exported.task.languages.java.dryRunPassed).toBe(false);
+    expect(exported.task.languages.java.evidence).toEqual([]);
+    await expect(applyMultisdkLanguage({ taskDir: dir, language: 'java', write: true, client: fakeApplyClient() }))
+      .rejects.toThrow(/requires verification evidence/);
+  });
+
+  it('requires later languages to be re-exported after a preceding language write', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'snippets'), { recursive: true });
+    await writeFile(join(dir, 'snippets/java-01.java'), 'System.out.println("ok");', 'utf8');
+    await writeFile(join(dir, 'snippets/javascript-01.js'), 'console.log("ok");', 'utf8');
+    await writeFile(join(dir, 'manifest.json'), `${JSON.stringify({
+      ...manifest(),
+      items: [
+        {
+          action: 'insert',
+          groupId: 'group-001',
+          anchorBlockId: 'python-1',
+          insertAfterBlockId: 'python-1',
+          parentBlockId: 'doc',
+          language: 'java',
+          file: 'snippets/java-01.java'
+        },
+        {
+          action: 'insert',
+          groupId: 'group-001',
+          anchorBlockId: 'python-1',
+          insertAfterBlockId: 'python-1',
+          parentBlockId: 'doc',
+          language: 'javascript',
+          file: 'snippets/javascript-01.js'
+        }
+      ]
+    } satisfies CodeBlockManifest, null, 2)}\n`, 'utf8');
+    const task = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    await saveMultisdkTask({
+      ...task,
+      languages: {
+        ...task.languages,
+        java: { ...task.languages.java, status: 'exported', snippetsReady: true },
+        javascript: { ...task.languages.javascript, status: 'exported', snippetsReady: true }
+      }
+    });
+    await writeFile(join(dir, 'java-smoke.log'), 'PASS\n', 'utf8');
+    await recordMultisdkVerification({
+      taskDir: dir,
+      language: 'java',
+      evidencePath: join(dir, 'java-smoke.log'),
+      command: 'java Smoke'
+    });
+    const client = fakeApplyClient();
+
+    await applyMultisdkLanguage({ taskDir: dir, language: 'java', write: false, client });
+    await applyMultisdkLanguage({ taskDir: dir, language: 'java', write: true, client });
+
+    const updated = await loadMultisdkTask(dir);
+    expect(updated.languages.javascript.status).toBe('pending');
+    expect(updated.languages.javascript.snippetsReady).toBe(false);
+    expect(updated.languages.javascript.evidence).toEqual([]);
+    await writeFile(join(dir, 'javascript-smoke.log'), 'PASS\n', 'utf8');
+    await expect(recordMultisdkVerification({
+      taskDir: dir,
+      language: 'javascript',
+      evidencePath: join(dir, 'javascript-smoke.log'),
+      command: 'node smoke.mjs'
+    })).rejects.toThrow(/requires fresh exported snippets/);
+    await expect(applyMultisdkLanguage({ taskDir: dir, language: 'javascript', write: false, client }))
+      .rejects.toThrow(/requires fresh exported snippets/);
   });
 
   it('audits one language and finalizes only after all languages are audited', async () => {

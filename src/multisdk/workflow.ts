@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import type { CodeBlockInventory } from '../feishu/code-blocks.js';
 import {
@@ -68,10 +68,13 @@ export async function exportMultisdkLanguage(input: {
   task.languages[input.language] = {
     ...task.languages[input.language],
     status: 'exported',
+    sourceVerified: false,
     snippetsReady: true,
+    validated: false,
     dryRunPassed: false,
     writePassed: false,
     auditPassed: false,
+    evidence: [],
     reason: undefined
   };
   await saveMultisdkTask(task);
@@ -85,6 +88,9 @@ export async function recordMultisdkVerification(input: {
   command: string;
 }): Promise<MultisdkTask> {
   const task = await loadMultisdkTask(input.taskDir);
+  if (!task.languages[input.language].snippetsReady) {
+    throw new Error(`${input.language} verification requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
+  }
   const recordedAt = new Date().toISOString();
   const evidenceDir = join(input.taskDir, 'evidence');
   await mkdir(evidenceDir, { recursive: true });
@@ -95,7 +101,6 @@ export async function recordMultisdkVerification(input: {
     ...task.languages[input.language],
     status: 'ready',
     sourceVerified: true,
-    snippetsReady: true,
     validated: true,
     reason: undefined,
     evidence: [
@@ -119,6 +124,9 @@ export async function applyMultisdkLanguage(input: {
 }): Promise<{ task: MultisdkTask; report: CodeBlockApplyReport }> {
   const task = await loadMultisdkTask(input.taskDir);
   const state = task.languages[input.language];
+  if (!state.snippetsReady) {
+    throw new Error(`${input.language} apply requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
+  }
   if (input.write && !state.validated) {
     throw new Error(`${input.language} write requires verification evidence. Run multisdk verify first.`);
   }
@@ -143,19 +151,22 @@ export async function applyMultisdkLanguage(input: {
     throw new Error(`${input.language} apply failed for ${report.failed.length} item(s).`);
   }
 
-  task.languages[input.language] = input.write
-    ? {
+  if (input.write) {
+    task.languages[input.language] = {
       ...task.languages[input.language],
       status: 'written',
       writePassed: true,
       reason: undefined
-    }
-    : {
+    };
+    invalidateLaterLanguages(task, input.language);
+  } else {
+    task.languages[input.language] = {
       ...task.languages[input.language],
       status: 'dry-run-passed',
       dryRunPassed: true,
       reason: undefined
     };
+  }
   await saveMultisdkTask(task);
   return { task, report };
 }
@@ -209,4 +220,22 @@ export async function finalizeMultisdkTask(input: {
   await writeFile(handoffPath, renderMultisdkHandoff(task), 'utf8');
   await saveMultisdkTask(task);
   return { task, report, handoffPath };
+}
+
+function invalidateLaterLanguages(task: MultisdkTask, language: MultisdkLanguage): void {
+  const writtenIndex = MULTISDK_LANGUAGES.indexOf(language);
+  for (const laterLanguage of MULTISDK_LANGUAGES.slice(writtenIndex + 1)) {
+    task.languages[laterLanguage] = {
+      ...task.languages[laterLanguage],
+      status: 'pending',
+      sourceVerified: false,
+      snippetsReady: false,
+      validated: false,
+      dryRunPassed: false,
+      writePassed: false,
+      auditPassed: false,
+      evidence: [],
+      reason: `Re-export after ${language} write because document anchors changed.`
+    };
+  }
 }
