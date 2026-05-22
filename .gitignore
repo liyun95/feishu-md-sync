@@ -4,5 +4,6 @@ coverage/
 .env
 .sync/
 .superpowers/
+runs/
 docs-site/.vitepress/dist/
 docs-site/.vitepress/cache/

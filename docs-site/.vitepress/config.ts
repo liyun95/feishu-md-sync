@@ -21,6 +21,7 @@ export default defineConfig({
         items: [
           { text: 'Quickstart', link: '/guide/quickstart' },
           { text: 'Configuration', link: '/guide/configuration' },
+          { text: 'Multi-SDK Workflow', link: '/guide/multisdk-workflow' },
           { text: 'First Baseline Sync', link: '/guide/baseline-sync' },
           { text: 'Conflict Workflow', link: '/guide/conflict-workflow' },
           { text: 'Merge Workflow', link: '/guide/merge-workflow' },

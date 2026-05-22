@@ -76,6 +76,23 @@ Supported canonical language order is `python > java > javascript > go > restful
 
 `apply` defaults to dry-run. Writes require `--write -y`.
 
+## `multisdk`
+
+Run a resumable, language-scoped multi-SDK code-block workflow for one Feishu document.
+
+```bash
+md2feishu multisdk init <feishu-doc> --out runs/<doc-token>
+md2feishu multisdk status <task-dir>
+md2feishu multisdk export <task-dir> --language java
+md2feishu multisdk verify <task-dir> --language java --evidence evidence/java.log --command "mvn test"
+md2feishu multisdk apply <task-dir> --language java
+md2feishu multisdk apply <task-dir> --language java --write -y
+md2feishu multisdk audit <task-dir> --language java
+md2feishu multisdk finalize <task-dir>
+```
+
+`multisdk apply` defaults to dry-run. Writes require `--write` and either `-y` or interactive confirmation. Each language must have verification evidence and a successful dry-run before write. Supported lanes are `java`, `javascript`, `go`, and `restful`; `node`, `nodejs`, and `js` normalize to `javascript`.
+
 ## `reference`
 
 Publish SDK reference docs to Feishu Drive and Bitable from explicit manifests.
