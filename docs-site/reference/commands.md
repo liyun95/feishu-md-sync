@@ -1,5 +1,7 @@
 # Command Reference
 
+Examples use the installed `md2feishu` binary. Inside a fresh repository checkout, use `npm exec -- md2feishu ...` until you run `npm link`.
+
 ## Root Shorthand
 
 ```bash

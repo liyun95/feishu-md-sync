@@ -27,17 +27,26 @@ The documentation site lives in `docs-site/` and includes:
 
 ## Usage
 
+From the repository root, the command works without a global install by using `npm exec`:
+
 ```bash
 npm install
 npm run build
-md2feishu ./doc.md https://example.feishu.cn/docx/DocToken
-md2feishu ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
-md2feishu ./doc.md DocToken --write --yes
-md2feishu status ./doc.md DocToken
-md2feishu diff ./doc.md DocToken
-md2feishu pull DocToken --output feishu.remote.md
-md2feishu merge ./doc.md DocToken
-md2feishu sync ./doc.md DocToken --write --yes --strategy merge
+npm exec -- md2feishu ./doc.md https://example.feishu.cn/docx/DocToken
+npm exec -- md2feishu ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
+npm exec -- md2feishu ./doc.md DocToken --write --yes
+npm exec -- md2feishu status ./doc.md DocToken
+npm exec -- md2feishu diff ./doc.md DocToken
+npm exec -- md2feishu pull DocToken --output feishu.remote.md
+npm exec -- md2feishu merge ./doc.md DocToken
+npm exec -- md2feishu sync ./doc.md DocToken --write --yes --strategy merge
+```
+
+To use `md2feishu` directly from any directory, link the local package after building it:
+
+```bash
+npm link
+md2feishu --help
 ```
 
 Required environment variables for real Feishu calls:
@@ -50,28 +59,40 @@ FEISHU_HOST=https://open.feishu.cn
 
 Receipts are written only after successful writes under `.sync/feishu/`, which is ignored by git.
 
+## Milvus / Zilliz Cloud Publishing
+
+For Milvus docs that are published to Feishu before being shared with Zilliz Cloud, use the Milvus publish profile:
+
+```bash
+npm exec -- md2feishu sync ./doc.md DocToken --publish-profile milvus
+npm exec -- md2feishu diff ./doc.md DocToken --publish-profile milvus
+npm exec -- md2feishu sync ./doc.md DocToken --publish-profile milvus --write --yes
+```
+
+The profile removes frontmatter, drops a duplicate first H1 that matches the frontmatter title, rewrites standalone `Milvus` product names to Milvus/Zilliz include tags, and wraps versioned names such as `Milvus 3.0` in Milvus-only include tags.
+
 ## Commands
 
 ```bash
 # Backward-compatible shorthand for `sync`
-md2feishu ./doc.md DocToken
+npm exec -- md2feishu ./doc.md DocToken
 
 # Explicit sync command
-md2feishu sync ./doc.md DocToken
-md2feishu sync ./doc.md DocToken --write --yes
+npm exec -- md2feishu sync ./doc.md DocToken
+npm exec -- md2feishu sync ./doc.md DocToken --write --yes
 
 # Inspect local/remote state without writing
-md2feishu status ./doc.md DocToken
+npm exec -- md2feishu status ./doc.md DocToken
 
 # Compare local Markdown to a best-effort Markdown export of Feishu
-md2feishu diff ./doc.md DocToken
+npm exec -- md2feishu diff ./doc.md DocToken
 
 # Export current Feishu content as best-effort Markdown
-md2feishu pull DocToken --output feishu.remote.md
+npm exec -- md2feishu pull DocToken --output feishu.remote.md
 
 # Merge local changes with current Feishu content into ./doc.merged.md
-md2feishu merge ./doc.md DocToken
-md2feishu merge ./doc.md DocToken --output ./doc.merged.md
+npm exec -- md2feishu merge ./doc.md DocToken
+npm exec -- md2feishu merge ./doc.md DocToken --output ./doc.merged.md
 ```
 
 ## Conflict behavior
@@ -81,16 +102,16 @@ md2feishu merge ./doc.md DocToken --output ./doc.merged.md
 Use these commands to inspect and resolve the conflict manually:
 
 ```bash
-md2feishu status ./doc.md DocToken
-md2feishu diff ./doc.md DocToken
-md2feishu merge ./doc.md DocToken
-md2feishu pull DocToken --output feishu.remote.md
+npm exec -- md2feishu status ./doc.md DocToken
+npm exec -- md2feishu diff ./doc.md DocToken
+npm exec -- md2feishu merge ./doc.md DocToken
+npm exec -- md2feishu pull DocToken --output feishu.remote.md
 ```
 
 For the normal merge workflow, generate one merged file:
 
 ```bash
-md2feishu merge ./doc.md DocToken
+npm exec -- md2feishu merge ./doc.md DocToken
 ```
 
 If the merge is clean, the command writes `./doc.merged.md` and prints the sync command to publish it. If the merge has conflicts, resolve the conflict markers directly inside `./doc.merged.md`:
@@ -108,7 +129,7 @@ feishu version
 Then publish the resolved merged file:
 
 ```bash
-md2feishu sync ./doc.merged.md DocToken --write --yes --strategy local-wins
+npm exec -- md2feishu sync ./doc.merged.md DocToken --write --yes --strategy local-wins
 ```
 
 When `./doc.merged.md` was generated from `./doc.md`, the sync command reuses the original `./doc.md` receipt. After Feishu write verification succeeds, it also updates `./doc.md` to the resolved merged content so the next sync starts from the new baseline.
@@ -116,7 +137,7 @@ When `./doc.merged.md` was generated from `./doc.md`, the sync command reuses th
 For unattended safe sync, use the merge strategy:
 
 ```bash
-md2feishu sync ./doc.md DocToken --write --yes --strategy merge
+npm exec -- md2feishu sync ./doc.md DocToken --write --yes --strategy merge
 ```
 
 This writes to Feishu only when the three-way merge is conflict-free. If conflicts remain, it writes `./doc.merged.md`, refuses the Feishu write, and exits non-zero.
@@ -124,7 +145,7 @@ This writes to Feishu only when the three-way merge is conflict-free. If conflic
 To intentionally overwrite Feishu with the local Markdown, pass an explicit strategy:
 
 ```bash
-md2feishu sync ./doc.md DocToken --write --strategy local-wins --yes
+npm exec -- md2feishu sync ./doc.md DocToken --write --strategy local-wins --yes
 ```
 
 The first write to a non-empty existing Feishu document also requires:
