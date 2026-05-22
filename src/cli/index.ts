@@ -27,6 +27,16 @@ import { getSyncStatus, type SyncStatusResult } from '../sync/status.js';
 import { applyReferenceManifest } from '../reference/apply.js';
 import { auditReferenceManifest } from '../reference/audit.js';
 import { planReferenceManifestFromImpact, type ReferenceImpactMatrix } from '../reference/plan.js';
+import { parseMultisdkLanguage } from '../multisdk/language.js';
+import { loadMultisdkTask, summarizeMultisdkTask } from '../multisdk/task.js';
+import {
+  applyMultisdkLanguage,
+  auditMultisdkLanguage,
+  exportMultisdkLanguage,
+  finalizeMultisdkTask,
+  initMultisdkTask,
+  recordMultisdkVerification
+} from '../multisdk/workflow.js';
 
 const program = new Command();
 
@@ -292,6 +302,170 @@ codeBlocks
     if (!report.passed) process.exitCode = 1;
   });
 
+const multisdk = program
+  .command('multisdk')
+  .description('run a resumable multi-SDK code-block completion workflow');
+
+multisdk
+  .command('init')
+  .description('initialize a multi-SDK task from a Feishu document')
+  .argument('<feishu-doc>', 'Feishu docx ID or URL')
+  .requiredOption('--out <dir>', 'task directory, for example runs/<doc-token>')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+  .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+  .action(async (feishuDoc: string, opts: MultisdkInitCommandOptions) => {
+    const normalized = normalizeBaseOptions(opts);
+    const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
+    const documentId = await resolveDocumentId(client, feishuDoc);
+    const blocks = await client.getDocumentBlocks(documentId);
+    const result = await initMultisdkTask({
+      document: feishuDoc,
+      documentId,
+      taskDir: opts.out,
+      inventory: buildCodeBlockInventory(documentId, blocks)
+    });
+    printFormatted({
+      task: summarizeMultisdkTask(result.task),
+      manifestPath: `${opts.out}/manifest.json`,
+      files: result.files
+    }, opts.format);
+  });
+
+multisdk
+  .command('status')
+  .description('show multi-SDK task progress')
+  .argument('<task-dir>', 'multi-SDK task directory')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (taskDir: string, opts: FormatCommandOptions) => {
+    printFormatted(summarizeMultisdkTask(await loadMultisdkTask(taskDir)), opts.format);
+  });
+
+multisdk
+  .command('export')
+  .description('refresh snippet files for one SDK language')
+  .argument('<task-dir>', 'multi-SDK task directory')
+  .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+  .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+  .action(async (taskDir: string, opts: MultisdkLanguageCommandOptions) => {
+    const language = parseMultisdkLanguage(opts.language);
+    const task = await loadMultisdkTask(taskDir);
+    const normalized = normalizeBaseOptions(opts);
+    const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
+    const blocks = await client.getDocumentBlocks(task.documentId);
+    const result = await exportMultisdkLanguage({
+      document: task.document,
+      taskDir,
+      language,
+      inventory: buildCodeBlockInventory(task.documentId, blocks)
+    });
+    printFormatted({
+      task: summarizeMultisdkTask(result.task),
+      files: result.files
+    }, opts.format);
+  });
+
+multisdk
+  .command('verify')
+  .description('record validation evidence for one SDK language')
+  .argument('<task-dir>', 'multi-SDK task directory')
+  .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
+  .requiredOption('--evidence <file>', 'validation evidence file')
+  .requiredOption('--command <command>', 'validation command that produced the evidence')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (taskDir: string, opts: MultisdkVerifyCommandOptions) => {
+    const language = parseMultisdkLanguage(opts.language);
+    const task = await recordMultisdkVerification({
+      taskDir,
+      language,
+      evidencePath: opts.evidence,
+      command: opts.command
+    });
+    printFormatted(summarizeMultisdkTask(task), opts.format);
+  });
+
+multisdk
+  .command('apply')
+  .description('dry-run or write one SDK language from a multi-SDK task')
+  .argument('<task-dir>', 'multi-SDK task directory')
+  .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
+  .option('--write', 'write to Feishu; omitted means dry-run')
+  .option('-y, --yes', 'skip write confirmation')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+  .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+  .action(async (taskDir: string, opts: MultisdkApplyCommandOptions) => {
+    const language = parseMultisdkLanguage(opts.language);
+    const write = normalizeBooleanOption(opts, 'write', '--write');
+    const yes = normalizeBooleanOption(opts, 'yes', '--yes') || optionFlagFromArgv('-y');
+    const task = await loadMultisdkTask(taskDir);
+    if (write && !yes) {
+      const rl = readline.createInterface({ input, output: stdout });
+      const answer = await rl.question(`Apply ${language} snippets in ${task.documentId}? [y/N] `);
+      rl.close();
+      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+        throw new Error('Multi-SDK apply cancelled.');
+      }
+    }
+    const normalized = normalizeBaseOptions(opts);
+    const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
+    const result = await applyMultisdkLanguage({ taskDir, language, write, client });
+    printFormatted({
+      task: summarizeMultisdkTask(result.task),
+      report: result.report
+    }, opts.format);
+  });
+
+multisdk
+  .command('audit')
+  .description('read back and audit one SDK language')
+  .argument('<task-dir>', 'multi-SDK task directory')
+  .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+  .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+  .action(async (taskDir: string, opts: MultisdkLanguageCommandOptions) => {
+    const language = parseMultisdkLanguage(opts.language);
+    const task = await loadMultisdkTask(taskDir);
+    const normalized = normalizeBaseOptions(opts);
+    const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
+    const blocks = await client.getDocumentBlocks(task.documentId);
+    const result = await auditMultisdkLanguage({
+      taskDir,
+      language,
+      inventory: buildCodeBlockInventory(task.documentId, blocks)
+    });
+    printFormatted({
+      task: summarizeMultisdkTask(result.task),
+      report: result.report
+    }, opts.format);
+  });
+
+multisdk
+  .command('finalize')
+  .description('run full multi-SDK audit and write handoff summary')
+  .argument('<task-dir>', 'multi-SDK task directory')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+  .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+  .action(async (taskDir: string, opts: BaseCommandOptions & FormatCommandOptions) => {
+    const task = await loadMultisdkTask(taskDir);
+    const normalized = normalizeBaseOptions(opts);
+    const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
+    const blocks = await client.getDocumentBlocks(task.documentId);
+    const result = await finalizeMultisdkTask({
+      taskDir,
+      inventory: buildCodeBlockInventory(task.documentId, blocks)
+    });
+    printFormatted({
+      task: summarizeMultisdkTask(result.task),
+      report: result.report,
+      handoffPath: result.handoffPath
+    }, opts.format);
+  });
+
 const reference = program
   .command('reference')
   .description('publish and audit SDK reference docs from explicit manifests');
@@ -461,6 +635,26 @@ type CodeBlockApplyCommandOptions = BaseCommandOptions & FormatCommandOptions & 
 type CodeBlockAuditCommandOptions = BaseCommandOptions & FormatCommandOptions & {
   expect: string;
   allowPlaceholders?: string;
+};
+
+type MultisdkInitCommandOptions = BaseCommandOptions & FormatCommandOptions & {
+  out: string;
+};
+
+type MultisdkLanguageCommandOptions = BaseCommandOptions & FormatCommandOptions & {
+  language: string;
+};
+
+type MultisdkVerifyCommandOptions = FormatCommandOptions & {
+  language: string;
+  evidence: string;
+  command: string;
+};
+
+type MultisdkApplyCommandOptions = BaseCommandOptions & FormatCommandOptions & {
+  language: string;
+  write?: boolean;
+  yes?: boolean;
 };
 
 type ReferencePlanCommandOptions = FormatCommandOptions & {

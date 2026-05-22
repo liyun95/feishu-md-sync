@@ -7,6 +7,8 @@ description: Use when updating or inserting verified language code blocks inside
 
 Use this skill for local code-block operations in an existing Feishu document. It owns `md2feishu code-blocks inspect`, `plan`, `export`, `apply`, and `audit`.
 
+For Milvus multi-SDK document tasks that need resumable per-language state, use `milvus-multisdk-example-sync` and the `md2feishu multisdk` CLI; this skill remains the low-level code-block engine.
+
 Workflow:
 
 1. Inspect the document inventory.

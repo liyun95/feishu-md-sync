@@ -101,6 +101,43 @@ describe('code-block audit', () => {
     expect(inventory.groups[0]?.languages).toEqual(['python', 'restful']);
     expect(auditCodeBlockInventory(inventory, { expectLanguages: ['restful'] }).passed).toBe(true);
   });
+
+  it('recognizes RESTful curl snippets with shell environment setup', () => {
+    const inventory = buildCodeBlockInventory('doc', [
+      { block_id: 'doc', block_type: 1, children: ['heading-1', 'python-1', 'rest-1'] },
+      {
+        block_id: 'heading-1',
+        block_type: 4,
+        parent_id: 'doc',
+        heading2: { elements: [{ text_run: { content: 'Set default values' } }] }
+      },
+      {
+        block_id: 'python-1',
+        block_type: 14,
+        parent_id: 'doc',
+        code: {
+          elements: [{ text_run: { content: 'from pymilvus import MilvusClient' } }],
+          style: { language: 49 }
+        }
+      },
+      {
+        block_id: 'rest-1',
+        block_type: 14,
+        parent_id: 'doc',
+        code: {
+          elements: [{
+            text_run: {
+              content: 'export CLUSTER_ENDPOINT="http://localhost:19530"\n\ncurl --request POST --url "$CLUSTER_ENDPOINT/v2/vectordb/collections/create"'
+            }
+          }],
+          style: { language: 7 }
+        }
+      }
+    ]);
+
+    expect(inventory.groups[0]?.languages).toEqual(['python', 'restful']);
+    expect(auditCodeBlockInventory(inventory, { expectLanguages: ['restful'] }).passed).toBe(true);
+  });
 });
 
 type BlockOptions = {
