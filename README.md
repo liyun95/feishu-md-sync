@@ -192,8 +192,9 @@ The repository documents focused Agent Skills in `docs-site/agent/skills/`. Thes
 
 | Skill | Use it when |
 | --- | --- |
-| `feishu-markdown-sync` | Syncing a whole local Markdown file with a Feishu document. |
-| `feishu-codeblock-writer` | Updating or auditing code blocks inside an existing Feishu document. |
+| `feishu-markdown-pull` | Exporting Feishu docx/wiki documents into local Markdown. |
+| `feishu-markdown-push` | Publishing local Markdown to existing Feishu documents with dry-run and conflict checks. |
+| `feishu-codeblock-writer` | Directly inspecting, exporting, applying, or auditing Feishu code blocks outside the multi-SDK workflow. |
 | `sdk-source-verifier` | Confirming SDK feature support from source code, tests, tags, or commits. |
 | `sdk-reference-publisher` | Publishing approved SDK reference docs to Feishu Drive and Bitable. |
 | `milvus-multisdk-example-sync` | Completing Milvus user-guide examples across Java, JavaScript, Go, and RESTful. |
@@ -201,7 +202,8 @@ The repository documents focused Agent Skills in `docs-site/agent/skills/`. Thes
 
 Skill boundaries matter:
 
-- Whole-document sync must not patch individual code blocks.
+- Feishu Markdown pull must not write Feishu.
+- Feishu Markdown push must not patch individual code blocks.
 - Code-block workflows must not decide SDK correctness.
 - SDK source verification must not write Feishu docs.
 - Release notes workflow must not bypass report approval before local `--write`.
