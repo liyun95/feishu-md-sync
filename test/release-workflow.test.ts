@@ -6,8 +6,11 @@ import type { ReleaseTask } from '../src/release/task.js';
 import {
   initReleaseWorkflow,
   approveReleaseWorkflow,
+  pullReleaseNotesWorkflow,
+  scanSdkTagsWorkflow,
   statusReleaseWorkflow
 } from '../src/release/workflow.js';
+import type { SdkTagMatrix } from '../src/release/sdk-tags.js';
 import { createInitialReleaseTask, saveReleaseTask, summarizeReleaseTask } from '../src/release/task.js';
 
 const tempDirs: string[] = [];
@@ -65,6 +68,34 @@ describe('release workflow orchestration', () => {
     expect(saved.reportHash).toBe(approved.reportHash);
   });
 
+  it('writes pulled release notes to the remote markdown artifact path', async () => {
+    const dir = await tempDir();
+    await saveReleaseTask(taskFixture(dir));
+
+    const task = await pullReleaseNotesWorkflow({
+      taskDir: dir,
+      markdown: '## v2.6.17\n\n- Added ARRAY_REMOVE support.\n'
+    });
+
+    expect(task.steps.pulledReleaseNotes).toBe(true);
+    await expect(readFile(join(dir, 'feishu/release-notes.remote.md'), 'utf8'))
+      .resolves.toBe('## v2.6.17\n\n- Added ARRAY_REMOVE support.\n');
+  });
+
+  it('writes scanned SDK tags to tags.json and keeps matrix markdown', async () => {
+    const dir = await tempDir();
+    const matrix = sdkMatrixFixture();
+    await saveReleaseTask(taskFixture(dir));
+
+    const task = await scanSdkTagsWorkflow({ taskDir: dir, matrix });
+
+    expect(task.steps.scannedSdkTags).toBe(true);
+    await expect(readFile(join(dir, 'sdk/tags.json'), 'utf8'))
+      .resolves.toBe(`${JSON.stringify(matrix, null, 2)}\n`);
+    await expect(readFile(join(dir, 'sdk/matrix.md'), 'utf8'))
+      .resolves.toContain('| java | milvus-io/milvus-sdk-java | v2.6.17 | 2.6.17 | ok | tag |');
+  });
+
   it('returns the task summary for status output', async () => {
     const dir = await tempDir();
     const task = taskFixture(dir);
@@ -78,6 +109,26 @@ async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'release-workflow-'));
   tempDirs.push(dir);
   return dir;
+}
+
+function sdkMatrixFixture(): SdkTagMatrix {
+  return {
+    releaseLine: '2.6.x',
+    generatedAt: '2026-05-25T00:00:00.000Z',
+    blocked: [],
+    rows: [
+      {
+        sdk: 'java',
+        label: 'Java',
+        repository: 'milvus-io/milvus-sdk-java',
+        releaseLine: '2.6.x',
+        matchedTag: 'v2.6.17',
+        variablesValue: '2.6.17',
+        evidence: 'tag',
+        status: 'ok'
+      }
+    ]
+  };
 }
 
 async function directoryExists(path: string): Promise<boolean> {

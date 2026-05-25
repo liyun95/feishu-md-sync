@@ -46,7 +46,7 @@ export async function pullReleaseNotesWorkflow(input: {
 }): Promise<ReleaseTask> {
   const task = await loadReleaseTask(input.taskDir);
   await mkdir(join(input.taskDir, 'feishu'), { recursive: true });
-  await writeFile(join(input.taskDir, 'feishu/release-notes.md'), input.markdown, 'utf8');
+  await writeFile(join(input.taskDir, 'feishu/release-notes.remote.md'), input.markdown, 'utf8');
 
   const updated: ReleaseTask = {
     ...task,
@@ -72,7 +72,7 @@ export async function scanSdkTagsWorkflow(input: {
 }): Promise<ReleaseTask> {
   const task = await loadReleaseTask(input.taskDir);
   await mkdir(join(input.taskDir, 'sdk'), { recursive: true });
-  await writeFile(join(input.taskDir, 'sdk/matrix.json'), `${JSON.stringify(input.matrix, null, 2)}\n`, 'utf8');
+  await writeFile(join(input.taskDir, 'sdk/tags.json'), `${JSON.stringify(input.matrix, null, 2)}\n`, 'utf8');
   await writeFile(join(input.taskDir, 'sdk/matrix.md'), renderSdkTagMatrixMarkdown(input.matrix), 'utf8');
 
   const updated: ReleaseTask = {
