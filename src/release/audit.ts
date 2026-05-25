@@ -141,7 +141,7 @@ export async function auditLinks(input: {
 }
 
 export function markdownHeadingAnchor(heading: string): string {
-  return heading
+  return heading.split('|', 1)[0]
     .trim()
     .replace(/[^\p{L}\p{N}\s-]/gu, '')
     .replace(/\s+/g, '-');

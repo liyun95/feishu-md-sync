@@ -83,4 +83,10 @@ describe('release audits', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('matches anchors before Milvus version suffixes in headings', () => {
+    expect(markdownHeadingAnchor('Upsert ARRAY fields with partial-update operators | Milvus v2.6.17+')).toBe(
+      'Upsert-ARRAY-fields-with-partial-update-operators'
+    );
+  });
 });

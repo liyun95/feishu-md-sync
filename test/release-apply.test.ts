@@ -26,6 +26,33 @@ describe('release apply gate', () => {
     }
   });
 
+  it('replaces an existing release notes section instead of inserting a duplicate', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'release-replace-'));
+    try {
+      await mkdir(join(dir, 'site/en'), { recursive: true });
+      await writeFile(
+        join(dir, 'site/en/release_notes.md'),
+        '# Release Notes\n\n## v2.6.17\n\nOld 2.6.17 text\n\n## v2.6.16\n\nOld\n',
+        'utf8'
+      );
+      await writeFile(join(dir, 'site/en/Variables.json'), '{\n  "milvus_sdk_java_version": "2.6.16"\n}\n', 'utf8');
+
+      const plan = await planReleaseApply({
+        milvusDocsPath: dir,
+        releaseNotesSection: '## v2.6.17\n\nNew 2.6.17 text\n',
+        variableChanges: []
+      });
+
+      const releaseNotes = plan.files.find((file) => file.path === 'site/en/release_notes.md')?.after;
+      expect(releaseNotes?.match(/## v2\.6\.17/g)).toHaveLength(1);
+      expect(releaseNotes).toContain('New 2.6.17 text');
+      expect(releaseNotes).not.toContain('Old 2.6.17 text');
+      expect(releaseNotes).toContain('## v2.6.16');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses writes without an approved matching report hash and dry-run state', async () => {
     const task = createInitialReleaseTask({
       releaseLine: '2.6.x',

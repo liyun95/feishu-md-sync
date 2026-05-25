@@ -80,6 +80,21 @@ function plannedFile(path: string, before: string, after: string): ReleaseApplyF
 
 function insertReleaseNotesSection(markdown: string, releaseNotesSection: string): string {
   const section = `${releaseNotesSection.trim()}\n`;
+  const sectionHeading = section.split(/\r?\n/, 1)[0]?.trim();
+  if (sectionHeading) {
+    const lines = markdown.split(/\r?\n/);
+    const startLine = lines.findIndex((line) => line.trim() === sectionHeading);
+    if (startLine >= 0) {
+      const nextSectionOffset = lines.slice(startLine + 1).findIndex((line) => /^##\s+v.+$/.test(line.trim()));
+      const endLine = nextSectionOffset >= 0 ? startLine + 1 + nextSectionOffset : lines.length;
+      return [
+        ...lines.slice(0, startLine),
+        ...section.trimEnd().split(/\r?\n/),
+        ...lines.slice(endLine)
+      ].join('\n').replace(/\s*$/, '\n');
+    }
+  }
+
   const firstVersionHeading = /^##\s+v.+$/m.exec(markdown);
   if (firstVersionHeading?.index !== undefined) {
     const before = markdown.slice(0, firstVersionHeading.index).replace(/\s*$/, '\n\n');

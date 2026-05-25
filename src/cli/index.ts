@@ -635,11 +635,11 @@ release
       variablesJson,
       matrix,
       variableNames: {
-        python: 'pymilvus_version',
-        java: 'milvus_sdk_java_version',
-        nodejs: 'milvus_sdk_node_version',
-        go: 'milvus_sdk_go_version',
-        rest: 'milvus_rest_version'
+        python: 'milvus_python_sdk_real_version',
+        java: 'milvus_java_sdk_real_version',
+        nodejs: 'milvus_node_sdk_real_version',
+        go: 'milvus_go_sdk_real_version',
+        rest: 'milvus_restful_sdk_real_version'
       }
     });
     const releaseNotes = auditReleaseNotes({
@@ -731,6 +731,9 @@ release
     });
     const currentReportHash = hashReleaseReport({ reportJson, reportMarkdown });
     const write = normalizeBooleanOption(opts, 'write', '--write');
+    if (write && !report.summary.passed) {
+      throw new Error(`release apply --write requires a passing report. Blocked items: ${report.summary.blocked.join('; ')}`);
+    }
     if (!write) {
       const updated = {
         ...task,
