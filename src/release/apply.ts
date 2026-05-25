@@ -87,10 +87,17 @@ function insertReleaseNotesSection(markdown: string, releaseNotesSection: string
     if (startLine >= 0) {
       const nextSectionOffset = lines.slice(startLine + 1).findIndex((line) => /^##\s+v.+$/.test(line.trim()));
       const endLine = nextSectionOffset >= 0 ? startLine + 1 + nextSectionOffset : lines.length;
+      const existingSection = lines.slice(startLine, endLine).join('\n');
+      const mergedSection = mergeExistingReleaseSection(existingSection, section);
+      const mergedLines = mergedSection.trimEnd().split(/\r?\n/);
+      const tailLines = lines.slice(endLine);
+      if (tailLines.length > 0 && mergedLines.at(-1)?.trim() !== '' && tailLines[0]?.trim() !== '') {
+        mergedLines.push('');
+      }
       return [
         ...lines.slice(0, startLine),
-        ...section.trimEnd().split(/\r?\n/),
-        ...lines.slice(endLine)
+        ...mergedLines,
+        ...tailLines
       ].join('\n').replace(/\s*$/, '\n');
     }
   }
@@ -111,6 +118,116 @@ function insertReleaseNotesSection(markdown: string, releaseNotesSection: string
   }
 
   return `${section}\n${markdown.trimStart()}`;
+}
+
+type ReleaseSubsection = {
+  key: string;
+  heading: string;
+  content: string[];
+};
+
+function mergeExistingReleaseSection(existingSection: string, incomingSection: string): string {
+  const existingLines = existingSection.trimEnd().split(/\r?\n/);
+  const incomingLines = normalizeIncomingReleaseSection(incomingSection).trimEnd().split(/\r?\n/);
+  const existingFirstSubsection = firstSubsectionIndex(existingLines);
+  const incomingFirstSubsection = firstSubsectionIndex(incomingLines);
+  if (existingFirstSubsection < 0 || incomingFirstSubsection < 0) {
+    return incomingSection.trimEnd();
+  }
+
+  const prefix = existingLines.slice(0, existingFirstSubsection);
+  const existingSubsections = parseSubsections(existingLines, existingFirstSubsection);
+  const incomingSubsections = parseSubsections(incomingLines, incomingFirstSubsection);
+  const incomingByKey = new Map(incomingSubsections.map((section) => [section.key, section]));
+  const usedIncoming = new Set<string>();
+  const mergedSubsections: ReleaseSubsection[] = [];
+
+  for (const existing of existingSubsections) {
+    const incoming = incomingByKey.get(existing.key);
+    if (!incoming) {
+      mergedSubsections.push(existing);
+      continue;
+    }
+    usedIncoming.add(incoming.key);
+    mergedSubsections.push({
+      ...existing,
+      content: mergeSubsectionContent(existing.content, incoming.content)
+    });
+  }
+
+  for (const incoming of incomingSubsections) {
+    if (!usedIncoming.has(incoming.key)) {
+      mergedSubsections.push(incoming);
+    }
+  }
+
+  return [...prefix, ...renderSubsections(mergedSubsections)].join('\n');
+}
+
+function normalizeIncomingReleaseSection(section: string): string {
+  const lines = section.trimEnd().split(/\r?\n/);
+  return lines.map((line, index) => {
+    if (index > 0 && /^##\s+(?!v)/i.test(line.trim())) {
+      return line.replace(/^##\s+/, '### ');
+    }
+    return line;
+  }).join('\n');
+}
+
+function firstSubsectionIndex(lines: string[]): number {
+  return lines.findIndex((line, index) => index > 0 && /^#{3,6}\s+/.test(line.trim()));
+}
+
+function parseSubsections(lines: string[], startIndex: number): ReleaseSubsection[] {
+  const sections: ReleaseSubsection[] = [];
+  for (let index = startIndex; index < lines.length;) {
+    const heading = lines[index];
+    const nextOffset = lines.slice(index + 1).findIndex((line) => /^#{3,6}\s+/.test(line.trim()));
+    const endIndex = nextOffset >= 0 ? index + 1 + nextOffset : lines.length;
+    sections.push({
+      key: subsectionKey(heading),
+      heading,
+      content: lines.slice(index + 1, endIndex)
+    });
+    index = endIndex;
+  }
+  return sections;
+}
+
+function renderSubsections(sections: ReleaseSubsection[]): string[] {
+  return sections.flatMap((section) => [section.heading, ...section.content]);
+}
+
+function subsectionKey(heading: string): string {
+  return heading.replace(/^#+\s+/, '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function mergeSubsectionContent(existing: string[], incoming: string[]): string[] {
+  const seen = new Set(existing.filter((line) => line.trimStart().startsWith('- ')).map(bulletFingerprint));
+  const merged = [...existing];
+  for (const line of incoming) {
+    if (!line.trimStart().startsWith('- ')) continue;
+    const fingerprint = bulletFingerprint(line);
+    if (!seen.has(fingerprint)) {
+      if (merged.length > 0 && merged.at(-1)?.trim() !== '') merged.push('');
+      merged.push(line);
+      seen.add(fingerprint);
+    }
+  }
+  return merged;
+}
+
+function bulletFingerprint(line: string): string {
+  const issueRefs = Array.from(line.matchAll(/(?:\/pull\/|#)(\d+)/g)).map((match) => match[1]);
+  if (issueRefs.length > 0) {
+    return `refs:${issueRefs.sort().join(',')}`;
+  }
+  return line
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[`*_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 function applyVariableChanges(variablesJson: string, changes: ReleaseVariableChange[]): string {

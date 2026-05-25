@@ -26,27 +26,69 @@ describe('release apply gate', () => {
     }
   });
 
-  it('replaces an existing release notes section instead of inserting a duplicate', async () => {
+  it('preserves local release metadata and linked bullets when merging an existing section', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'release-replace-'));
     try {
       await mkdir(join(dir, 'site/en'), { recursive: true });
       await writeFile(
         join(dir, 'site/en/release_notes.md'),
-        '# Release Notes\n\n## v2.6.17\n\nOld 2.6.17 text\n\n## v2.6.16\n\nOld\n',
+        [
+          '# Release Notes',
+          '',
+          '## v2.6.17',
+          '',
+          'Release date: May 22, 2026',
+          '',
+          '| Milvus Version | Java SDK Version |',
+          '| -------------- | ---------------- |',
+          '| 2.6.17         | 2.6.20           |',
+          '',
+          'Local intro.',
+          '',
+          '### Improvements',
+          '',
+          '- Added [`ARRAY_APPEND` and `ARRAY_REMOVE` partial update operators](upsert-entities.md#Upsert-ARRAY-fields-with-partial-update-operators) for Array fields ([#49328](https://github.com/milvus-io/milvus/pull/49328), [#49724](https://github.com/milvus-io/milvus/pull/49724))',
+          '',
+          '### Bug fixes',
+          '',
+          '- Existing bug fix ([#49703](https://github.com/milvus-io/milvus/pull/49703))',
+          '',
+          '## v2.6.16',
+          '',
+          'Old'
+        ].join('\n'),
         'utf8'
       );
       await writeFile(join(dir, 'site/en/Variables.json'), '{\n  "milvus_sdk_java_version": "2.6.16"\n}\n', 'utf8');
 
       const plan = await planReleaseApply({
         milvusDocsPath: dir,
-        releaseNotesSection: '## v2.6.17\n\nNew 2.6.17 text\n',
+        releaseNotesSection: [
+          '## v2.6.17',
+          '',
+          'Remote intro.',
+          '',
+          '## Improvements',
+          '',
+          '- Added ARRAY_APPEND and ARRAY_REMOVE partial update operators for Array fields ([#49328](https://github.com/milvus-io/milvus/pull/49328), [#49724](https://github.com/milvus-io/milvus/pull/49724))',
+          '',
+          '- Added a new feature ([#49999](https://github.com/milvus-io/milvus/pull/49999))',
+          '',
+          '## Bug Fixes',
+          '',
+          '- Existing bug fix ([#49703](https://github.com/milvus-io/milvus/pull/49703))'
+        ].join('\n'),
         variableChanges: []
       });
 
       const releaseNotes = plan.files.find((file) => file.path === 'site/en/release_notes.md')?.after;
       expect(releaseNotes?.match(/## v2\.6\.17/g)).toHaveLength(1);
-      expect(releaseNotes).toContain('New 2.6.17 text');
-      expect(releaseNotes).not.toContain('Old 2.6.17 text');
+      expect(releaseNotes).toContain('Release date: May 22, 2026');
+      expect(releaseNotes).toContain('| 2.6.17         | 2.6.20           |');
+      expect(releaseNotes).toContain('[`ARRAY_APPEND` and `ARRAY_REMOVE` partial update operators](upsert-entities.md#Upsert-ARRAY-fields-with-partial-update-operators)');
+      expect(releaseNotes).toContain('- Added a new feature ([#49999](https://github.com/milvus-io/milvus/pull/49999))');
+      expect(releaseNotes).not.toContain('Remote intro.');
+      expect(releaseNotes).toContain('([#49703](https://github.com/milvus-io/milvus/pull/49703))\n\n## v2.6.16');
       expect(releaseNotes).toContain('## v2.6.16');
     } finally {
       await rm(dir, { recursive: true, force: true });
