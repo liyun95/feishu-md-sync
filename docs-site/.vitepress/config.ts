@@ -22,6 +22,7 @@ export default defineConfig({
           { text: 'Quickstart', link: '/guide/quickstart' },
           { text: 'Configuration', link: '/guide/configuration' },
           { text: 'Multi-SDK Workflow', link: '/guide/multisdk-workflow' },
+          { text: 'Release Workflow', link: '/guide/release-workflow' },
           { text: 'First Baseline Sync', link: '/guide/baseline-sync' },
           { text: 'Conflict Workflow', link: '/guide/conflict-workflow' },
           { text: 'Merge Workflow', link: '/guide/merge-workflow' },
@@ -41,6 +42,7 @@ export default defineConfig({
           { text: 'SDK Source Verifier', link: '/agent/skills/sdk-source-verifier' },
           { text: 'SDK Reference Publisher', link: '/agent/skills/sdk-reference-publisher' },
           { text: 'Milvus Multi-SDK Sync', link: '/agent/skills/milvus-multisdk-example-sync' },
+          { text: 'Milvus Release Notes Workflow', link: '/agent/skills/milvus-release-notes-workflow' },
           { text: 'Skill Roadmap', link: '/agent/skill-roadmap' }
         ]
       },

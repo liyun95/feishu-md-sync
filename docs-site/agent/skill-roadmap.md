@@ -9,10 +9,11 @@ V1 splits Feishu documentation work into focused skills instead of one generic s
 - `sdk-source-verifier`: confirm SDK support from source, tags, tests, and commits.
 - `sdk-reference-publisher`: publish SDK reference docs to Feishu Drive and Bitable from approved manifests.
 - `milvus-multisdk-example-sync`: orchestrate Milvus user-guide multi-SDK example completion from Python baselines.
+- `milvus-release-notes-workflow`: orchestrate Milvus release notes, Variables, SDK version values, and release-note user-doc links from Feishu source documents.
 
 ## Boundaries
 
-Whole-document sync must not patch individual code blocks. Code-block writes must not judge SDK correctness. SDK source verification must not write Feishu. SDK reference publishing must not scan source or infer doc impact. Milvus multi-SDK workflow composes source verification and code-block writing.
+Whole-document sync must not patch individual code blocks. Code-block writes must not judge SDK correctness. SDK source verification must not write Feishu. SDK reference publishing must not scan source or infer doc impact. Milvus multi-SDK workflow composes source verification and code-block writing. Milvus release notes workflow composes the release CLI, Feishu Markdown sync, and SDK source verification; it must not bypass approval before local `--write`.
 
 ## Follow-Ups
 

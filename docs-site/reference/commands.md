@@ -98,6 +98,27 @@ md2feishu multisdk finalize <task-dir>
 
 `multisdk apply` defaults to dry-run. Writes require `--write` and either `-y` or interactive confirmation. Each language must have verification evidence and a successful dry-run before write. Supported lanes are `java`, `javascript`, `go`, and `restful`; `node`, `nodejs`, and `js` normalize to `javascript`.
 
+## `release`
+
+Run a gated Milvus release-notes workflow that pulls Feishu source text, checks SDK tags, audits Variables and user-doc links, and applies local Milvus docs updates only after approval.
+
+```bash
+md2feishu release init \
+  --release-line 2.6.x \
+  --version 2.6.17 \
+  --release-doc "$RELEASE_DOC" \
+  --milvus-docs ~/milvus-docs \
+  --out runs/releases/2.6.17
+md2feishu release pull runs/releases/2.6.17
+md2feishu release scan-sdk-tags runs/releases/2.6.17
+md2feishu release audit runs/releases/2.6.17
+md2feishu release approve runs/releases/2.6.17 --by "$USER"
+md2feishu release apply runs/releases/2.6.17
+md2feishu release apply runs/releases/2.6.17 --write
+```
+
+Review `runs/releases/2.6.17/report.md` before approval. `release apply` defaults to dry-run. `release apply --write` updates only local Milvus docs files and requires approval of the current report hash.
+
 ## `reference`
 
 Publish SDK reference docs to Feishu Drive and Bitable from explicit manifests.
