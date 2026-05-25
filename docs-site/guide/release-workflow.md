@@ -30,3 +30,18 @@ md2feishu release apply runs/releases/2.6.17 --write
 ```
 
 `apply` defaults to dry-run. `apply --write` updates only local Milvus docs files and requires approval of the current report hash.
+
+When a release-note item links to a user doc and advertises language/API support, add `requiredLanguages` to the link map. The audit will block if that section is missing any required code block or still contains placeholder snippets for those languages.
+
+```json
+{
+  "targets": [
+    {
+      "keyword": "ARRAY_REMOVE",
+      "localPath": "site/en/userGuide/insert-and-delete/upsert-entities.md",
+      "anchor": "Upsert-ARRAY-fields-with-partial-update-operators",
+      "requiredLanguages": ["nodejs", "go", "curl"]
+    }
+  ]
+}
+```

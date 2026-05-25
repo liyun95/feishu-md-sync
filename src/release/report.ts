@@ -68,9 +68,15 @@ export function renderReleaseReportMarkdown(report: ReleaseReport): string {
   }
 
   if (report.audits.links) {
-    lines.push('', '## Links', '', '| Keyword | Path | Anchor | Status |', '| --- | --- | --- | --- |');
+    lines.push('', '## Links', '', '| Keyword | Path | Anchor | Required languages | Issues | Status |', '| --- | --- | --- | --- | --- | --- |');
     for (const item of report.audits.links.items) {
-      lines.push(`| ${item.keyword} | ${item.localPath} | ${item.anchor} | ${item.status} |`);
+      const issues = [
+        ...item.missingLanguages.map((issue) => `missing ${issue.language}`),
+        ...item.placeholderIssues.map((issue) => `placeholder ${issue.language}${issue.line ? ` line ${issue.line}` : ''}`)
+      ];
+      lines.push(
+        `| ${item.keyword} | ${item.localPath} | ${item.anchor} | ${item.requiredLanguages.join(', ')} | ${issues.join('; ')} | ${item.status} |`
+      );
     }
   }
 

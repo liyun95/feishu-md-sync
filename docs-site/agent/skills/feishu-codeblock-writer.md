@@ -1,13 +1,15 @@
 ---
 name: feishu-codeblock-writer
-description: Use when updating or inserting verified language code blocks inside an existing Feishu document.
+description: Use when directly inspecting, exporting, applying, or auditing code blocks inside an existing Feishu document outside the resumable multi-SDK workflow.
 ---
 
 # Feishu Codeblock Writer
 
-Use this skill for local code-block operations in an existing Feishu document. It owns `md2feishu code-blocks inspect`, `plan`, `export`, `apply`, and `audit`.
+Use this skill for direct code-block operations in an existing Feishu document. It owns `md2feishu code-blocks inspect`, `plan`, `export`, `apply`, and `audit`.
 
-For Milvus multi-SDK document tasks that need resumable per-language state, use `milvus-multisdk-example-sync` and the `md2feishu multisdk` CLI; this skill remains the low-level code-block engine.
+Do not use this as the main entry point for Milvus multi-language example completion. For those tasks, use `milvus-multisdk-example-sync`; that workflow wraps code-block writes with per-language state, validation evidence, dry-run gates, and readback audit.
+
+Use this skill when the user already knows which code blocks should change or needs a focused code-block inventory/audit. It does not choose SDK APIs, infer feature availability, or manage a multi-language Milvus task.
 
 Workflow:
 
@@ -29,4 +31,10 @@ md2feishu code-blocks apply "$DOC" --manifest manifest.json --write -y --format 
 md2feishu code-blocks audit "$DOC" --expect java,javascript,go,restful --allow-placeholders java --format json
 ```
 
-Do not use this skill to decide SDK support, generate Milvus examples, run Manta jobs, or rewrite whole documents. Use `sdk-source-verifier` for source truth and `feishu-markdown-sync` for whole-document sync.
+Boundaries:
+
+- Do not decide SDK support or generate Milvus examples.
+- Do not run Manta jobs or manage by-language validation state.
+- Do not rewrite whole documents.
+
+Use `sdk-source-verifier` for source truth, `milvus-multisdk-example-sync` for Milvus multi-language example completion, `feishu-markdown-pull` for Feishu-to-Markdown export, and `feishu-markdown-push` for local Markdown publishing.

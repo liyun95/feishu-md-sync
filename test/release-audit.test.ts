@@ -84,6 +84,64 @@ describe('release audits', () => {
     }
   });
 
+  it('blocks release-linked user docs that still contain required language placeholders', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'release-placeholder-links-'));
+    try {
+      const docPath = 'site/en/userGuide/insert-and-delete/upsert-entities.md';
+      await mkdir(join(dir, 'site/en/userGuide/insert-and-delete'), { recursive: true });
+      await writeFile(join(dir, docPath), [
+        '## Upsert ARRAY fields with partial update operators',
+        '',
+        '```python',
+        'client.upsert(...)',
+        '```',
+        '',
+        '```javascript',
+        '// nodejs',
+        '```',
+        '',
+        '```go',
+        '// go',
+        '```',
+        '',
+        '```bash',
+        '# restful',
+        '```',
+        '',
+        '### Limits',
+        '',
+        'Body',
+        ''
+      ].join('\n'), 'utf8');
+
+      const audit = await auditLinks({
+        milvusDocsPath: dir,
+        releaseMarkdown: '- Added gRPC and REST support for ARRAY_REMOVE.\n',
+        linkTargets: [
+          {
+            keyword: 'ARRAY_REMOVE',
+            localPath: docPath,
+            anchor: 'Upsert-ARRAY-fields-with-partial-update-operators',
+            requiredLanguages: ['nodejs', 'go', 'curl']
+          }
+        ]
+      });
+
+      expect(audit.passed).toBe(false);
+      expect(audit.items[0]).toMatchObject({
+        status: 'placeholder',
+        requiredLanguages: ['javascript', 'go', 'restful'],
+        placeholderIssues: [
+          { language: 'javascript', line: 7, placeholder: '// nodejs' },
+          { language: 'go', line: 11, placeholder: '// go' },
+          { language: 'restful', line: 15, placeholder: '# restful' }
+        ]
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('matches anchors before Milvus version suffixes in headings', () => {
     expect(markdownHeadingAnchor('Upsert ARRAY fields with partial-update operators | Milvus v2.6.17+')).toBe(
       'Upsert-ARRAY-fields-with-partial-update-operators'
