@@ -38,6 +38,16 @@ The first release workflow should make this process durable and auditable withou
 - The first version does not replace the existing `pull`, `sync`, `code-blocks`, or `multisdk` commands.
 - The first version does not manage SDK reference publishing or Bitable release audit tables.
 
+## CLI and Skill Boundary
+
+The release workflow should ship as both a CLI command group and an agent Skill.
+
+The CLI is the deterministic engine. It owns durable task state, Feishu pulls, SDK tag scans, audits, approval hash checks, dry-run diffs, and gated local file writes. Anything that needs repeatability, test coverage, or file-system safety belongs in the CLI.
+
+The Skill is the operator playbook. It tells the agent when to use the release workflow, how to collect inputs from the user, which commands to run in what order, how to interpret the report, when to stop for user approval, and how to combine this workflow with existing Feishu Markdown sync or code-block workflows.
+
+This keeps the Skill concise and stable: it should not reimplement SDK tag scanning, Markdown diffing, anchor detection, or approval logic in prose. It should call the CLI for those operations and use the generated report as the decision surface.
+
 ## Command Model
 
 Add a new CLI group:
@@ -307,6 +317,22 @@ Update the docs site with:
 - an agent skill page describing when to use this workflow;
 - safety notes explaining that SDK source scanning feeds `Variables.json` audit.
 
+## Skill Packaging
+
+Add a dedicated Skill, tentatively named `milvus-release-notes-workflow`.
+
+The Skill should trigger when the user asks to update Milvus release notes, update release variables, pull release-note content from Feishu, prepare a Milvus release docs PR, or check SDK versions for a release line.
+
+The Skill body should stay small and include:
+
+- required inputs: release line, release version, Feishu release-note URL, Milvus docs path, optional user-doc mappings, optional link map;
+- command sequence: `release init`, `release pull`, `release scan-sdk-tags`, `release audit`, user review, `release approve`, dry-run `release apply`, optional `release apply --write`;
+- stop points: pause after `audit` for user review, and pause before any `apply --write`;
+- source-of-truth rules: Feishu is source for release-note text, SDK repos/tags are source for SDK versions, user-doc Feishu pages are source for user-guide content;
+- composition rules: use existing Feishu Markdown sync for user-doc content updates, and existing code-block workflows for Feishu code-block edits.
+
+The Skill may include a short reference file with example command invocations for `2.6.x` and `3.0.x`, but it should not duplicate the full CLI command reference.
+
 ## Rollout
 
 Phase 1 adds the task model, `init`, `status`, approval hashing, and report rendering.
@@ -317,4 +343,6 @@ Phase 3 adds variables, release notes, and link audits.
 
 Phase 4 adds dry-run apply and gated `apply --write` for `release_notes.md` and `Variables.json`.
 
-Phase 5 dogfoods the workflow on the next Milvus release update and adjusts audit rules based on real review feedback.
+Phase 5 adds the `milvus-release-notes-workflow` Skill and docs-site Skill page.
+
+Phase 6 dogfoods the workflow on the next Milvus release update and adjusts audit rules based on real review feedback.
