@@ -119,6 +119,7 @@ export class FeishuClient implements FeishuDocClient {
         const createdBlock = createdBatch[index];
         if (sourceBlock && createdBlock) {
           await this.populateTableCells(documentId, sourceBlock, createdBlock);
+          await this.populateBlockChildren(documentId, sourceBlock, createdBlock);
         }
       }
     }
@@ -263,6 +264,18 @@ export class FeishuClient implements FeishuDocClient {
         { children: [toCreateBlock(cellContent)], index: 0 }
       );
     }
+  }
+
+  private async populateBlockChildren(
+    documentId: string,
+    sourceBlock: FeishuBlock,
+    createdBlock: FeishuBlock
+  ): Promise<void> {
+    if (!createdBlock.block_id || !Array.isArray(sourceBlock.children)) return;
+    const childBlocks = sourceBlock.children.filter(isBlockLike);
+    if (childBlocks.length === 0) return;
+
+    await this.createChildren(documentId, createdBlock.block_id, childBlocks);
   }
 
   private async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {

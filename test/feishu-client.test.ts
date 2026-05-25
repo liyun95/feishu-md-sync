@@ -160,6 +160,32 @@ describe('FeishuClient', () => {
     expect(cellBody).toEqual({ children: [{ block_type: 2, text: { elements: [] } }], index: 0 });
   });
 
+  it('creates nested child blocks after creating their parent block', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { children: [{ block_id: 'bullet-1', block_type: 12 }] }
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: { children: [{ block_id: 'child-1', block_type: 2 }] }
+      }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await client.createChildren('doc', 'page', [{
+      block_type: 12,
+      bullet: { elements: [], style: {} },
+      children: [{ block_type: 2, text: { elements: [] } }]
+    }]);
+
+    const parentBody = JSON.parse(fetchImpl.mock.calls[0][1]?.body as string);
+    const childBody = JSON.parse(fetchImpl.mock.calls[1][1]?.body as string);
+    expect(parentBody.children[0]).not.toHaveProperty('children');
+    expect(fetchImpl.mock.calls[1][0]).toContain('/blocks/bullet-1/children');
+    expect(childBody).toEqual({ children: [{ block_type: 2, text: { elements: [] } }] });
+  });
+
   it('batch-updates document blocks', async () => {
     const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({

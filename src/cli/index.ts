@@ -29,6 +29,8 @@ import { auditCodeBlockInventory } from '../sync/code-block-audit.js';
 import { getSyncStatus, type SyncStatusResult } from '../sync/status.js';
 import { applyReferenceManifest } from '../reference/apply.js';
 import { auditReferenceManifest } from '../reference/audit.js';
+import { exportReferenceToWebContent, type ReferenceExportScope } from '../reference/export.js';
+import { buildReferenceSourceFreshness } from '../reference/freshness.js';
 import { planReferenceManifestFromImpact, type ReferenceImpactMatrix } from '../reference/plan.js';
 import { parseMultisdkLanguage } from '../multisdk/language.js';
 import { loadMultisdkTask, summarizeMultisdkTask } from '../multisdk/task.js';
@@ -492,6 +494,62 @@ const reference = program
   .description('publish and audit SDK reference docs from explicit manifests');
 
 reference
+  .command('preflight')
+  .description('check SDK source freshness before planning reference changes')
+  .requiredOption('--sdk <sdk>', 'SDK name, for example java')
+  .requiredOption('--repo <path>', 'local SDK repository path')
+  .requiredOption('--version-line <line>', 'release line, for example v3.0.x')
+  .option('--baseline-tag <tag>', 'last scanned SDK tag')
+  .option('--scan-state <file>', 'scan-state JSON path used when --baseline-tag is omitted')
+  .option('--state-key <key>', 'scan-state key; defaults to --sdk')
+  .option('--source-path <path>', 'repeatable source path for changed-path checks', collectOption, [])
+  .option('--skip-fetch', 'skip git fetch --tags')
+  .option('--fail-on-stale', 'exit non-zero when latest tag differs from the baseline')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (opts: ReferencePreflightCommandOptions) => {
+    const skipFetch = normalizeBooleanOption(opts, 'skipFetch', '--skip-fetch');
+    const failOnStale = normalizeBooleanOption(opts, 'failOnStale', '--fail-on-stale');
+    const sourcePaths = commandOptionValue<string[]>(opts, 'sourcePath') ?? [];
+
+    if (!skipFetch) {
+      await execFileAsync('git', ['-C', opts.repo, 'fetch', '--tags'], { maxBuffer: 10 * 1024 * 1024 });
+    }
+
+    const baselineTag = opts.baselineTag ?? await readScanStateTag(opts.scanState, opts.stateKey ?? opts.sdk);
+    if (!baselineTag) {
+      throw new Error('Reference preflight requires --baseline-tag or --scan-state with a matching lastScannedTag.');
+    }
+
+    const tags = (await execFileAsync('git', ['-C', opts.repo, 'tag', '--list'], { maxBuffer: 10 * 1024 * 1024 }))
+      .stdout
+      .split(/\r?\n/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    const preliminary = buildReferenceSourceFreshness({
+      sdk: opts.sdk,
+      repository: opts.repo,
+      versionLine: opts.versionLine,
+      baselineTag,
+      tags,
+      changedPaths: []
+    });
+    const changedPaths = preliminary.upToDate
+      ? []
+      : await gitChangedPaths(opts.repo, preliminary.diffRange ?? `${baselineTag}..${preliminary.latestTag}`, sourcePaths);
+    const freshness = buildReferenceSourceFreshness({
+      sdk: opts.sdk,
+      repository: opts.repo,
+      versionLine: opts.versionLine,
+      baselineTag,
+      tags,
+      changedPaths
+    });
+
+    printFormatted(freshness, opts.format);
+    if (failOnStale && !freshness.upToDate) process.exitCode = 1;
+  });
+
+reference
   .command('plan')
   .description('convert an approved SDK reference impact matrix into a publish manifest')
   .requiredOption('--impact <file>', 'impact matrix JSON path')
@@ -548,6 +606,32 @@ reference
     const report = await auditReferenceManifest(client, { manifestPath: opts.manifest });
     printFormatted(report, opts.format);
     if (!report.passed) process.exitCode = 1;
+  });
+
+reference
+  .command('export')
+  .description('export audited SDK reference docs from Feishu into a web-content checkout')
+  .requiredOption('--manifest <file>', 'reference publish manifest path')
+  .requiredOption('--web-content-repo <path>', 'local web-content repository path')
+  .requiredOption('--manual <manual>', 'web-content manual key, for example java-v3.0.x')
+  .option('--config <file>', 'web-content config path, relative to --web-content-repo unless absolute', 'scripts/config.json')
+  .option('--scope <scope>', 'export scope: changed | all', 'changed')
+  .option('--skip-image-down', 'pass --skipImageDown to the web-content lark-docs script', true)
+  .option('--no-skip-image-down', 'download images while exporting')
+  .option('--out <file>', 'write export handoff report JSON to this path')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (opts: ReferenceExportCommandOptions) => {
+    const report = await exportReferenceToWebContent({
+      manifestPath: opts.manifest,
+      webContentRepo: opts.webContentRepo,
+      manual: opts.manual,
+      configPath: opts.config ?? 'scripts/config.json',
+      scope: parseReferenceExportScope(opts.scope ?? 'changed'),
+      skipImageDown: commandOptionValue<boolean>(opts, 'skipImageDown') !== false,
+      outPath: opts.out
+    });
+    printFormatted(report, opts.format);
+    if (!report.diffCheck.passed) process.exitCode = 1;
   });
 
 const release = program
@@ -900,6 +984,18 @@ type ReferencePlanCommandOptions = FormatCommandOptions & {
   out: string;
 };
 
+type ReferencePreflightCommandOptions = FormatCommandOptions & {
+  sdk: string;
+  repo: string;
+  versionLine: string;
+  baselineTag?: string;
+  scanState?: string;
+  stateKey?: string;
+  sourcePath?: string[];
+  skipFetch?: boolean;
+  failOnStale?: boolean;
+};
+
 type ReferenceApplyCommandOptions = BaseCommandOptions & FormatCommandOptions & {
   manifest: string;
   write?: boolean;
@@ -908,6 +1004,16 @@ type ReferenceApplyCommandOptions = BaseCommandOptions & FormatCommandOptions & 
 
 type ReferenceAuditCommandOptions = BaseCommandOptions & FormatCommandOptions & {
   manifest: string;
+};
+
+type ReferenceExportCommandOptions = FormatCommandOptions & {
+  manifest: string;
+  webContentRepo: string;
+  manual: string;
+  config?: string;
+  scope?: string;
+  skipImageDown?: boolean;
+  out?: string;
 };
 
 type ReleaseInitCommandOptions = BaseCommandOptions & FormatCommandOptions & {
@@ -1090,6 +1196,11 @@ function parseCsv(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
+function parseReferenceExportScope(value: string): ReferenceExportScope {
+  if (value === 'changed' || value === 'all') return value;
+  throw new Error(`Invalid --scope ${value}. Expected changed or all.`);
+}
+
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
@@ -1128,6 +1239,25 @@ function releaseSdkRemoteUrl(source: SdkSource): string {
     case 'rest':
       return 'https://github.com/milvus-io/milvus.git';
   }
+}
+
+async function readScanStateTag(scanStatePath: string | undefined, stateKey: string): Promise<string | undefined> {
+  if (!scanStatePath) return undefined;
+  const scanState = JSON.parse(await readFile(scanStatePath, 'utf8')) as unknown;
+  if (!scanState || typeof scanState !== 'object') return undefined;
+  const entry = (scanState as Record<string, unknown>)[stateKey];
+  if (!entry || typeof entry !== 'object') return undefined;
+  const tag = (entry as Record<string, unknown>).lastScannedTag;
+  return typeof tag === 'string' && tag.trim() ? tag : undefined;
+}
+
+async function gitChangedPaths(repoPath: string, diffRange: string, sourcePaths: string[]): Promise<string[]> {
+  const args = ['-C', repoPath, 'diff', '--name-only', diffRange, '--', ...sourcePaths];
+  const { stdout: output } = await execFileAsync('git', args, { maxBuffer: 10 * 1024 * 1024 });
+  return output
+    .split(/\r?\n/)
+    .map((path) => path.trim())
+    .filter(Boolean);
 }
 
 async function loadReleaseLinkTargets(linkMapPath: string | undefined): Promise<LinkTarget[]> {

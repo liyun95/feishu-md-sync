@@ -24,7 +24,7 @@ This project gives AI agents a deterministic command surface for that work. The 
 | Pull Feishu to Markdown | Export a Feishu docx/wiki document into local Markdown for review, comparison, or downstream editing. |
 | Sync Markdown to Feishu | Publish one local Markdown file to one existing Feishu document with dry-run-first conflict checks. |
 | Complete multi-language examples | Use Python examples in a Feishu doc as the baseline, then verify and fill Java, JavaScript, Go, or RESTful examples by language. |
-| Update SDK reference docs | Validate local SDK reference changes, publish approved docs to Feishu Drive, and update/audit the release tracking Base. |
+| Update SDK reference docs | Validate local SDK reference changes, publish approved docs to Feishu Drive, update/audit the release tracking Base, and prepare the downstream `web-content` diff. |
 | Update Milvus release notes | Pull release notes from Feishu, scan SDK tags, audit `Variables.json` and user-doc links, then apply local docs changes through approval gates. |
 
 Supporting capabilities such as `status`, `diff`, `merge`, `code-blocks`, and the Milvus publish profile exist to make those workflows safer. They are building blocks for agents, not separate product surfaces.
@@ -148,16 +148,36 @@ The lower-level `code-blocks` commands remain available when an agent needs to i
 
 ### 4. Update SDK Reference Docs
 
-Use this when an approved SDK reference impact matrix or manifest should publish docs to Feishu Drive and update the release tracking Base.
+Use this when an approved SDK reference impact matrix or manifest should publish docs to Feishu Drive, update the release tracking Base, and prepare the downstream `web-content` diff. For the full team runbook, see `docs-site/guide/sdk-reference-workflow.md`.
 
 ```bash
+md2feishu reference preflight \
+  --sdk java \
+  --repo ~/sdk-doc-sync/repos/milvus-sdk-java \
+  --version-line v3.0.x \
+  --scan-state ~/sdk-doc-sync/.claude/skills/sdk-doc-sync/scan-state.json \
+  --source-path sdk-core/src/main/java \
+  --format json
+
 md2feishu reference plan --impact impact.json --out reference-manifest.json
 md2feishu reference apply --manifest reference-manifest.json
 md2feishu reference apply --manifest reference-manifest.json --write -y
 md2feishu reference audit --manifest reference-manifest.json
+md2feishu reference export \
+  --manifest reference-manifest.json \
+  --web-content-repo /Volumes/web-content-cs/web-content-java-v30 \
+  --manual java-v3.0.x \
+  --config scripts/config.json \
+  --scope changed \
+  --skip-image-down \
+  --out runs/reference/java-v3.0.x/web-content-export.json
 ```
 
-The expected flow is: verify locally, generate a manifest, dry-run publish, write approved docs to Feishu Drive/Base, then audit the result.
+The expected flow is: verify source freshness against the official SDK tags, verify locally, generate a manifest, dry-run publish, write approved docs to Feishu Drive/Base, audit the result, then export the audited Feishu docs into a `web-content` checkout for PR review. A `NO ACTION` reference plan must include source freshness evidence (`baselineTag`, `latestTag`, and diff evidence when they differ); this prevents stale local scan state from being mistaken for an up-to-date SDK line.
+
+`reference export` wraps `web-content/scripts/lark-docs/index.js`. It validates that `scripts/config.json` contains the requested manual, reads the Feishu source Base and output directory, runs changed-doc or full-manual export, checks `git diff --check`, and reports related changed files, untracked generated files, unrelated dirty files, and suggested staging paths. It does not stage, commit, push, or open pull requests.
+
+Use a case-sensitive `web-content` checkout or worktree on macOS. The export command fails closed if it detects case-conflicting tracked paths on a case-insensitive filesystem.
 
 ### 5. Update Milvus Release Notes
 
@@ -196,7 +216,7 @@ The repository documents focused Agent Skills in `docs-site/agent/skills/`. Thes
 | `feishu-markdown-push` | Publishing local Markdown to existing Feishu documents with dry-run and conflict checks. |
 | `feishu-codeblock-writer` | Directly inspecting, exporting, applying, or auditing Feishu code blocks outside the multi-SDK workflow. |
 | `sdk-source-verifier` | Confirming SDK feature support from source code, tests, tags, or commits. |
-| `sdk-reference-publisher` | Publishing approved SDK reference docs to Feishu Drive and Bitable. |
+| `sdk-reference-publisher` | Publishing approved SDK reference docs to Feishu Drive/Bitable and preparing the downstream `web-content` diff. |
 | `milvus-multisdk-example-sync` | Completing Milvus user-guide examples across Java, JavaScript, Go, and RESTful. |
 | `milvus-release-notes-workflow` | Updating Milvus release notes, Variables, SDK version values, and release-note user-doc links from Feishu source docs. |
 
@@ -227,6 +247,7 @@ The docs site includes:
 - command reference;
 - sync and merge workflows;
 - multi-SDK workflow guide;
+- SDK reference workflow guide;
 - release workflow guide;
 - Agent Skill pages;
 - architecture and testing notes.

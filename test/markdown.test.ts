@@ -37,6 +37,71 @@ const x = 1;
     });
   });
 
+  it('strips heading anchors, parses italic, and nests indented list continuations', () => {
+    const blocks = markdownToFeishuBlocks(`## Request Syntax{#request-syntax}
+
+- \`collectionName(String collectionName)\` -
+  The name of the target collection.
+
+*void*
+`);
+
+    expect(blocks[0]).toMatchObject({
+      block_type: 4,
+      heading2: { elements: [{ text_run: { content: 'Request Syntax' } }] }
+    });
+    expect(blocks[1]).toMatchObject({
+      block_type: 12,
+      children: [
+        {
+          block_type: 2,
+          text: { elements: [{ text_run: { content: 'The name of the target collection.' } }] }
+        }
+      ]
+    });
+    expect(blocks[2]).toMatchObject({
+      block_type: 2,
+      text: {
+        elements: [
+          {
+            text_run: {
+              content: 'void',
+              text_element_style: { italic: true }
+            }
+          }
+        ]
+      }
+    });
+  });
+
+  it('nests lazy list continuations used by generated SDK reference markdown', () => {
+    const blocks = markdownToFeishuBlocks(`- \`collectionName(String collectionName)\` -
+The name of the target collection.
+- \`databaseName(String databaseName)\` -
+The name of the database.
+`);
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({
+      block_type: 12,
+      children: [
+        {
+          block_type: 2,
+          text: { elements: [{ text_run: { content: 'The name of the target collection.' } }] }
+        }
+      ]
+    });
+    expect(blocks[1]).toMatchObject({
+      block_type: 12,
+      children: [
+        {
+          block_type: 2,
+          text: { elements: [{ text_run: { content: 'The name of the database.' } }] }
+        }
+      ]
+    });
+  });
+
   it('renders Feishu document mentions as Markdown links', () => {
     const markdown = feishuBlocksToMarkdown([
       {
