@@ -20,6 +20,8 @@ Workflow:
 
 Canonical order is `python > java > javascript > go > restful`. Preserve placeholders for languages that are expected by the document but not yet implemented. Prefer `javascript` externally; accept `node`, `nodejs`, and `js` as aliases.
 
+Placeholder exception: if a release note or user-facing task advertises support for a language/API, that language cannot remain a placeholder in the linked user doc. Complete and verify the example, or remove the advertised tab/support claim before publishing.
+
 Boundaries:
 
 - Do not add languages that are absent from the source document unless the user asks for placeholders or completion.

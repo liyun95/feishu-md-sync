@@ -656,7 +656,7 @@ release
       ...matrix.blocked.map((item: { sdk: string; reason: string }) => `${item.sdk}: ${item.reason}`),
       ...variables.changes.filter((change) => change.status !== 'match').map((change) => `${change.variable}: ${change.status}`),
       ...(releaseNotes.passed ? [] : [releaseNotes.message]),
-      ...links.items.filter((item) => item.status !== 'ok').map((item) => `${item.keyword}: ${item.status}`)
+      ...links.items.filter((item) => item.status !== 'ok').map(formatBlockedLinkItem)
     ];
     const report: ReleaseReport = {
       kind: 'feishu-release-report',
@@ -1152,9 +1152,33 @@ async function loadReleaseLinkTargets(linkMapPath: string | undefined): Promise<
     return {
       keyword: record.keyword,
       localPath: record.localPath,
-      anchor: record.anchor
+      anchor: record.anchor,
+      requiredLanguages: parseRequiredLinkLanguages(record.requiredLanguages, linkMapPath)
     };
   });
+}
+
+function parseRequiredLinkLanguages(value: unknown, linkMapPath: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return value;
+  throw new Error(`Invalid release link map ${linkMapPath}. requiredLanguages must be an array of strings.`);
+}
+
+function formatBlockedLinkItem(item: LinkTarget & {
+  status: string;
+  missingLanguages: Array<{ language: string }>;
+  placeholderIssues: Array<{ language: string; line?: number; placeholder?: string }>;
+}): string {
+  if (item.status === 'missing-language') {
+    return `${item.keyword}: missing-language (${item.missingLanguages.map((issue) => issue.language).join(', ')})`;
+  }
+  if (item.status === 'placeholder') {
+    const details = item.placeholderIssues
+      .map((issue) => `${issue.language}${issue.line ? ` line ${issue.line}` : ''}`)
+      .join(', ');
+    return `${item.keyword}: placeholder (${details})`;
+  }
+  return `${item.keyword}: ${item.status}`;
 }
 
 function renderVariablesAuditMarkdown(audit: VariablesAudit): string {

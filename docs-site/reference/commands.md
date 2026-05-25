@@ -119,6 +119,21 @@ md2feishu release apply runs/releases/2.6.17 --write
 
 Review `runs/releases/2.6.17/report.md` before approval. `release apply` defaults to dry-run. `release apply --write` updates only local Milvus docs files and requires approval of the current report hash.
 
+`--link-map` targets may include `requiredLanguages`. During `release audit`, those languages are checked in the linked Markdown section; missing code blocks or placeholder snippets block the report.
+
+```json
+{
+  "targets": [
+    {
+      "keyword": "ARRAY_REMOVE",
+      "localPath": "site/en/userGuide/insert-and-delete/upsert-entities.md",
+      "anchor": "Upsert-ARRAY-fields-with-partial-update-operators",
+      "requiredLanguages": ["nodejs", "go", "curl"]
+    }
+  ]
+}
+```
+
 ## `reference`
 
 Publish SDK reference docs to Feishu Drive and Bitable from explicit manifests.

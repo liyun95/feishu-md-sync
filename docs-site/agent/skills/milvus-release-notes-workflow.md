@@ -40,5 +40,6 @@ Apply rules:
 - Dry-run apply must be reviewed before writes.
 - Existing release sections are merged conservatively; local release dates, SDK tables, and user-doc links should be preserved.
 - If release notes mention a newly documented feature, add or verify the user-doc link target before approval.
+- If a release-note item advertises SDK/API support for a linked user doc, add `requiredLanguages` to the link map; placeholders for advertised JavaScript/Go/REST examples must block approval.
 
 Use `feishu-markdown-pull` for user-doc content pulled from Feishu. Use `feishu-markdown-push` only when publishing a local Markdown file back to Feishu. Use `feishu-codeblock-writer` for direct Feishu code-block edits. Do not commit, push, or open PRs unless the user explicitly asks.
