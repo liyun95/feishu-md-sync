@@ -31,6 +31,56 @@ describe('reference plan and audit', () => {
     expect(manifest.actions[0].tracker?.fields).toMatchObject({ '验证证据': 'compile passed' });
   });
 
+  it('rejects no-action plans without source freshness evidence', () => {
+    expect(() => planReferenceManifestFromImpact({
+      kind: 'sdk-reference-impact-matrix',
+      sdk: 'java',
+      versionRange: 'v3.0.x',
+      items: [
+        { id: 'noop-java', action: 'NO ACTION', title: 'Java SDK v3.0.x' }
+      ]
+    })).toThrow(/source freshness/i);
+  });
+
+  it('requires diff evidence when no-action source freshness sees a newer tag', () => {
+    expect(() => planReferenceManifestFromImpact({
+      kind: 'sdk-reference-impact-matrix',
+      sdk: 'java',
+      versionRange: 'v3.0.x',
+      source: {
+        baselineTag: 'v3.0.0',
+        latestTag: 'v3.0.1'
+      },
+      items: [
+        { id: 'noop-java', action: 'NO ACTION', title: 'Java SDK v3.0.x' }
+      ]
+    })).toThrow(/diff evidence/i);
+  });
+
+  it('allows no-action plans with source freshness and explicit diff evidence', () => {
+    const manifest = planReferenceManifestFromImpact({
+      kind: 'sdk-reference-impact-matrix',
+      sdk: 'java',
+      versionRange: 'v3.0.0 -> v3.0.1',
+      source: {
+        baselineTag: 'v3.0.0',
+        latestTag: 'v3.0.1',
+        diffRange: 'v3.0.0..v3.0.1',
+        changedPaths: []
+      },
+      items: [
+        {
+          id: 'noop-java',
+          action: 'NO ACTION',
+          title: 'sdk-core/src/main/java',
+          evidence: 'git diff --name-status v3.0.0..v3.0.1 -- sdk-core/src/main/java returned no files.'
+        }
+      ]
+    });
+
+    expect(manifest.actions).toEqual([]);
+  });
+
   it('passes readback when Drive docs, records, URL fields, and tracker schema exist', async () => {
     const manifestPath = await writeAuditManifest();
     const client = {

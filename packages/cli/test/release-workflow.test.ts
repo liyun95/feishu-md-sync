@@ -1,0 +1,153 @@
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ReleaseTask } from '../src/release/task.js';
+import {
+  initReleaseWorkflow,
+  approveReleaseWorkflow,
+  pullReleaseNotesWorkflow,
+  scanSdkTagsWorkflow,
+  statusReleaseWorkflow
+} from '../src/release/workflow.js';
+import type { SdkTagMatrix } from '../src/release/sdk-tags.js';
+import { createInitialReleaseTask, saveReleaseTask, summarizeReleaseTask } from '../src/release/task.js';
+
+const tempDirs: string[] = [];
+
+describe('release workflow orchestration', () => {
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  it('initializes a task directory with workflow subdirectories and task state', async () => {
+    const dir = await tempDir();
+
+    const task = await initReleaseWorkflow({
+      releaseLine: '2.6.x',
+      releaseVersion: '2.6.17',
+      releaseDoc: 'doc-url',
+      documentId: 'doc-token',
+      milvusDocsPath: '/repo/milvus-docs',
+      taskDir: dir,
+      userDocs: [{ localPath: 'site/en/userGuide/example.md', feishuDoc: 'wiki-url' }],
+      linkMapPath: 'release-links.json'
+    });
+
+    expect(task.status).toBe('initialized');
+    await expect(readFile(join(dir, 'task.json'), 'utf8')).resolves.toContain('"releaseVersion": "2.6.17"');
+    await expect(directoryExists(join(dir, 'feishu'))).resolves.toBe(true);
+    await expect(directoryExists(join(dir, 'sdk'))).resolves.toBe(true);
+    await expect(directoryExists(join(dir, 'audit'))).resolves.toBe(true);
+  });
+
+  it('records approval metadata and persists the updated task', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'audit'), { recursive: true });
+    await writeFile(join(dir, 'audit/report.json'), '{"ok":true}\n', 'utf8');
+    await writeFile(join(dir, 'audit/report.md'), '# Report\n', 'utf8');
+    await saveReleaseTask(taskFixture(dir));
+
+    const approved = await approveReleaseWorkflow({
+      taskDir: dir,
+      approvedBy: 'release-owner',
+      approvedAt: '2026-05-25T00:00:00.000Z'
+    });
+
+    const approvals = JSON.parse(await readFile(join(dir, 'approvals.json'), 'utf8')) as {
+      approvals: Array<{ reportHash: string; approvedBy: string; approvedAt: string }>;
+    };
+    const saved = JSON.parse(await readFile(join(dir, 'task.json'), 'utf8')) as ReleaseTask;
+
+    expect(approved.status).toBe('approved');
+    expect(approved.reportHash).toMatch(/^sha256:/);
+    expect(approvals.approvals).toEqual([approved.approval]);
+    expect(saved.status).toBe('approved');
+    expect(saved.steps.approved).toBe(true);
+    expect(saved.reportHash).toBe(approved.reportHash);
+  });
+
+  it('writes pulled release notes to the remote markdown artifact path', async () => {
+    const dir = await tempDir();
+    await saveReleaseTask(taskFixture(dir));
+
+    const task = await pullReleaseNotesWorkflow({
+      taskDir: dir,
+      markdown: '## v2.6.17\n\n- Added ARRAY_REMOVE support.\n'
+    });
+
+    expect(task.steps.pulledReleaseNotes).toBe(true);
+    await expect(readFile(join(dir, 'feishu/release-notes.remote.md'), 'utf8'))
+      .resolves.toBe('## v2.6.17\n\n- Added ARRAY_REMOVE support.\n');
+  });
+
+  it('writes scanned SDK tags to tags.json and keeps matrix markdown', async () => {
+    const dir = await tempDir();
+    const matrix = sdkMatrixFixture();
+    await saveReleaseTask(taskFixture(dir));
+
+    const task = await scanSdkTagsWorkflow({ taskDir: dir, matrix });
+
+    expect(task.steps.scannedSdkTags).toBe(true);
+    await expect(readFile(join(dir, 'sdk/tags.json'), 'utf8'))
+      .resolves.toBe(`${JSON.stringify(matrix, null, 2)}\n`);
+    await expect(readFile(join(dir, 'sdk/matrix.md'), 'utf8'))
+      .resolves.toContain('| java | milvus-io/milvus-sdk-java | v2.6.17 | 2.6.17 | ok | tag |');
+  });
+
+  it('returns the task summary for status output', async () => {
+    const dir = await tempDir();
+    const task = taskFixture(dir);
+    await saveReleaseTask(task);
+
+    await expect(statusReleaseWorkflow(dir)).resolves.toEqual(summarizeReleaseTask(task));
+  });
+});
+
+async function tempDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'release-workflow-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function sdkMatrixFixture(): SdkTagMatrix {
+  return {
+    releaseLine: '2.6.x',
+    generatedAt: '2026-05-25T00:00:00.000Z',
+    blocked: [],
+    rows: [
+      {
+        sdk: 'java',
+        label: 'Java',
+        repository: 'milvus-io/milvus-sdk-java',
+        releaseLine: '2.6.x',
+        matchedTag: 'v2.6.17',
+        variablesValue: '2.6.17',
+        evidence: 'tag',
+        status: 'ok'
+      }
+    ]
+  };
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function taskFixture(taskDir: string): ReleaseTask {
+  return createInitialReleaseTask({
+    releaseLine: '2.6.x',
+    releaseVersion: '2.6.17',
+    releaseDoc: 'doc-url',
+    documentId: 'doc-token',
+    milvusDocsPath: '/repo/milvus-docs',
+    taskDir,
+    userDocs: [],
+    linkMapPath: undefined
+  });
+}

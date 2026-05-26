@@ -38,4 +38,17 @@ npm run docs:build
 
 ## Advanced Agent and Milvus Workflows
 
-Advanced code-block, multi-SDK, SDK reference, and agent workflows remain documented in the docs site under `apps/docs/agent/`, `apps/docs/guide/`, and `apps/docs/reference/`.
+Advanced code-block, multi-SDK, SDK reference, release notes, and agent workflows are documented in the docs site under `apps/docs/agent/`, `apps/docs/guide/`, and `apps/docs/reference/`.
+
+Start with:
+
+- [`apps/docs/guide/sdk-reference-workflow.md`](./apps/docs/guide/sdk-reference-workflow.md)
+- [`apps/docs/guide/sdk-reference-release-workflow.md`](./apps/docs/guide/sdk-reference-release-workflow.md)
+- [`apps/docs/guide/release-workflow.md`](./apps/docs/guide/release-workflow.md)
+- [`apps/docs/reference/commands.md`](./apps/docs/reference/commands.md)
+
+Generated outputs such as `packages/cli/dist/`, `packages/cli/coverage/`, `apps/docs/.vitepress/dist/`, `.sync/`, `runs/`, and `dogfood/` should not be committed unless explicitly intended.
+
+## License
+
+MIT. See [`packages/cli/NOTICE`](./packages/cli/NOTICE).

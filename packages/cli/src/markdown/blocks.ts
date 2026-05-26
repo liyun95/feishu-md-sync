@@ -89,7 +89,7 @@ export function markdownToFeishuBlocks(markdown: string): FeishuBlock[] {
 
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
-      blocks.push(headingBlock(heading[1].length, heading[2].trim()));
+      blocks.push(headingBlock(heading[1].length, stripHeadingAnchor(heading[2])));
       index += 1;
       continue;
     }
@@ -99,8 +99,23 @@ export function markdownToFeishuBlocks(markdown: string): FeishuBlock[] {
       while (index < lines.length) {
         const item = parseListMarker(lines[index] ?? '');
         if (!item) break;
-        blocks.push(listBlock(item.text, item.ordered));
         index += 1;
+
+        const childLines: string[] = [];
+        while (index < lines.length) {
+          const childLine = lines[index] ?? '';
+          if (childLine.trim() === '') break;
+          if (parseListMarker(childLine)) break;
+          if (/^(#{1,6})\s+/.test(childLine) || /^```/.test(childLine) || isTableStart(lines, index)) break;
+          childLines.push(childLine.trim());
+          index += 1;
+        }
+
+        blocks.push(listBlock(
+          item.text,
+          item.ordered,
+          childLines.map((childLine) => textBlock(childLine))
+        ));
       }
       continue;
     }
@@ -143,7 +158,7 @@ function textElement(content: string, style: TextElementStyle = {}): TextElement
 export function parseInlineText(text: string): TextElement[] {
   const elements: TextElement[] = [];
   let cursor = 0;
-  const pattern = /(==[^=]+==|`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g;
+  const pattern = /(==[^=]+==|`[^`]+`|\*\*[^*]+\*\*|\*[^*\n]+\*|\[[^\]]+\]\([^)]+\))/g;
 
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
@@ -158,6 +173,8 @@ export function parseInlineText(text: string): TextElement[] {
       elements.push(textElement(token.slice(1, -1), { inline_code: true }));
     } else if (token.startsWith('**')) {
       elements.push(textElement(token.slice(2, -2), { bold: true }));
+    } else if (token.startsWith('*')) {
+      elements.push(textElement(token.slice(1, -1), { italic: true }));
     } else {
       const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (link) {
@@ -196,15 +213,17 @@ function headingBlock(level: number, text: string): FeishuBlock {
   };
 }
 
-function listBlock(text: string, ordered: boolean): FeishuBlock {
+function listBlock(text: string, ordered: boolean, children: FeishuBlock[] = []): FeishuBlock {
   const key = ordered ? 'ordered' : 'bullet';
-  return {
+  const block: FeishuBlock = {
     block_type: ordered ? BLOCK_TYPES.ordered : BLOCK_TYPES.bullet,
     [key]: {
       elements: parseInlineText(text),
       style: {}
     }
   };
+  if (children.length > 0) block.children = children;
+  return block;
 }
 
 function codeBlock(text: string, lang: string): FeishuBlock {
@@ -227,6 +246,10 @@ function parseListMarker(line: string): ListMarker | null {
   if (ordered) return { ordered: true, text: ordered[1].trim() };
 
   return null;
+}
+
+function stripHeadingAnchor(text: string): string {
+  return text.trim().replace(/\s*\{#[A-Za-z0-9_-]+\}\s*$/, '').trim();
 }
 
 function isTableStart(lines: string[], index: number): boolean {
