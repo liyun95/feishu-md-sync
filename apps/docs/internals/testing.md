@@ -28,7 +28,7 @@ npm run docs:build
 ## CLI Smoke Checks
 
 ```bash
-node dist/cli/index.js --help
-node dist/cli/index.js sync --help
-node dist/cli/index.js merge --help
+node packages/cli/dist/cli/index.js --help
+node packages/cli/dist/cli/index.js sync --help
+node packages/cli/dist/cli/index.js merge --help
 ```
