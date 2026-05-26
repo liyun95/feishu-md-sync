@@ -419,9 +419,14 @@ multisdk
       taskDir: opts.out,
       inventory: buildCodeBlockInventory(documentId, blocks)
     });
+    const environmentPath = await writeHarnessEnvironment(
+      opts.out,
+      await buildHarnessEnvironmentReport({ envLoadReport })
+    );
     printFormatted({
       task: summarizeMultisdkTask(result.task),
       manifestPath: `${opts.out}/manifest.json`,
+      environmentPath,
       files: result.files
     }, opts.format);
   });
