@@ -1,7 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { sha256 } from '../core/hash.js';
-import { CANONICAL_LANGUAGE_ORDER, type CanonicalCodeBlockLanguage } from '../feishu/code-blocks.js';
+import {
+  CANONICAL_LANGUAGE_ORDER,
+  codeBlockText,
+  isPlaceholderCodeBlock,
+  type CanonicalCodeBlockLanguage
+} from '../feishu/code-blocks.js';
 import type { FeishuBlock, FeishuBlockUpdateRequest } from '../feishu/types.js';
 import { languageIdForMarkdownLanguage } from '../markdown/blocks.js';
 import { updateCodeBlock } from './code-block-update.js';
@@ -23,13 +28,21 @@ export type CodeBlockApplyReport = {
   mode: 'dry-run' | 'write';
   documentId: string;
   updated: Array<{
+    groupId: string;
     blockId: string;
     language: CanonicalCodeBlockLanguage;
     file: string;
     contentHash: string;
+    desiredHash: string;
+    currentHash?: string;
+    isPlaceholder?: boolean;
+    currentPreview?: string;
+    desiredPreview: string;
+    wouldUpdateBlocks: number;
     updatedBlocks: number;
   }>;
   inserted: Array<{
+    groupId: string;
     blockId?: string;
     anchorBlockId: string;
     insertAfterBlockId: string;
@@ -37,6 +50,10 @@ export type CodeBlockApplyReport = {
     language: CanonicalCodeBlockLanguage;
     file: string;
     contentHash: string;
+    desiredHash: string;
+    desiredPreview: string;
+    wouldInsertBlocks: number;
+    insertedBlocks: number;
   }>;
   failed: Array<{
     action: CodeBlockManifestItem['action'];
@@ -76,6 +93,7 @@ export async function applyCodeBlockManifest(
     failed: []
   };
   const blockIdsByGroupLanguage = new Map<string, Map<CanonicalCodeBlockLanguage, string>>();
+  const remoteBlockById = await remoteBlocksById(client, manifest.documentId);
 
   for (const resolved of items) {
     const item = resolved.item;
@@ -91,11 +109,20 @@ export async function applyCodeBlockManifest(
             dryRun: false
           })
           : null;
+        const remoteBlock = remoteBlockById.get(item.blockId);
+        const currentContent = remoteBlock ? codeBlockText(remoteBlock) : undefined;
         report.updated.push({
+          groupId: item.groupId,
           blockId: item.blockId,
           language: item.language,
           file: item.file,
           contentHash: resolved.contentHash,
+          desiredHash: resolved.contentHash,
+          currentHash: currentContent === undefined ? undefined : `sha256:${sha256(currentContent)}`,
+          isPlaceholder: currentContent === undefined ? undefined : isPlaceholderCodeBlock(currentContent, item.language),
+          currentPreview: currentContent === undefined ? undefined : preview(currentContent),
+          desiredPreview: preview(resolved.content),
+          wouldUpdateBlocks: 1,
           updatedBlocks: result?.updatedBlocks.length ?? 0
         });
         continue;
@@ -103,12 +130,17 @@ export async function applyCodeBlockManifest(
 
       if (!options.write) {
         report.inserted.push({
+          groupId: item.groupId,
           anchorBlockId: item.anchorBlockId,
           insertAfterBlockId: item.insertAfterBlockId,
           parentBlockId: item.parentBlockId,
           language: item.language,
           file: item.file,
-          contentHash: resolved.contentHash
+          contentHash: resolved.contentHash,
+          desiredHash: resolved.contentHash,
+          desiredPreview: preview(resolved.content),
+          wouldInsertBlocks: 1,
+          insertedBlocks: 0
         });
         continue;
       }
@@ -124,13 +156,18 @@ export async function applyCodeBlockManifest(
       const blockId = created[0]?.block_id;
       if (blockId) rememberBlockId(blockIdsByGroupLanguage, item.groupId, item.language, blockId);
       report.inserted.push({
+        groupId: item.groupId,
         blockId,
         anchorBlockId: item.anchorBlockId,
         insertAfterBlockId: effectiveInsertAfterBlockId,
         parentBlockId: item.parentBlockId,
         language: item.language,
         file: item.file,
-        contentHash: resolved.contentHash
+        contentHash: resolved.contentHash,
+        desiredHash: resolved.contentHash,
+        desiredPreview: preview(resolved.content),
+        wouldInsertBlocks: 1,
+        insertedBlocks: blockId ? 1 : 0
       });
     } catch (error) {
       report.failed.push({
@@ -143,6 +180,17 @@ export async function applyCodeBlockManifest(
   }
 
   return report;
+}
+
+async function remoteBlocksById(
+  client: CodeBlockApplyClient,
+  documentId: string
+): Promise<Map<string, FeishuBlock>> {
+  if (!client.getDocumentBlocks) return new Map();
+  const blocks = await client.getDocumentBlocks(documentId);
+  return new Map(blocks
+    .filter((block): block is FeishuBlock & { block_id: string } => typeof block.block_id === 'string')
+    .map((block) => [block.block_id, block]));
 }
 
 async function resolveManifestItems(
@@ -233,4 +281,10 @@ function createCodeBlock(content: string, language: CanonicalCodeBlockLanguage):
       }
     }
   };
+}
+
+function preview(content: string): string {
+  const normalized = content.trim();
+  if (normalized.length <= 160) return normalized;
+  return `${normalized.slice(0, 157)}...`;
 }

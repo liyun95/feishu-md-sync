@@ -5,6 +5,7 @@ import type { FeishuDocClient } from '../feishu/types.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
+import { findActiveMultisdkTasks, formatActiveMultisdkTaskWarning } from '../multisdk/guard.js';
 import { readReceipt, receiptPath, type SyncReceipt, writeReceipt } from '../receipts/receipt.js';
 import { comparableDirectChildBlocks, directChildBlocks, findPageBlock } from './block-state.js';
 import { detectConflict } from './conflict.js';
@@ -19,6 +20,7 @@ export type SyncOptions = {
   yes?: boolean;
   strategy?: SyncStrategy;
   forceInitialOverwrite?: boolean;
+  forceWholeDocumentSync?: boolean;
   publishTransform?: PublishTransformOptions;
   confirm?: (question: string) => Promise<boolean>;
 };
@@ -48,6 +50,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   let previousReceipt = await readReceipt(initialStatePath);
   let resolvedMergeOriginalPath: string | null = null;
   const warnings: string[] = [];
+  const mode = options.dryRun === false ? 'write' : 'dry-run';
 
   if (!previousReceipt) {
     const originalPath = originalPathForMergedFile(absoluteSourcePath);
@@ -65,10 +68,23 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   }
 
   const conflict = detectConflict(previousReceipt, currentHash);
-  const mode = options.dryRun === false ? 'write' : 'dry-run';
   const strategy = options.strategy ?? 'fail';
   let effectiveSourceContent = transformedSourceContent;
   let shouldWriteMergedSource = false;
+
+  const activeMultisdkTasks = (await Promise.all(
+    multisdkGuardRoots(rootDir, absoluteSourcePath).map((guardRoot) => findActiveMultisdkTasks(guardRoot, options.documentId))
+  )).flat();
+  if (activeMultisdkTasks.length > 0) {
+    const warning = formatActiveMultisdkTaskWarning(activeMultisdkTasks);
+    warnings.push(warning);
+    if (mode === 'write' && !options.forceWholeDocumentSync) {
+      throw new Error(
+        `Refusing whole-document sync because this document has an active multisdk task. ` +
+        `${warning} Pass --force-whole-document-sync only if a whole-document write is intentional.`
+      );
+    }
+  }
 
   if (!conflict.ok && strategy === 'merge') {
     if (!previousReceipt?.sourceSnapshot) {
@@ -195,4 +211,18 @@ function originalPathForMergedFile(filePath: string): string | null {
   const originalName = parsed.name.slice(0, -'.merged'.length);
   if (!originalName) return null;
   return path.join(parsed.dir, `${originalName}${parsed.ext}`);
+}
+
+function multisdkGuardRoots(rootDir: string, sourcePath: string): string[] {
+  const roots = [path.resolve(rootDir)];
+  let current = path.dirname(path.resolve(sourcePath));
+
+  while (true) {
+    roots.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return Array.from(new Set(roots));
 }

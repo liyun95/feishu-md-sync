@@ -7,6 +7,7 @@ import type { FeishuBlock, FeishuDocClient } from '../src/feishu/types.js';
 import { markdownToFeishuBlocks } from '../src/markdown/blocks.js';
 import { receiptPath, writeReceipt, type SyncReceipt } from '../src/receipts/receipt.js';
 import { runSync } from '../src/sync/run-sync.js';
+import { createInitialMultisdkTask, saveMultisdkTask } from '../src/multisdk/task.js';
 
 let dir: string;
 
@@ -125,6 +126,88 @@ Milvus 3.0 updates Milvus behavior.
       dryRun: false,
       yes: true
     })).rejects.toThrow(/Initial write would replace existing Feishu content/);
+  });
+
+  it('warns on dry-run and refuses write when the document has an active multisdk task', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, '# Title\n');
+    const taskDir = path.join(dir, 'runs', 'doc1234567890123');
+    const task = createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc1234567890123',
+      taskDir
+    });
+    await saveMultisdkTask({
+      ...task,
+      languages: {
+        ...task.languages,
+        java: { ...task.languages.java, status: 'exported', snippetsReady: true }
+      }
+    });
+    const desired = markdownToFeishuBlocks('# Title\n');
+
+    const dryRun = await runSync(fakeClient(desired), {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir
+    });
+
+    expect(dryRun.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('active multisdk task')
+    ]));
+    await expect(runSync(fakeClient(desired), {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true
+    })).rejects.toThrow(/active multisdk task/);
+  });
+
+  it('finds an active multisdk task from the source workspace when cwd root differs', async () => {
+    const workspaceDir = path.join(dir, 'task-workspace');
+    const sourcePath = path.join(workspaceDir, 'docs', 'doc.md');
+    await mkdir(path.dirname(sourcePath), { recursive: true });
+    await writeFile(sourcePath, '# Title\n');
+    const taskDir = path.join(workspaceDir, 'runs', 'doc1234567890123');
+    await saveMultisdkTask(createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc1234567890123',
+      taskDir
+    }));
+    const desired = markdownToFeishuBlocks('# Title\n');
+
+    await expect(runSync(fakeClient(desired), {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: path.join(dir, 'other-cwd'),
+      dryRun: false,
+      yes: true
+    })).rejects.toThrow(/active multisdk task/);
+  });
+
+  it('allows whole-document sync over an active multisdk task only when explicitly forced', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, '# Title\n');
+    const taskDir = path.join(dir, 'runs', 'doc1234567890123');
+    await saveMultisdkTask(createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc1234567890123',
+      taskDir
+    }));
+    const desired = markdownToFeishuBlocks('# Title\n');
+    const client = fakeClient(desired);
+
+    await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      forceWholeDocumentSync: true
+    });
+
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', desired);
   });
 
   it('allows initial write over non-empty Feishu doc with forceInitialOverwrite', async () => {

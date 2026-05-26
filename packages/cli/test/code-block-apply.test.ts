@@ -29,6 +29,8 @@ describe('code-block apply', () => {
       expect.objectContaining({
         blockId: 'java-1',
         language: 'java',
+        wouldUpdateBlocks: 1,
+        updatedBlocks: 0,
         contentHash: expect.stringMatching(/^sha256:/)
       })
     ]);
@@ -37,12 +39,45 @@ describe('code-block apply', () => {
         anchorBlockId: 'python-1',
         insertAfterBlockId: 'python-1',
         language: 'restful',
+        wouldInsertBlocks: 1,
+        insertedBlocks: 0,
         contentHash: expect.stringMatching(/^sha256:/)
       })
     ]);
     expect(client.batchUpdateBlocks).not.toHaveBeenCalled();
     expect(client.createChildren).not.toHaveBeenCalled();
     expect(manifest.items).toHaveLength(2);
+  });
+
+  it('includes remote hash, placeholder, and code previews in dry-run metadata when readback is available', async () => {
+    const dir = await snippetsDir();
+    await writeManifest(dir, [
+      updateItem('java-1', 'snippets/java.java')
+    ]);
+    const client = {
+      batchUpdateBlocks: vi.fn(),
+      createChildren: vi.fn(),
+      getDocumentBlocks: vi.fn(async () => [
+        codeBlock('java-1', '// java', 29)
+      ])
+    };
+
+    const report = await applyCodeBlockManifest(client, {
+      manifestPath: join(dir, 'manifest.json'),
+      write: false
+    });
+
+    expect(report.updated[0]).toEqual(expect.objectContaining({
+      groupId: 'group-001',
+      currentHash: expect.stringMatching(/^sha256:/),
+      desiredHash: report.updated[0].contentHash,
+      isPlaceholder: true,
+      currentPreview: '// java',
+      desiredPreview: 'System.out.println("ok");',
+      wouldUpdateBlocks: 1,
+      updatedBlocks: 0
+    }));
+    expect(client.batchUpdateBlocks).not.toHaveBeenCalled();
   });
 
   it('fails before writes when the manifest document does not match the expected document', async () => {
@@ -87,7 +122,7 @@ describe('code-block apply', () => {
 
     expect(calls).toEqual(['update', 'insert']);
     expect(report.updated).toEqual([
-      expect.objectContaining({ blockId: 'java-1', updatedBlocks: 1 })
+      expect.objectContaining({ blockId: 'java-1', wouldUpdateBlocks: 1, updatedBlocks: 1 })
     ]);
     expect(report.inserted).toEqual([]);
     expect(report.failed).toEqual([
@@ -221,5 +256,21 @@ function fakeClient() {
   return {
     batchUpdateBlocks: vi.fn(),
     createChildren: vi.fn()
+  };
+}
+
+function codeBlock(blockId: string, text: string, language: number) {
+  return {
+    block_id: blockId,
+    block_type: 14,
+    code: {
+      elements: [{
+        text_run: {
+          content: text,
+          text_element_style: {}
+        }
+      }],
+      style: { language }
+    }
   };
 }

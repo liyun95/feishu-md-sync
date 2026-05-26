@@ -2,6 +2,10 @@
 
 Examples use the installed `md2feishu` binary. Inside a fresh repository checkout, use `npm exec -- md2feishu ...` until you run `npm link`.
 
+## Global Options
+
+- `--env-file <file>` - load credentials from an explicit dotenv file before creating Feishu clients. Place this before the subcommand, for example `md2feishu --env-file /path/to/.env sync ...`.
+
 ## Root Shorthand
 
 ```bash
@@ -26,11 +30,22 @@ Options:
 - `-y, --yes` - skip write confirmation.
 - `--strategy <strategy>` - `fail`, `local-wins`, or `merge`.
 - `--force-initial-overwrite` - allow first write to replace existing non-empty Feishu content.
+- `--force-whole-document-sync` - allow whole-document sync when an active `multisdk` task exists for the same document.
 - `--publish-profile <profile>` - apply a publish transform before diffing or writing. Currently supports `milvus`.
 - `--host <url>` - Feishu API host.
 - `--timeout-ms <number>` - Feishu API timeout.
 
 The `milvus` publish profile strips frontmatter, drops a first H1 when it duplicates the frontmatter title, rewrites standalone `Milvus` references for shared Milvus/Zilliz Cloud publishing, and wraps versioned names such as `Milvus 3.0` in a Milvus-only include.
+
+If `runs/**/task.json` contains an active `multisdk` task for the same Feishu document, `sync --write` fails closed by default. Use `multisdk apply <task-dir> --language <lang>` for code-block patches. Use `--force-whole-document-sync` only when the intended operation is a whole-document write.
+
+## `doctor auth`
+
+```bash
+md2feishu doctor auth --format json
+```
+
+Reports which `.env` files were checked or loaded and whether `APP_ID` and `APP_SECRET` are present. It never prints `APP_SECRET`.
 
 ## `status`
 
@@ -93,14 +108,24 @@ Run a resumable, language-scoped multi-SDK code-block workflow for one Feishu do
 md2feishu multisdk init <feishu-doc> --out runs/<doc-token>
 md2feishu multisdk status <task-dir>
 md2feishu multisdk export <task-dir> --language java
-md2feishu multisdk verify <task-dir> --language java --evidence evidence/java.log --command "mvn test"
+md2feishu multisdk profile --language java
+md2feishu multisdk verify <task-dir> --language java --evidence evidence/java.log --command "mvn test" --profile manta-k8s-maven --sdk-version "milvus-sdk-java 3.0.1" --source-commit c7adc475
+md2feishu multisdk diff <task-dir> --language java
 md2feishu multisdk apply <task-dir> --language java
 md2feishu multisdk apply <task-dir> --language java --write -y
 md2feishu multisdk audit <task-dir> --language java
+md2feishu multisdk land-docs <task-dir> --language java --repo ~/milvus-docs --target site/en/userGuide/schema/nullable-and-default.md --base upstream/v3.0.x
+md2feishu multisdk land-docs <task-dir> --language java --repo ~/milvus-docs --target site/en/userGuide/schema/nullable-and-default.md --base upstream/v3.0.x --write
 md2feishu multisdk finalize <task-dir>
 ```
 
-`multisdk apply` defaults to dry-run. Writes require `--write` and either `-y` or interactive confirmation. Each language must have verification evidence and a successful dry-run before write. Supported lanes are `java`, `javascript`, `go`, and `restful`; `node`, `nodejs`, and `js` normalize to `javascript`.
+`multisdk diff` shows the block ID, group ID, old and new hashes, placeholder state, previews, and a per-block diff for the target language.
+
+`multisdk apply` defaults to dry-run. Dry-run JSON uses future-tense fields such as `wouldUpdateBlocks` and `wouldInsertBlocks`; write JSON also includes `updatedBlocks` or `insertedBlocks`. Writes require `--write` and either `-y` or interactive confirmation. Each language must have verification evidence and a successful dry-run before write. Supported lanes are `java`, `javascript`, `go`, and `restful`; `node`, `nodejs`, and `js` normalize to `javascript`.
+
+For Java, the default validation profile is `manta-k8s-maven`, using `maven:3.9-eclipse-temurin-17`. Record it on verification evidence when the verifier ran in that environment. `multisdk verify` also writes normalized `evidence/evidence.json` and `evidence/evidence.md` summaries with the validation command, profile, optional SDK version, source commit, and endpoint.
+
+`multisdk land-docs` pulls the reviewed Feishu document after audit, saves it as `inputs/feishu.reviewed-baseline.md`, replaces only the target language code fences in the local docs target, verifies block equality, and reports a diff. When `--base` is provided, it also checks branch hygiene and refuses `--write` if the current branch is named like the base branch, such as `v3.0.x` for `upstream/v3.0.x`. The report includes a clean-branch command plan.
 
 ## `release`
 

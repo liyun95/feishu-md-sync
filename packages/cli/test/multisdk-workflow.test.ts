@@ -7,6 +7,7 @@ import type { CodeBlockManifest } from '../src/sync/code-block-plan.js';
 import {
   applyMultisdkLanguage,
   auditMultisdkLanguage,
+  diffMultisdkLanguage,
   exportMultisdkLanguage,
   finalizeMultisdkTask,
   initMultisdkTask,
@@ -57,15 +58,32 @@ describe('multisdk workflow', () => {
       taskDir: dir,
       language: 'java',
       evidencePath,
-      command: 'mvn test -Dtest=Smoke'
+      command: 'mvn test -Dtest=Smoke',
+      profile: 'manta-k8s-maven',
+      sdkVersion: 'milvus-sdk-java 3.0.1',
+      sourceCommit: 'c7adc475',
+      endpoint: 'manta-k8s'
     });
 
     expect(task.languages.java.status).toBe('ready');
     expect(task.languages.java.validated).toBe(true);
     expect(task.languages.java.evidence[0]).toEqual(expect.objectContaining({
       path: expect.stringMatching(/^evidence\/java-/),
-      command: 'mvn test -Dtest=Smoke'
+      command: 'mvn test -Dtest=Smoke',
+      profile: 'manta-k8s-maven',
+      sdkVersion: 'milvus-sdk-java 3.0.1',
+      sourceCommit: 'c7adc475',
+      endpoint: 'manta-k8s'
     }));
+    const evidenceJson = JSON.parse(await readFile(join(dir, 'evidence/evidence.json'), 'utf8'));
+    expect(evidenceJson.items[0]).toEqual(expect.objectContaining({
+      language: 'java',
+      command: 'mvn test -Dtest=Smoke',
+      profile: 'manta-k8s-maven',
+      sdkVersion: 'milvus-sdk-java 3.0.1',
+      sourceCommit: 'c7adc475'
+    }));
+    await expect(readFile(join(dir, 'evidence/evidence.md'), 'utf8')).resolves.toContain('milvus-sdk-java 3.0.1');
   });
 
   it('requires verification and dry-run before write apply', async () => {
@@ -235,6 +253,60 @@ describe('multisdk workflow', () => {
     expect(client.batchUpdateBlocks).not.toHaveBeenCalled();
   });
 
+  it('builds a language-scoped diff report before apply', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'snippets'), { recursive: true });
+    await writeFile(join(dir, 'snippets/java-01.java'), 'System.out.println("ok");', 'utf8');
+    await writeFile(join(dir, 'snippets/go-01.go'), 'fmt.Println("ok")', 'utf8');
+    await writeFile(join(dir, 'manifest.json'), `${JSON.stringify({
+      ...manifest(),
+      items: [
+        { action: 'update', groupId: 'group-001', blockId: 'java-1', language: 'java', file: 'snippets/java-01.java' },
+        { action: 'update', groupId: 'group-001', blockId: 'go-1', language: 'go', file: 'snippets/go-01.go' }
+      ]
+    } satisfies CodeBlockManifest, null, 2)}\n`, 'utf8');
+    const task = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    await saveMultisdkTask({
+      ...task,
+      languages: {
+        ...task.languages,
+        java: { ...task.languages.java, status: 'exported', snippetsReady: true }
+      }
+    });
+
+    const result = await diffMultisdkLanguage({
+      taskDir: dir,
+      language: 'java',
+      client: {
+        getDocumentBlocks: vi.fn(async () => [
+          codeBlock('java-1', '// java', 29),
+          codeBlock('go-1', '// go', 22)
+        ])
+      }
+    });
+
+    expect(result.task.documentId).toBe('doc');
+    expect(result.report.items).toHaveLength(1);
+    expect(result.report.items[0]).toEqual(expect.objectContaining({
+      action: 'update',
+      language: 'java',
+      blockId: 'java-1',
+      isPlaceholder: true
+    }));
+  });
+
+  it('requires fresh snippets before building a language-scoped diff report', async () => {
+    const dir = await tempDir();
+    const task = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    await saveMultisdkTask(task);
+
+    await expect(diffMultisdkLanguage({
+      taskDir: dir,
+      language: 'java',
+      client: { getDocumentBlocks: vi.fn(async () => []) }
+    })).rejects.toThrow(/requires fresh exported snippets/);
+  });
+
   it('audits one language and finalizes only after all languages are audited', async () => {
     const dir = await tempDir();
     const base = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
@@ -334,5 +406,21 @@ function block(
     heading: 'Create a collection',
     groupId: 'group-001',
     pythonAnchorBlockId: 'python-1'
+  };
+}
+
+function codeBlock(blockId: string, text: string, language: number) {
+  return {
+    block_id: blockId,
+    block_type: 14,
+    code: {
+      elements: [{
+        text_run: {
+          content: text,
+          text_element_style: {}
+        }
+      }],
+      style: { language }
+    }
   };
 }
