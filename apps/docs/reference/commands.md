@@ -47,6 +47,22 @@ md2feishu doctor auth --format json
 
 Reports which `.env` files were checked or loaded and whether `APP_ID` and `APP_SECRET` are present. It never prints `APP_SECRET`.
 
+## `harness`
+
+Inspect and grade workflow harness artifacts.
+
+```bash
+md2feishu harness env --format json
+md2feishu harness tools --workflow multisdk --format json
+md2feishu harness grade runs/<doc-token> --workflow multisdk --format json
+```
+
+`harness env` reports runtime, CLI package version, Feishu host, credential presence, dotenv loading, validation profiles, and optional path checks without printing secrets.
+
+`harness tools` prints the allowed command surface for a workflow. V1 supports `multisdk`.
+
+`harness grade` writes `environment.json`, `grade.json`, and `grade.md` under the task directory. It exits non-zero only for `blocked`; `incomplete` means the task is valid but still in progress.
+
 ## `status`
 
 ```bash

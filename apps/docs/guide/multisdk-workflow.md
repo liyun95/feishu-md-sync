@@ -8,6 +8,12 @@ Initialize once:
 md2feishu multisdk init "$DOC" --out runs/<doc-token>
 ```
 
+Inspect the harness tool menu before starting agentic work:
+
+```bash
+md2feishu harness tools --workflow multisdk --format json
+```
+
 Complete one SDK lane at a time:
 
 ```bash
@@ -27,6 +33,14 @@ Repeat the lane workflow for `javascript`, `go`, and `restful`, then finalize:
 ```bash
 md2feishu multisdk finalize runs/<doc-token>
 ```
+
+Grade the task before handoff:
+
+```bash
+md2feishu harness grade runs/<doc-token> --workflow multisdk --format json
+```
+
+Review `grade.md`, `handoff.md`, and `trace/events.jsonl` together. `grade` returning `incomplete` is acceptable while a task is still in progress; `blocked` requires fixing the reported safety or audit failure.
 
 The final command runs a full readback audit and writes `handoff.md` in the task directory.
 

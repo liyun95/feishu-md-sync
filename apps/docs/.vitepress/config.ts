@@ -21,6 +21,7 @@ export default defineConfig({
         items: [
           { text: 'Quickstart', link: '/guide/quickstart' },
           { text: 'Configuration', link: '/guide/configuration' },
+          { text: 'Agent Harness', link: '/guide/agent-harness' },
           { text: 'Multi-SDK Workflow', link: '/guide/multisdk-workflow' },
           { text: 'SDK Reference Workflow', link: '/guide/sdk-reference-workflow' },
           { text: 'SDK Reference Release', link: '/guide/sdk-reference-release-workflow' },
