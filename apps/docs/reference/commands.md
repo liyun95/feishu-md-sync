@@ -171,6 +171,35 @@ Run `reference preflight` before accepting a `NO ACTION` result for an SDK line.
 
 Manifests must use `kind: "sdk-reference-publish-manifest"`. They must not write the SDK reference `Slug` field. Tracker rows require a pre-existing, shared release audit Base via `targets.releaseAuditBaseToken`; the CLI does not create a new Base.
 
+### `reference web-content`
+
+Run the Feishu-to-Markdown publication step against an external `web-content` checkout. The checkout is not an npm workspace in this repo.
+
+```bash
+md2feishu reference web-content check --repo /Users/liyun/web-content --manual java-v2.6.x --format json
+md2feishu reference web-content pull --repo /Users/liyun/web-content --manual java-v2.6.x --doc "describeCollection()" --format json
+```
+
+`check` runs the `web-content` stale-link dry run. `pull` delegates to `web-content/scripts/lark-docs/index.js` and writes generated Markdown into the external `web-content` checkout.
+
+Use `pull --all` to export every configured document for the manual, or `pull --doc <name>` for one SDK reference page. The external checkout owns the generated Markdown diff and the eventual publication PR.
+
+### `reference release`
+
+Run the approved SDK reference release workflow from a config file.
+
+```bash
+md2feishu reference release run --config reference-release.json --format json
+md2feishu reference release run --config reference-release.json --write --format json
+md2feishu reference release run --config reference-release.json --write --pull-web-content --format json
+```
+
+Without `--write`, Feishu apply is dry-run only. Without `--pull-web-content`, the command performs only the stale-link check for `web-content`.
+
+The release workflow keeps `feishu-md-sync` responsible for the CLI contract, Feishu publishing, audit, and PR handoff report while treating `web-content` as an external publication repository.
+
+### `reference export`
+
 `reference export` is the web-content handoff stage after a passing Feishu audit. It validates the requested manual in `web-content/scripts/config.json`, runs the Feishu-to-Markdown export through `scripts/lark-docs/index.js`, checks `git diff --check`, and reports changed files, untracked files, unrelated dirty files, and suggested staging paths. The default `--scope changed` exports only manifest doc actions by title; `--scope all` rebuilds the full manual. The command does not stage, commit, push, or open pull requests.
 
 Use a case-sensitive `web-content` checkout or worktree on macOS. The command fails closed if the checkout is case-insensitive and contains case-conflicting tracked paths.

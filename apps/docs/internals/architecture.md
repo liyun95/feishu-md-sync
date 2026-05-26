@@ -7,7 +7,7 @@
 File:
 
 ```text
-src/cli/index.ts
+packages/cli/src/cli/index.ts
 ```
 
 Responsibilities:
@@ -22,9 +22,9 @@ Responsibilities:
 Files:
 
 ```text
-src/feishu/client.ts
-src/feishu/token.ts
-src/feishu/types.ts
+packages/cli/src/feishu/client.ts
+packages/cli/src/feishu/token.ts
+packages/cli/src/feishu/types.ts
 ```
 
 Responsibilities:
@@ -40,8 +40,8 @@ Responsibilities:
 Files:
 
 ```text
-src/markdown/blocks.ts
-src/markdown/from-blocks.ts
+packages/cli/src/markdown/blocks.ts
+packages/cli/src/markdown/from-blocks.ts
 ```
 
 Responsibilities:
@@ -54,13 +54,13 @@ Responsibilities:
 Files:
 
 ```text
-src/sync/run-sync.ts
-src/sync/conflict.ts
-src/sync/patch.ts
-src/sync/status.ts
-src/sync/diff.ts
-src/sync/pull.ts
-src/sync/merge.ts
+packages/cli/src/sync/run-sync.ts
+packages/cli/src/sync/conflict.ts
+packages/cli/src/sync/patch.ts
+packages/cli/src/sync/status.ts
+packages/cli/src/sync/diff.ts
+packages/cli/src/sync/pull.ts
+packages/cli/src/sync/merge.ts
 ```
 
 Responsibilities:
@@ -77,7 +77,7 @@ Responsibilities:
 File:
 
 ```text
-src/receipts/receipt.ts
+packages/cli/src/receipts/receipt.ts
 ```
 
 Receipts are the safety boundary between local Markdown and current Feishu state.

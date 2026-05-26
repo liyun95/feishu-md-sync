@@ -32,6 +32,8 @@ import { auditReferenceManifest } from '../reference/audit.js';
 import { exportReferenceToWebContent, type ReferenceExportScope } from '../reference/export.js';
 import { buildReferenceSourceFreshness } from '../reference/freshness.js';
 import { planReferenceManifestFromImpact, type ReferenceImpactMatrix } from '../reference/plan.js';
+import { runReferenceReleaseWorkflow } from '../reference/release-run.js';
+import { runWebContentCommand } from '../reference/web-content.js';
 import { parseMultisdkLanguage } from '../multisdk/language.js';
 import { loadMultisdkTask, summarizeMultisdkTask } from '../multisdk/task.js';
 import {
@@ -608,6 +610,91 @@ reference
     if (!report.passed) process.exitCode = 1;
   });
 
+const webContent = reference
+  .command('web-content')
+  .description('run web-content SDK reference export checks against an external checkout');
+
+webContent
+  .command('check')
+  .description('scan a web-content SDK manual for stale Feishu doc links')
+  .requiredOption('--repo <path>', 'external web-content repo path')
+  .option('--config <path>', 'web-content lark docs config path', 'scripts/config.json')
+  .requiredOption('--manual <name>', 'web-content manual name, for example java-v2.6.x')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (opts: ReferenceWebContentOptions) => {
+    const result = await runWebContentCommand({
+      repo: opts.repo,
+      config: opts.config,
+      manual: opts.manual,
+      mode: 'check'
+    });
+    printFormatted(result, opts.format);
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
+  });
+
+webContent
+  .command('pull')
+  .description('pull Feishu SDK reference docs into an external web-content checkout')
+  .requiredOption('--repo <path>', 'external web-content repo path')
+  .option('--config <path>', 'web-content lark docs config path', 'scripts/config.json')
+  .requiredOption('--manual <name>', 'web-content manual name, for example java-v2.6.x')
+  .option('--doc <title>', 'single Feishu doc title to pull')
+  .option('--output <path>', 'output path relative to the manual output directory')
+  .option('--recursive', 'pull child documents recursively')
+  .option('--all', 'pull all top-level documents from the manual')
+  .option('--position <number>', 'menu position for new docs', parseIntOption)
+  .option('--skip-image-down', 'pass --skipImageDown to the web-content script')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (opts: ReferenceWebContentOptions) => {
+    const all = normalizeBooleanOption(opts, 'all', '--all');
+    const recursive = normalizeBooleanOption(opts, 'recursive', '--recursive');
+    const skipImageDown = normalizeBooleanOption(opts, 'skipImageDown', '--skip-image-down');
+    if (!opts.doc && !all) throw new Error('reference web-content pull requires --doc or --all.');
+    const result = await runWebContentCommand({
+      repo: opts.repo,
+      config: opts.config,
+      manual: opts.manual,
+      mode: 'pull',
+      doc: opts.doc,
+      output: opts.output,
+      recursive,
+      all,
+      position: opts.position,
+      skipImageDown
+    });
+    printFormatted(result, opts.format);
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
+  });
+
+const referenceRelease = reference
+  .command('release')
+  .description('run the SDK reference release workflow from a config file');
+
+referenceRelease
+  .command('run')
+  .description('apply/audit Feishu, check or pull web-content, and prepare PR handoff')
+  .requiredOption('--config <file>', 'sdk-reference-release-workflow config path')
+  .option('--write', 'write Feishu changes; omitted means dry-run')
+  .option('--pull-web-content', 'pull Feishu output into web-content; omitted means stale-link check only')
+  .option('--create-pr', 'create the GitHub PR; omitted means prepare command/body only')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+  .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+  .action(async (opts: ReferenceReleaseRunCommandOptions) => {
+    const normalized = normalizeBaseOptions(opts);
+    const client = new FeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
+    const report = await runReferenceReleaseWorkflow({
+      configPath: opts.config,
+      writeFeishu: normalizeBooleanOption(opts, 'write', '--write'),
+      pullWebContent: normalizeBooleanOption(opts, 'pullWebContent', '--pull-web-content'),
+      createPr: normalizeBooleanOption(opts, 'createPr', '--create-pr'),
+      applyManifest: (options) => applyReferenceManifest(client, options),
+      auditManifest: (options) => auditReferenceManifest(client, options)
+    });
+    printFormatted(report, opts.format);
+    if (!report.passed) process.exitCode = 1;
+  });
+
 reference
   .command('export')
   .description('export audited SDK reference docs from Feishu into a web-content checkout')
@@ -1004,6 +1091,25 @@ type ReferenceApplyCommandOptions = BaseCommandOptions & FormatCommandOptions & 
 
 type ReferenceAuditCommandOptions = BaseCommandOptions & FormatCommandOptions & {
   manifest: string;
+};
+
+type ReferenceWebContentOptions = FormatCommandOptions & {
+  repo: string;
+  config: string;
+  manual: string;
+  doc?: string;
+  output?: string;
+  recursive?: boolean;
+  all?: boolean;
+  position?: number;
+  skipImageDown?: boolean;
+};
+
+type ReferenceReleaseRunCommandOptions = BaseCommandOptions & FormatCommandOptions & {
+  config: string;
+  write?: boolean;
+  pullWebContent?: boolean;
+  createPr?: boolean;
 };
 
 type ReferenceExportCommandOptions = FormatCommandOptions & {

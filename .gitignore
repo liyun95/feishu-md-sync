@@ -5,5 +5,8 @@ coverage/
 .sync/
 .superpowers/
 runs/
-docs-site/.vitepress/dist/
-docs-site/.vitepress/cache/
+dogfood/
+packages/cli/dist/
+packages/cli/coverage/
+apps/docs/.vitepress/dist/
+apps/docs/.vitepress/cache/

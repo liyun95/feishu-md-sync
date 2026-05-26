@@ -11,4 +11,4 @@ Before release or sharing:
 - Check `md2feishu merge --help`.
 - Verify README links to the docs.
 - Verify GitHub Pages deployment settings are enabled for GitHub Actions.
-- Confirm `.env`, `.sync/`, `dist/`, `coverage/`, and `.superpowers/` are not committed.
+- Confirm `.env`, `.sync/`, `packages/cli/dist/`, `packages/cli/coverage/`, `apps/docs/.vitepress/`, `dogfood/`, and `.superpowers/` are not committed.
