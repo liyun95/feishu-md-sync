@@ -16,11 +16,27 @@ export type MultisdkEvidence = {
   path: string;
   command: string;
   recordedAt: string;
+  profile?: string;
+  sdkVersion?: string;
+  sourceCommit?: string;
+  endpoint?: string;
 };
 
 export type MultisdkSnippetHash = {
   file: string;
   contentHash: string;
+};
+
+export type MultisdkDocsLanding = {
+  language: MultisdkLanguage;
+  repo: string;
+  target: string;
+  reviewedBaselinePath: string;
+  mode: 'write';
+  baseRef?: string;
+  branch?: string;
+  commitMessage?: string;
+  recordedAt: string;
 };
 
 export type MultisdkLanguageState = {
@@ -44,6 +60,7 @@ export type MultisdkTask = {
   taskDir: string;
   languageOrder: CanonicalCodeBlockLanguage[];
   languages: Record<MultisdkLanguage, MultisdkLanguageState>;
+  docsLandings: MultisdkDocsLanding[];
   finalAuditPassed: boolean;
   cleanup: string[];
 };
@@ -74,6 +91,7 @@ export function createInitialMultisdkTask(input: {
       go: initialLanguageState(),
       restful: initialLanguageState()
     },
+    docsLandings: [],
     finalAuditPassed: false,
     cleanup: []
   };

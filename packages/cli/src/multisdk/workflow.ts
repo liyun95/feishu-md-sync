@@ -7,6 +7,11 @@ import {
   type CodeBlockApplyReport
 } from '../sync/code-block-apply.js';
 import { auditCodeBlockInventory, type CodeBlockAuditReport } from '../sync/code-block-audit.js';
+import {
+  buildCodeBlockDiffReport,
+  type CodeBlockDiffClient,
+  type CodeBlockDiffReport
+} from '../sync/code-block-diff.js';
 import { exportCodeBlockSnippets, loadCodeBlockManifest } from '../sync/code-block-export.js';
 import type { CodeBlockManifest } from '../sync/code-block-plan.js';
 import { mergeLanguageManifestItems, writeLanguageScopedManifest } from './manifest.js';
@@ -18,6 +23,7 @@ import {
   saveMultisdkTask,
   type MultisdkTask
 } from './task.js';
+import { getValidationProfile } from './validation-profile.js';
 
 export async function initMultisdkTask(input: {
   document: string;
@@ -87,11 +93,16 @@ export async function recordMultisdkVerification(input: {
   language: MultisdkLanguage;
   evidencePath: string;
   command: string;
+  profile?: string;
+  sdkVersion?: string;
+  sourceCommit?: string;
+  endpoint?: string;
 }): Promise<MultisdkTask> {
   const task = await loadMultisdkTask(input.taskDir);
   if (!task.languages[input.language].snippetsReady) {
     throw new Error(`${input.language} verification requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
   }
+  const profile = input.profile ? getValidationProfile(input.language, input.profile) : undefined;
   const recordedAt = new Date().toISOString();
   const evidenceDir = join(input.taskDir, 'evidence');
   await mkdir(evidenceDir, { recursive: true });
@@ -111,11 +122,16 @@ export async function recordMultisdkVerification(input: {
       {
         path: relative(input.taskDir, targetPath),
         command: input.command,
-        recordedAt
+        recordedAt,
+        profile: profile?.id,
+        sdkVersion: input.sdkVersion,
+        sourceCommit: input.sourceCommit,
+        endpoint: input.endpoint
       }
     ]
   };
   await saveMultisdkTask(task);
+  await writeMultisdkEvidenceSummary(task);
   return task;
 }
 
@@ -182,6 +198,26 @@ export async function applyMultisdkLanguage(input: {
     };
   }
   await saveMultisdkTask(task);
+  return { task, report };
+}
+
+export async function diffMultisdkLanguage(input: {
+  taskDir: string;
+  language: MultisdkLanguage;
+  client: CodeBlockDiffClient;
+}): Promise<{ task: MultisdkTask; report: CodeBlockDiffReport }> {
+  const task = await loadMultisdkTask(input.taskDir);
+  const state = task.languages[input.language];
+  if (!state.snippetsReady) {
+    throw new Error(`${input.language} diff requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
+  }
+
+  const manifest = await loadCodeBlockManifest(join(input.taskDir, 'manifest.json'));
+  const scopedManifestPath = await writeLanguageScopedManifest(input.taskDir, manifest, input.language);
+  const report = await buildCodeBlockDiffReport(input.client, {
+    manifestPath: scopedManifestPath,
+    expectedDocumentId: task.documentId
+  });
   return { task, report };
 }
 
@@ -269,4 +305,58 @@ function sameSnippetHashes(
   if (expected.length === 0 || expected.length !== actual.length) return false;
   const actualByFile = new Map(actual.map((item) => [item.file, item.contentHash]));
   return expected.every((item) => actualByFile.get(item.file) === item.contentHash);
+}
+
+async function writeMultisdkEvidenceSummary(task: MultisdkTask): Promise<void> {
+  const evidenceDir = join(task.taskDir, 'evidence');
+  await mkdir(evidenceDir, { recursive: true });
+  const items = MULTISDK_LANGUAGES.flatMap((language) => task.languages[language].evidence.map((evidence) => ({
+    language,
+    ...evidence
+  })));
+  await Promise.all([
+    writeFile(join(evidenceDir, 'evidence.json'), `${JSON.stringify({
+      kind: 'feishu-multisdk-evidence',
+      version: 1,
+      document: task.document,
+      documentId: task.documentId,
+      generatedAt: new Date().toISOString(),
+      items
+    }, null, 2)}\n`, 'utf8'),
+    writeFile(join(evidenceDir, 'evidence.md'), renderMultisdkEvidenceMarkdown(task, items), 'utf8')
+  ]);
+}
+
+function renderMultisdkEvidenceMarkdown(
+  task: MultisdkTask,
+  items: Array<{
+    language: MultisdkLanguage;
+    path: string;
+    command: string;
+    recordedAt: string;
+    profile?: string;
+    sdkVersion?: string;
+    sourceCommit?: string;
+    endpoint?: string;
+  }>
+): string {
+  const lines = [
+    '# Multi-SDK Evidence',
+    '',
+    `Document: ${task.document}`,
+    `Document ID: ${task.documentId}`,
+    ''
+  ];
+  for (const item of items) {
+    lines.push(`## ${item.language}`, '');
+    lines.push(`- evidence: ${item.path}`);
+    lines.push(`- command: ${item.command}`);
+    lines.push(`- recorded: ${item.recordedAt}`);
+    if (item.profile) lines.push(`- profile: ${item.profile}`);
+    if (item.sdkVersion) lines.push(`- SDK version: ${item.sdkVersion}`);
+    if (item.sourceCommit) lines.push(`- source commit: ${item.sourceCommit}`);
+    if (item.endpoint) lines.push(`- endpoint: ${item.endpoint}`);
+    lines.push('');
+  }
+  return lines.join('\n');
 }

@@ -14,7 +14,13 @@ FEISHU_HOST=https://open.feishu.cn
 
 ## Local `.env`
 
-The CLI loads `dotenv/config`, so a local `.env` file works during development:
+The CLI loads `.env` files from:
+
+1. `--env-file <file>`, when provided.
+2. The current working directory.
+3. The CLI package checkout and its workspace root, when detectable.
+
+This means commands such as `npm --prefix /path/to/feishu-md-sync exec -- md2feishu ...` can still load `/path/to/feishu-md-sync/.env` even when invoked from another directory.
 
 ```bash
 APP_ID=cli_xxx
@@ -23,6 +29,12 @@ FEISHU_HOST=https://open.feishu.cn
 ```
 
 `.env` is ignored by git.
+
+Use `doctor auth` to confirm what was loaded without printing secrets:
+
+```bash
+md2feishu doctor auth --format json
+```
 
 ## Permissions
 

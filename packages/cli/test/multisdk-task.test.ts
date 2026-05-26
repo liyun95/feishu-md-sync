@@ -9,6 +9,7 @@ import {
   saveMultisdkTask,
   summarizeMultisdkTask
 } from '../src/multisdk/task.js';
+import { renderMultisdkHandoff } from '../src/multisdk/handoff.js';
 
 const tempDirs: string[] = [];
 
@@ -83,5 +84,32 @@ describe('multisdk task model', () => {
       },
       finalAuditPassed: false
     });
+  });
+
+  it('renders docs landing records in the handoff summary', () => {
+    const task = createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc-id',
+      taskDir: 'runs/doc-id'
+    });
+
+    const handoff = renderMultisdkHandoff({
+      ...task,
+      docsLandings: [{
+        language: 'java',
+        repo: '/Users/liyun/milvus-docs',
+        target: 'site/en/userGuide/schema/nullable-and-default.md',
+        reviewedBaselinePath: 'inputs/feishu.reviewed-baseline.md',
+        mode: 'write',
+        baseRef: 'upstream/v3.0.x',
+        branch: 'docs/nullable-and-default-java-v3-0-x',
+        commitMessage: 'docs(schema): update nullable Java examples',
+        recordedAt: '2026-05-26T00:00:00.000Z'
+      }]
+    });
+
+    expect(handoff).toContain('## Docs Landing');
+    expect(handoff).toContain('java: /Users/liyun/milvus-docs/site/en/userGuide/schema/nullable-and-default.md');
+    expect(handoff).toContain('branch: docs/nullable-and-default-java-v3-0-x');
   });
 });

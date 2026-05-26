@@ -40,6 +40,7 @@ npm exec -- md2feishu diff ./doc.md DocToken
 npm exec -- md2feishu pull DocToken --output feishu.remote.md
 npm exec -- md2feishu merge ./doc.md DocToken
 npm exec -- md2feishu sync ./doc.md DocToken --write --yes --strategy merge
+npm exec -- md2feishu doctor auth --format json
 ```
 
 To use `md2feishu` directly from any directory while developing this workspace, link the CLI package after building it:
@@ -57,6 +58,8 @@ APP_ID=...
 APP_SECRET=...
 FEISHU_HOST=https://open.feishu.cn
 ```
+
+The CLI checks `.env` in the current directory and in the workspace checkout when detectable. Use `md2feishu --env-file /path/to/.env ...` to choose a credentials file explicitly.
 
 Receipts are written only after successful writes under `.sync/feishu/`, which is ignored by git.
 
@@ -156,6 +159,20 @@ The first write to a non-empty existing Feishu document also requires:
 ```
 
 This protects the common dangerous case: the remote document already has content, but no local receipt exists yet.
+
+If a matching active `multisdk` task exists under `runs/`, whole-document `sync --write` is also refused unless `--force-whole-document-sync` is provided. Prefer `md2feishu multisdk diff` and `md2feishu multisdk apply` for language-scoped code-block changes.
+
+After a language lane has been written, reviewed, and audited in Feishu, use `multisdk land-docs` to patch only that language's reviewed code blocks into a downstream docs repo:
+
+```bash
+npm exec -- md2feishu multisdk land-docs runs/<doc-token> \
+  --language java \
+  --repo ~/milvus-docs \
+  --target site/en/userGuide/schema/nullable-and-default.md \
+  --base upstream/v3.0.x
+```
+
+The command defaults to dry-run. With `--write`, it saves the reviewed Feishu pull under `inputs/feishu.reviewed-baseline.md`, updates the target Markdown file, verifies block equality, and refuses base-named branches such as `v3.0.x` when `--base upstream/v3.0.x` is supplied.
 
 ## Three-way merge
 

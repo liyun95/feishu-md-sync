@@ -1,5 +1,7 @@
 # Environment Variables
 
+`md2feishu` reads `.env` from the current directory and, when invoked from a checkout, from the CLI workspace root. Use the global `--env-file <file>` option for an explicit credentials file. Run `md2feishu doctor auth` to see which files were checked and whether credentials are present.
+
 ## `APP_ID`
 
 Feishu app ID.

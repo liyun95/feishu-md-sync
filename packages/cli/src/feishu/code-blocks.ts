@@ -228,7 +228,7 @@ function isLikelyRestfulSnippet(text: string): boolean {
     );
 }
 
-function isPlaceholderCodeBlock(text: string, language: CanonicalCodeBlockLanguage): boolean {
+export function isPlaceholderCodeBlock(text: string, language: CanonicalCodeBlockLanguage): boolean {
   const trimmed = text.trim();
   if (language === 'javascript') {
     return PLACEHOLDERS_BY_LANGUAGE.nodejs.includes(trimmed);

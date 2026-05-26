@@ -20,8 +20,23 @@ export function renderMultisdkHandoff(task: MultisdkTask): string {
     for (const evidence of state.evidence) {
       lines.push(`  - evidence: ${evidence.path}`);
       lines.push(`  - command: ${evidence.command}`);
+      if (evidence.profile) lines.push(`  - profile: ${evidence.profile}`);
+      if (evidence.sdkVersion) lines.push(`  - SDK version: ${evidence.sdkVersion}`);
+      if (evidence.sourceCommit) lines.push(`  - source commit: ${evidence.sourceCommit}`);
+      if (evidence.endpoint) lines.push(`  - endpoint: ${evidence.endpoint}`);
     }
     if (state.reason) lines.push(`  - reason: ${state.reason}`);
+  }
+
+  if ((task.docsLandings ?? []).length > 0) {
+    lines.push('', '## Docs Landing', '');
+    for (const landing of task.docsLandings) {
+      lines.push(`- ${landing.language}: ${landing.repo}/${landing.target}`);
+      lines.push(`  - reviewed baseline: ${landing.reviewedBaselinePath}`);
+      if (landing.baseRef) lines.push(`  - base: ${landing.baseRef}`);
+      if (landing.branch) lines.push(`  - branch: ${landing.branch}`);
+      if (landing.commitMessage) lines.push(`  - commit: ${landing.commitMessage}`);
+    }
   }
 
   if (task.cleanup.length > 0) {

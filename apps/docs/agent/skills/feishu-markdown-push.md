@@ -33,4 +33,5 @@ Guardrails:
 - Successful writes create receipts used for later remote-change detection.
 - Do not use `--strategy local-wins` unless the user explicitly chose overwrite or the file is a resolved `.merged.md`.
 - Do not use `--force-initial-overwrite` unless replacing existing Feishu content is intended.
+- Do not use `--force-whole-document-sync` to bypass an active `multisdk` task unless the user explicitly wants a whole-document write.
 - Do not patch individual code blocks through whole-document sync; use `feishu-codeblock-writer` or `milvus-multisdk-example-sync`.
