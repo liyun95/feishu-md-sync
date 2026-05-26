@@ -97,6 +97,42 @@ describe('multisdk harness grader', () => {
       await appendHarnessTraceEvent({
         workflow: 'multisdk',
         taskDir: dir,
+        tool: 'multisdk.verify',
+        mode: 'record-evidence',
+        status: 'passed',
+        startedAt: '2026-05-26T00:00:00.000Z',
+        endedAt: '2026-05-26T00:00:01.000Z',
+        arguments: { language },
+        summary: `${language} verification recorded.`,
+        eventId: `verify-${language}`
+      });
+      await appendHarnessTraceEvent({
+        workflow: 'multisdk',
+        taskDir: dir,
+        tool: 'multisdk.apply',
+        mode: 'dry-run',
+        status: 'passed',
+        startedAt: '2026-05-26T00:00:01.000Z',
+        endedAt: '2026-05-26T00:00:02.000Z',
+        arguments: { language, write: false },
+        summary: `${language} apply dry-run passed.`,
+        eventId: `dry-run-${language}`
+      });
+      await appendHarnessTraceEvent({
+        workflow: 'multisdk',
+        taskDir: dir,
+        tool: 'multisdk.apply',
+        mode: 'write',
+        status: 'passed',
+        startedAt: '2026-05-26T00:00:02.000Z',
+        endedAt: '2026-05-26T00:00:03.000Z',
+        arguments: { language, write: true },
+        summary: `${language} apply write passed.`,
+        eventId: `write-${language}`
+      });
+      await appendHarnessTraceEvent({
+        workflow: 'multisdk',
+        taskDir: dir,
         tool: 'multisdk.audit',
         mode: 'readback-audit',
         status: 'passed',

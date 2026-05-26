@@ -2,7 +2,7 @@ import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MULTISDK_LANGUAGES, type MultisdkLanguage } from '../multisdk/language.js';
 import { loadMultisdkTask, type MultisdkTask } from '../multisdk/task.js';
-import { readHarnessTraceEvents } from './trace.js';
+import { readHarnessTraceEvents, type HarnessTraceEvent } from './trace.js';
 
 export type HarnessGradeResult = 'passed' | 'blocked' | 'incomplete';
 export type HarnessGradeSeverity = 'passed' | 'blocked' | 'incomplete';
@@ -43,11 +43,11 @@ export async function gradeMultisdkTask(options: GradeMultisdkTaskOptions): Prom
     return grade(options, checks, nextCommands);
   }
 
+  const traceEvents = await readHarnessTraceEvents(options.taskDir);
   for (const language of MULTISDK_LANGUAGES) {
-    gradeLanguage(task, language, checks, nextCommands);
+    gradeLanguage(task, language, traceEvents, checks, nextCommands);
   }
 
-  const traceEvents = await readHarnessTraceEvents(options.taskDir);
   if (traceEvents.length > 0) {
     checks.push(pass('trace-exists', `Trace contains ${traceEvents.length} event(s).`));
   } else if (task.finalAuditPassed) {
@@ -103,6 +103,7 @@ export function renderHarnessGradeMarkdown(gradeResult: HarnessGrade): string {
 function gradeLanguage(
   task: MultisdkTask,
   language: MultisdkLanguage,
+  traceEvents: HarnessTraceEvent[],
   checks: HarnessGradeCheck[],
   nextCommands: string[]
 ): void {
@@ -157,6 +158,45 @@ function gradeLanguage(
     return;
   }
   checks.push(pass(`${language}-audit`, `${language} readback audit passed.`));
+
+  for (const expected of expectedTracePhases(language)) {
+    if (hasTraceEvent(traceEvents, expected)) {
+      checks.push(pass(expected.id, `${language} trace contains ${expected.tool} ${expected.mode}.`));
+    } else {
+      checks.push(fail(expected.id, 'blocked', `${language} trace is missing ${expected.tool} ${expected.mode}.`));
+    }
+  }
+}
+
+function expectedTracePhases(language: MultisdkLanguage): Array<{
+  id: string;
+  tool: string;
+  mode: string;
+  language: MultisdkLanguage;
+}> {
+  return [
+    { id: `${language}-trace-verify`, tool: 'multisdk.verify', mode: 'record-evidence', language },
+    { id: `${language}-trace-dry-run`, tool: 'multisdk.apply', mode: 'dry-run', language },
+    { id: `${language}-trace-write`, tool: 'multisdk.apply', mode: 'write', language },
+    { id: `${language}-trace-audit`, tool: 'multisdk.audit', mode: 'readback-audit', language }
+  ];
+}
+
+function hasTraceEvent(
+  events: HarnessTraceEvent[],
+  expected: { tool: string; mode: string; language: MultisdkLanguage }
+): boolean {
+  return events.some((event) =>
+    event.status === 'passed' &&
+    event.tool === expected.tool &&
+    event.mode === expected.mode &&
+    isTraceArgumentsRecord(event.arguments) &&
+    event.arguments.language === expected.language
+  );
+}
+
+function isTraceArgumentsRecord(value: unknown): value is { language?: unknown } {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function grade(
