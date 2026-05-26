@@ -62,6 +62,9 @@ import { auditLinks, auditReleaseNotes, auditVariables, type LinkTarget, type Va
 import { renderReleaseReportMarkdown, serializeReleaseReportJson, type ReleaseReport } from '../release/report.js';
 import { hashReleaseReport, loadReleaseTask, saveReleaseTask, summarizeReleaseTask } from '../release/task.js';
 import { planReleaseApply, writeReleaseApply, type ReleaseVariableChange } from '../release/apply.js';
+import { buildHarnessEnvironmentReport, writeHarnessEnvironment, type HarnessPathCheckInput } from '../harness/environment.js';
+import { gradeMultisdkTask, writeHarnessGradeArtifacts } from '../harness/multisdk-grade.js';
+import { getHarnessTools, parseHarnessWorkflow } from '../harness/tools.js';
 
 const program = new Command();
 const execFileAsync = promisify(execFile);
@@ -153,6 +156,50 @@ doctor
   .option('--format <format>', 'output format: pretty | json', 'pretty')
   .action(async (opts: FormatCommandOptions) => {
     printFormatted(buildAuthDoctorReport(envLoadReport), opts.format);
+  });
+
+const harness = program
+  .command('harness')
+  .description('inspect harness environment, tools, trace, and grading artifacts');
+
+harness
+  .command('env')
+  .description('print the local harness environment report')
+  .option('--milvus-docs <path>', 'optional local Milvus docs repository path')
+  .option('--web-content-repo <path>', 'optional local web-content repository path')
+  .option('--sdk-repo <path>', 'repeatable local SDK repository path', collectOption, [])
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (opts: HarnessEnvCommandOptions) => {
+    const report = await buildHarnessEnvironmentReport({
+      envLoadReport,
+      pathChecks: harnessPathChecks(opts)
+    });
+    printFormatted(report, opts.format);
+  });
+
+harness
+  .command('tools')
+  .description('print the allowed harness tool registry for a workflow')
+  .requiredOption('--workflow <workflow>', 'workflow name; currently multisdk')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (opts: HarnessToolsCommandOptions) => {
+    printFormatted(getHarnessTools(parseHarnessWorkflow(opts.workflow)), opts.format);
+  });
+
+harness
+  .command('grade')
+  .description('grade a task directory using workflow-specific harness rules')
+  .argument('<task-dir>', 'task directory')
+  .requiredOption('--workflow <workflow>', 'workflow name; currently multisdk')
+  .option('--format <format>', 'output format: pretty | json', 'pretty')
+  .action(async (taskDir: string, opts: HarnessGradeCommandOptions) => {
+    parseHarnessWorkflow(opts.workflow);
+    const environment = await buildHarnessEnvironmentReport({ envLoadReport });
+    await writeHarnessEnvironment(taskDir, environment);
+    const grade = await gradeMultisdkTask({ taskDir });
+    await writeHarnessGradeArtifacts(taskDir, grade);
+    printFormatted(grade, opts.format);
+    if (grade.result === 'blocked') process.exitCode = 1;
   });
 
 program
@@ -1235,6 +1282,20 @@ type MultisdkLandDocsCommandOptions = BaseCommandOptions & FormatCommandOptions 
   write?: boolean;
 };
 
+type HarnessEnvCommandOptions = FormatCommandOptions & {
+  milvusDocs?: string;
+  webContentRepo?: string;
+  sdkRepo?: string[];
+};
+
+type HarnessToolsCommandOptions = FormatCommandOptions & {
+  workflow: string;
+};
+
+type HarnessGradeCommandOptions = FormatCommandOptions & {
+  workflow: string;
+};
+
 type ReferencePlanCommandOptions = FormatCommandOptions & {
   impact: string;
   out: string;
@@ -1471,6 +1532,14 @@ function parseCodeBlockLanguage(value: string): CanonicalCodeBlockLanguage {
 
 function parseCsv(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function harnessPathChecks(opts: HarnessEnvCommandOptions): HarnessPathCheckInput[] {
+  return [
+    opts.milvusDocs ? { name: 'milvusDocs', path: opts.milvusDocs } : undefined,
+    opts.webContentRepo ? { name: 'webContentRepo', path: opts.webContentRepo } : undefined,
+    ...(opts.sdkRepo ?? []).map((path, index) => ({ name: `sdkRepo${index + 1}`, path }))
+  ].filter((item): item is HarnessPathCheckInput => Boolean(item));
 }
 
 function parseReferenceExportScope(value: string): ReferenceExportScope {
