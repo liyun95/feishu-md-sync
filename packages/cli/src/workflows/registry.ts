@@ -1,6 +1,6 @@
 export type WorkflowId =
   | 'baseline-sync'
-  | 'reviewed-section-sync'
+  | 'section-sync'
   | 'multisdk-examples'
   | 'sdk-reference-authoring'
   | 'sdk-reference-web-content-release'
@@ -35,9 +35,9 @@ const RECIPES: WorkflowRecipe[] = [
     ]
   },
   {
-    id: 'reviewed-section-sync',
-    title: 'Publish one reviewed document section',
-    whenToUse: 'Local Markdown changed one heading section and remote Feishu review edits elsewhere must be preserved.',
+    id: 'section-sync',
+    title: 'Sync one local Markdown section to Feishu',
+    whenToUse: 'A local Markdown heading section is ready to replace the matching Feishu section while preserving the rest of the remote document.',
     primaryArtifacts: ['dry-run patch plan', 'Feishu readback verification'],
     steps: [
       { id: 'diff', purpose: 'Inspect local versus remote changes.', command: 'md2feishu diff <doc.md> <feishu-doc>', writes: 'none', verifies: 'The change scope is small enough for section sync.' },
@@ -105,7 +105,8 @@ export function listWorkflowRecipes(): WorkflowRecipe[] {
 }
 
 export function getWorkflowRecipe(id: WorkflowId | string): WorkflowRecipe {
-  const recipe = RECIPES.find((item) => item.id === id);
+  const normalizedId = id === 'reviewed-section-sync' ? 'section-sync' : id;
+  const recipe = RECIPES.find((item) => item.id === normalizedId);
   if (!recipe) throw new Error(`Unknown workflow ${id}. Run md2feishu workflow list.`);
   return recipe;
 }

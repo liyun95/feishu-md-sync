@@ -1,15 +1,9 @@
-# Feishu Reviewed Section Sync
+# Legacy Section Sync Skill Name
 
-Installable skill source: `skills/feishu-reviewed-section-sync/SKILL.md`.
+This skill name is deprecated. Use [`feishu-section-sync`](/agent/skills/feishu-section-sync) for section-scoped Feishu writes.
 
-Workflow recipe:
+The old workflow ID still resolves as a compatibility alias:
 
 ```bash
 md2feishu workflow show reviewed-section-sync --format json
-```
-
-Install team skills from the repository root:
-
-```bash
-scripts/install-codex-skills.sh
 ```

@@ -19,6 +19,8 @@ Install the Feishu workflow Codex skills from this repository into:
 
 Options:
   --remove-legacy   Migration only: delete older local alias skills after installing workflow skills.
+
+The installer always removes renamed workflow skill aliases that would otherwise duplicate a current skill.
 USAGE
       exit 0
       ;;
@@ -31,11 +33,15 @@ done
 
 workflow_skills=(
   feishu-baseline-sync
-  feishu-reviewed-section-sync
+  feishu-section-sync
   feishu-multisdk-examples
   feishu-sdk-reference-authoring
   feishu-sdk-reference-release
   feishu-release-notes
+)
+
+renamed_skills=(
+  feishu-reviewed-section-sync
 )
 
 legacy_skills=(
@@ -58,6 +64,13 @@ for skill in "${workflow_skills[@]}"; do
   rm -rf "$skill_root/$skill"
   cp -R "$src" "$skill_root/$skill"
   echo "installed $skill"
+done
+
+for skill in "${renamed_skills[@]}"; do
+  if [[ -d "$skill_root/$skill" ]]; then
+    rm -rf "$skill_root/$skill"
+    echo "removed renamed $skill"
+  fi
 done
 
 if [[ "$remove_legacy" == "1" ]]; then

@@ -26,7 +26,7 @@ This installs the workflow skills used by Codex:
 | Skill | What it is for |
 | --- | --- |
 | [`feishu-baseline-sync`](/agent/skills/feishu-baseline-sync) | Pull a remote Feishu document into local Markdown before editing. |
-| [`feishu-reviewed-section-sync`](/agent/skills/feishu-reviewed-section-sync) | Sync one reviewed local Markdown section back to the matching Feishu section. |
+| [`feishu-section-sync`](/agent/skills/feishu-section-sync) | Sync one named local Markdown section back to the matching Feishu section. |
 | [`feishu-multisdk-examples`](/agent/skills/feishu-multisdk-examples) | Complete and validate Java, JavaScript, Go, or REST examples from a source example. |
 | [`feishu-sdk-reference-authoring`](/agent/skills/feishu-sdk-reference-authoring) | Write and audit SDK reference changes in Feishu. |
 | [`feishu-sdk-reference-release`](/agent/skills/feishu-sdk-reference-release) | Release audited SDK reference content into `web-content` after a human starts release. |
@@ -61,7 +61,7 @@ The Feishu app also needs API permissions and access to the target document. See
 | When you need to... | Use this skill | What the workflow does |
 | --- | --- | --- |
 | Pull a remote Feishu document into local Markdown before making edits | `feishu-baseline-sync` | Exports the current Feishu content to a local baseline file. It does not write back to Feishu. |
-| Sync reviewed local Markdown changes back to the remote Feishu document | `feishu-reviewed-section-sync` | Replaces one uniquely named section after a dry-run and approval. Content outside that section is preserved. |
+| Sync one local Markdown section back to the remote Feishu document | `feishu-section-sync` | Replaces one uniquely named section after a dry-run and approval. Content outside that section is preserved. |
 | Complete missing SDK examples across languages | `feishu-multisdk-examples` | Generates, validates, and applies language-scoped code-block updates for selected SDKs. |
 | Write SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | Plans, writes, and audits Feishu reference content. It stops after the Feishu audit. |
 | Move audited SDK reference content into `web-content` | `feishu-sdk-reference-release` | Starts only after a human asks for release, then prepares the external docs repository handoff. |

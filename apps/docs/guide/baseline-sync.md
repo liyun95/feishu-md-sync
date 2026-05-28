@@ -2,11 +2,11 @@
 
 ## Use this when
 
-Use this workflow when you need to pull current Feishu content into local Markdown before editing, comparing, or preparing a later reviewed write.
+Use this workflow when you need to pull current Feishu content into local Markdown before editing, comparing, or preparing a later write.
 
 ## Do not use this when
 
-Do not use this workflow when you already have reviewed local changes that should be written back to Feishu. Use [Reviewed Section Sync](/guide/section-sync) for one reviewed section, or inspect the direct CLI reference for advanced whole-document sync cases.
+Do not use this workflow when you already have local changes that should be written back to Feishu. Use [Section Sync](/guide/section-sync) for one named section, or inspect the direct CLI reference for advanced whole-document sync cases.
 
 ## Skill
 

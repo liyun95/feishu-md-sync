@@ -1,25 +1,25 @@
-# Reviewed Section Sync
+# Section Sync
 
 ## Use this when
 
-Use this workflow when one reviewed Markdown section should replace the matching Feishu section while preserving the rest of the Feishu document.
+Use this workflow when one named section from local Markdown should replace the matching Feishu section while preserving the rest of the Feishu document.
 
 ## Do not use this when
 
-Do not use this workflow for whole-document rewrites, duplicated section headings, or unreviewed local drafts. The section title must be unique in both local Markdown and the remote Feishu document.
+Do not use this workflow for whole-document rewrites, duplicated section headings, or drafts that have not been checked by a human. The section title must be unique in both local Markdown and the remote Feishu document.
 
 ## Skill
 
 Ask Codex to use:
 
 ```text
-feishu-reviewed-section-sync
+feishu-section-sync
 ```
 
 ## Workflow recipe
 
 ```bash
-md2feishu workflow show reviewed-section-sync
+md2feishu workflow show section-sync
 ```
 
 ## What changes
@@ -32,7 +32,7 @@ The workflow should dry-run and inspect the target section before writing. The F
 
 ## Completion state
 
-The workflow is complete when the reviewed section has been written to Feishu, read back, and verified against the planned replacement.
+The workflow is complete when the selected section has been written to Feishu, read back, and verified against the planned replacement.
 
 ## Related reference
 

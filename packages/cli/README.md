@@ -11,7 +11,7 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 | Need | Recommended entry |
 | --- | --- |
 | Pull a Feishu document into local Markdown before editing | `feishu-baseline-sync` skill or `md2feishu pull` |
-| Sync reviewed local Markdown back to Feishu | `feishu-reviewed-section-sync` skill or `md2feishu sync --section` |
+| Sync one local Markdown section back to Feishu | `feishu-section-sync` skill or `md2feishu sync --section` |
 | Inspect a planned write before applying it | `md2feishu sync` without `--write` |
 | Resolve local/remote drift | `md2feishu status`, `md2feishu diff`, and `md2feishu merge` |
 | Work on multi-SDK examples, SDK references, or release notes | Use the matching workflow skill first |
@@ -30,7 +30,7 @@ Show the workflow recipe before running lower-level commands:
 
 ```bash
 npm exec -- md2feishu workflow show baseline-sync
-npm exec -- md2feishu workflow show reviewed-section-sync
+npm exec -- md2feishu workflow show section-sync
 ```
 
 ## Configure Feishu Access
@@ -57,7 +57,7 @@ Pull the current Feishu document into Markdown:
 npm exec -- md2feishu pull DocToken --output feishu.remote.md
 ```
 
-Dry-run a reviewed section update:
+Dry-run a section update:
 
 ```bash
 npm exec -- md2feishu sync ./doc.md DocToken --section "Index type overview"

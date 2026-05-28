@@ -5,12 +5,16 @@ describe('workflow registry', () => {
   it('lists user-story oriented workflows', () => {
     expect(listWorkflowRecipes().map((recipe) => recipe.id)).toEqual([
       'baseline-sync',
-      'reviewed-section-sync',
+      'section-sync',
       'multisdk-examples',
       'sdk-reference-authoring',
       'sdk-reference-web-content-release',
       'release-notes'
     ]);
+  });
+
+  it('keeps the old reviewed-section-sync workflow id as a compatibility alias', () => {
+    expect(getWorkflowRecipe('reviewed-section-sync')).toEqual(getWorkflowRecipe('section-sync'));
   });
 
   it('gives concrete next commands for a baseline sync', () => {

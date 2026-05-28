@@ -40,7 +40,7 @@ npm exec -- md2feishu doctor auth --format json
 
 ## Permissions
 
-For normal pull and reviewed-section sync workflows, request these Feishu app API permissions. This list assumes the default official Markdown path and write-capable workflows.
+For normal pull and section sync workflows, request these Feishu app API permissions. This list assumes the default official Markdown path and write-capable workflows.
 
 | Permission name in Feishu | Needed for |
 | --- | --- |

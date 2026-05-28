@@ -12,7 +12,7 @@ md2feishu workflow show <workflow-id> --format json
 | Workflow | Skill source |
 | --- | --- |
 | `baseline-sync` | `skills/feishu-baseline-sync/SKILL.md` |
-| `reviewed-section-sync` | `skills/feishu-reviewed-section-sync/SKILL.md` |
+| `section-sync` | `skills/feishu-section-sync/SKILL.md` |
 | `multisdk-examples` | `skills/feishu-multisdk-examples/SKILL.md` |
 | `sdk-reference-authoring` | `skills/feishu-sdk-reference-authoring/SKILL.md` |
 | `sdk-reference-web-content-release` | `skills/feishu-sdk-reference-release/SKILL.md` |
@@ -50,7 +50,7 @@ Feishu Markdown pull must not write Feishu. Feishu Markdown push must not patch 
 ## Workflow Skill Pressure Scenarios
 
 - Baseline sync: agent must not write to Feishu after pull unless the user switches workflows.
-- Reviewed section sync: agent must not use whole-document write when the user asks for one section.
+- Section sync: agent must not use whole-document write when the user asks for one section.
 - Multi-SDK examples: agent must not write unverified snippets.
 - SDK reference authoring: agent must stop after Feishu audit and must not export to `web-content`.
 - SDK reference release: agent must require explicit human release intent before touching `web-content`.
