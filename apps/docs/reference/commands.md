@@ -18,6 +18,18 @@ Equivalent to:
 md2feishu sync ./doc.md DocToken
 ```
 
+## `workflow`
+
+```bash
+md2feishu workflow list
+md2feishu workflow show <workflow-id>
+md2feishu workflow show <workflow-id> --format json
+```
+
+Workflow recipes are the source of truth for command order, artifacts, write targets, and completion checks. See [Workflows](/guide/workflows).
+
+Shared write protections are listed in [Safety Gates](/reference/safety-gates).
+
 ## `sync`
 
 ```bash
@@ -32,12 +44,24 @@ Options:
 - `--force-initial-overwrite` - allow first write to replace existing non-empty Feishu content.
 - `--force-whole-document-sync` - allow whole-document sync when an active `multisdk` task exists for the same document.
 - `--publish-profile <profile>` - apply a publish transform before diffing or writing. Currently supports `milvus`.
+- `--section <heading>` - replace only the named heading section. The heading must be unique in both local Markdown and current Feishu content.
+- `--markdown-engine <engine>` - `auto`, `official`, or `local`. `auto` tries official Feishu Markdown APIs first and falls back to local conversion.
+- `--format <format>` - `pretty` or `json`.
 - `--host <url>` - Feishu API host.
 - `--timeout-ms <number>` - Feishu API timeout.
 
 The `milvus` publish profile strips frontmatter, drops a first H1 when it duplicates the frontmatter title, rewrites standalone `Milvus` references for shared Milvus/Zilliz Cloud publishing, and wraps versioned names such as `Milvus 3.0` in a Milvus-only include.
 
 If `runs/**/task.json` contains an active `multisdk` task for the same Feishu document, `sync --write` fails closed by default. Use `multisdk apply <task-dir> --language <lang>` for code-block patches. Use `--force-whole-document-sync` only when the intended operation is a whole-document write.
+
+Section sync is for reviewed Feishu documents where only one local heading section should be published:
+
+```bash
+md2feishu sync ./doc.md DocToken --section "Index type overview"
+md2feishu sync ./doc.md DocToken --section "Index type overview" --write -y
+```
+
+The command replaces the matching heading block and its body, ending before the next same-level or higher-level heading. Feishu blocks outside the selected section are preserved. Section writes do not update the whole-document receipt.
 
 ## `doctor auth`
 
@@ -46,6 +70,22 @@ md2feishu doctor auth --format json
 ```
 
 Reports which `.env` files were checked or loaded and whether `APP_ID` and `APP_SECRET` are present. It never prints `APP_SECRET`.
+
+## `harness`
+
+Inspect and grade workflow harness artifacts.
+
+```bash
+md2feishu harness env --format json
+md2feishu harness tools --workflow multisdk --format json
+md2feishu harness grade runs/<doc-token> --workflow multisdk --format json
+```
+
+`harness env` reports runtime, CLI package version, Feishu host, credential presence, dotenv loading, validation profiles, and optional path checks without printing secrets.
+
+`harness tools` prints the allowed command surface for a workflow. It supports the workflow IDs from `md2feishu workflow list`; `multisdk` remains a compatibility alias for `multisdk-examples`.
+
+`harness grade` writes `environment.json`, `grade.json`, and `grade.md` under the task directory. It exits non-zero only for `blocked`; `incomplete` means the task is valid but still in progress.
 
 ## `status`
 

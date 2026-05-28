@@ -128,6 +128,37 @@ describe('FeishuClient', () => {
     });
   });
 
+  it('adds generated block context to child creation API errors', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ code: 999, msg: 'schema mismatch' }, { status: 400 }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    let error: Error | undefined;
+    try {
+      await client.createChildren('doc', 'page', [
+        {
+          block_type: 2,
+          text: {
+            elements: [
+              {
+                text_run: {
+                  content: 'JSON Shredding',
+                  text_element_style: { link: { url: './json-shredding' } }
+                }
+              }
+            ]
+          }
+        }
+      ]);
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error?.message).toMatch(/Failed to create Feishu child blocks 1-1 under parent block page/);
+    expect(error?.message).toMatch(/"block_type":2/);
+    expect(error?.message).toMatch(/schema mismatch/);
+  });
+
 
   it('creates tables without inline cells and then populates returned cell blocks', async () => {
     const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
@@ -277,7 +308,7 @@ describe('FeishuClient', () => {
 
   it('throws on 429 API responses', async () => {
     const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
-    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ code: 99991429, msg: 'rate limited' }, { status: 429 }));
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({ code: 99991429, msg: 'rate limited' }, { status: 429 })));
     const client = new FeishuClient({ tokenProvider, fetchImpl });
 
     await expect(client.getDocumentBlocks('doc')).rejects.toMatchObject({

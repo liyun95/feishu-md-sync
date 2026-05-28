@@ -1,6 +1,7 @@
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import type { CodeBlockInventory } from '../feishu/code-blocks.js';
+import { appendHarnessTraceEvent } from '../harness/trace.js';
 import {
   applyCodeBlockManifest,
   type CodeBlockApplyClient,
@@ -31,25 +32,53 @@ export async function initMultisdkTask(input: {
   taskDir: string;
   inventory: CodeBlockInventory;
 }): Promise<{ task: MultisdkTask; manifest: CodeBlockManifest; files: string[] }> {
-  const result = await exportCodeBlockSnippets({
-    document: input.document,
-    inventory: input.inventory,
-    expectLanguages: [...MULTISDK_LANGUAGES],
-    outDir: input.taskDir,
-    manifestPath: join(input.taskDir, 'manifest.json')
-  });
-  const task = createInitialMultisdkTask(input);
-  for (const language of MULTISDK_LANGUAGES) {
-    task.languages[language] = {
-      ...task.languages[language],
-      status: 'exported',
-      snippetsReady: true
-    };
+  const startedAt = new Date().toISOString();
+  try {
+    const result = await exportCodeBlockSnippets({
+      document: input.document,
+      inventory: input.inventory,
+      expectLanguages: [...MULTISDK_LANGUAGES],
+      outDir: input.taskDir,
+      manifestPath: join(input.taskDir, 'manifest.json')
+    });
+    const task = createInitialMultisdkTask(input);
+    for (const language of MULTISDK_LANGUAGES) {
+      task.languages[language] = {
+        ...task.languages[language],
+        status: 'exported',
+        snippetsReady: true
+      };
+    }
+    await mkdir(join(input.taskDir, 'validation'), { recursive: true });
+    await mkdir(join(input.taskDir, 'evidence'), { recursive: true });
+    await saveMultisdkTask(task);
+    await traceMultisdkSuccess({
+      taskDir: input.taskDir,
+      tool: 'multisdk.init',
+      mode: 'initialize',
+      startedAt,
+      arguments: {
+        document: input.document,
+        documentId: input.documentId
+      },
+      artifactPaths: ['task.json', 'manifest.json', ...result.files],
+      summary: 'Initialized multi-SDK task.'
+    });
+    return { task, manifest: result.manifest, files: result.files };
+  } catch (error) {
+    await traceMultisdkFailure({
+      taskDir: input.taskDir,
+      tool: 'multisdk.init',
+      mode: 'initialize',
+      startedAt,
+      arguments: {
+        document: input.document,
+        documentId: input.documentId
+      },
+      error
+    });
+    throw error;
   }
-  await mkdir(join(input.taskDir, 'validation'), { recursive: true });
-  await mkdir(join(input.taskDir, 'evidence'), { recursive: true });
-  await saveMultisdkTask(task);
-  return { task, manifest: result.manifest, files: result.files };
 }
 
 export async function exportMultisdkLanguage(input: {
@@ -58,34 +87,56 @@ export async function exportMultisdkLanguage(input: {
   language: MultisdkLanguage;
   inventory: CodeBlockInventory;
 }): Promise<{ task: MultisdkTask; manifest: CodeBlockManifest; files: string[] }> {
-  const task = await loadMultisdkTask(input.taskDir);
-  const fullManifestPath = join(input.taskDir, 'manifest.json');
-  const current = await loadCodeBlockManifest(fullManifestPath);
-  const refreshed = await exportCodeBlockSnippets({
-    document: input.document,
-    inventory: input.inventory,
-    expectLanguages: [input.language],
-    outDir: input.taskDir,
-    manifestPath: join(input.taskDir, `.multisdk-${input.language}-refresh.json`)
-  });
-  const manifest = mergeLanguageManifestItems(current, refreshed.manifest, input.language);
-  await writeFile(fullManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  const startedAt = new Date().toISOString();
+  try {
+    const task = await loadMultisdkTask(input.taskDir);
+    const fullManifestPath = join(input.taskDir, 'manifest.json');
+    const current = await loadCodeBlockManifest(fullManifestPath);
+    const refreshed = await exportCodeBlockSnippets({
+      document: input.document,
+      inventory: input.inventory,
+      expectLanguages: [input.language],
+      outDir: input.taskDir,
+      manifestPath: join(input.taskDir, `.multisdk-${input.language}-refresh.json`)
+    });
+    const manifest = mergeLanguageManifestItems(current, refreshed.manifest, input.language);
+    await writeFile(fullManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
-  task.languages[input.language] = {
-    ...task.languages[input.language],
-    status: 'exported',
-    sourceVerified: false,
-    snippetsReady: true,
-    validated: false,
-    dryRunPassed: false,
-    dryRunHashes: [],
-    writePassed: false,
-    auditPassed: false,
-    evidence: [],
-    reason: undefined
-  };
-  await saveMultisdkTask(task);
-  return { task, manifest, files: refreshed.files };
+    task.languages[input.language] = {
+      ...task.languages[input.language],
+      status: 'exported',
+      sourceVerified: false,
+      snippetsReady: true,
+      validated: false,
+      dryRunPassed: false,
+      dryRunHashes: [],
+      writePassed: false,
+      auditPassed: false,
+      evidence: [],
+      reason: undefined
+    };
+    await saveMultisdkTask(task);
+    await traceMultisdkSuccess({
+      taskDir: input.taskDir,
+      tool: 'multisdk.export',
+      mode: 'export-language',
+      startedAt,
+      arguments: { language: input.language },
+      artifactPaths: ['task.json', 'manifest.json', ...refreshed.files],
+      summary: `Exported ${input.language} snippets.`
+    });
+    return { task, manifest, files: refreshed.files };
+  } catch (error) {
+    await traceMultisdkFailure({
+      taskDir: input.taskDir,
+      tool: 'multisdk.export',
+      mode: 'export-language',
+      startedAt,
+      arguments: { language: input.language },
+      error
+    });
+    throw error;
+  }
 }
 
 export async function recordMultisdkVerification(input: {
@@ -98,41 +149,70 @@ export async function recordMultisdkVerification(input: {
   sourceCommit?: string;
   endpoint?: string;
 }): Promise<MultisdkTask> {
-  const task = await loadMultisdkTask(input.taskDir);
-  if (!task.languages[input.language].snippetsReady) {
-    throw new Error(`${input.language} verification requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
-  }
-  const profile = input.profile ? getValidationProfile(input.language, input.profile) : undefined;
-  const recordedAt = new Date().toISOString();
-  const evidenceDir = join(input.taskDir, 'evidence');
-  await mkdir(evidenceDir, { recursive: true });
-  const targetPath = join(evidenceDir, `${input.language}-${Date.now()}-${basename(input.evidencePath)}`);
-  await copyFile(input.evidencePath, targetPath);
-
-  task.languages[input.language] = {
-    ...task.languages[input.language],
-    status: 'ready',
-    sourceVerified: true,
-    validated: true,
-    dryRunPassed: false,
-    dryRunHashes: [],
-    reason: undefined,
-    evidence: [
-      ...task.languages[input.language].evidence,
-      {
-        path: relative(input.taskDir, targetPath),
-        command: input.command,
-        recordedAt,
-        profile: profile?.id,
-        sdkVersion: input.sdkVersion,
-        sourceCommit: input.sourceCommit,
-        endpoint: input.endpoint
-      }
-    ]
+  const startedAt = new Date().toISOString();
+  const traceArguments = {
+    language: input.language,
+    profile: input.profile,
+    sdkVersion: input.sdkVersion,
+    sourceCommit: input.sourceCommit,
+    endpoint: input.endpoint
   };
-  await saveMultisdkTask(task);
-  await writeMultisdkEvidenceSummary(task);
-  return task;
+  try {
+    const task = await loadMultisdkTask(input.taskDir);
+    if (!task.languages[input.language].snippetsReady) {
+      throw new Error(`${input.language} verification requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
+    }
+    const profile = input.profile ? getValidationProfile(input.language, input.profile) : undefined;
+    const recordedAt = new Date().toISOString();
+    const evidenceDir = join(input.taskDir, 'evidence');
+    await mkdir(evidenceDir, { recursive: true });
+    const targetPath = join(evidenceDir, `${input.language}-${Date.now()}-${basename(input.evidencePath)}`);
+    await copyFile(input.evidencePath, targetPath);
+
+    task.languages[input.language] = {
+      ...task.languages[input.language],
+      status: 'ready',
+      sourceVerified: true,
+      validated: true,
+      dryRunPassed: false,
+      dryRunHashes: [],
+      reason: undefined,
+      evidence: [
+        ...task.languages[input.language].evidence,
+        {
+          path: relative(input.taskDir, targetPath),
+          command: input.command,
+          recordedAt,
+          profile: profile?.id,
+          sdkVersion: input.sdkVersion,
+          sourceCommit: input.sourceCommit,
+          endpoint: input.endpoint
+        }
+      ]
+    };
+    await saveMultisdkTask(task);
+    await writeMultisdkEvidenceSummary(task);
+    await traceMultisdkSuccess({
+      taskDir: input.taskDir,
+      tool: 'multisdk.verify',
+      mode: 'record-evidence',
+      startedAt,
+      arguments: traceArguments,
+      artifactPaths: ['task.json', 'evidence/evidence.json', 'evidence/evidence.md'],
+      summary: `Recorded ${input.language} validation evidence.`
+    });
+    return task;
+  } catch (error) {
+    await traceMultisdkFailure({
+      taskDir: input.taskDir,
+      tool: 'multisdk.verify',
+      mode: 'record-evidence',
+      startedAt,
+      arguments: traceArguments,
+      error
+    });
+    throw error;
+  }
 }
 
 export async function applyMultisdkLanguage(input: {
@@ -141,64 +221,88 @@ export async function applyMultisdkLanguage(input: {
   write: boolean;
   client: CodeBlockApplyClient;
 }): Promise<{ task: MultisdkTask; report: CodeBlockApplyReport }> {
-  const task = await loadMultisdkTask(input.taskDir);
-  const state = task.languages[input.language];
-  if (!state.snippetsReady) {
-    throw new Error(`${input.language} apply requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
-  }
-  if (input.write && !state.validated) {
-    throw new Error(`${input.language} write requires verification evidence. Run multisdk verify first.`);
-  }
-  if (input.write && !state.dryRunPassed) {
-    throw new Error(`${input.language} write requires a successful dry-run. Run multisdk apply without --write first.`);
-  }
+  const startedAt = new Date().toISOString();
+  const mode = input.write ? 'write' : 'dry-run';
+  const traceArguments = { language: input.language, write: input.write };
+  try {
+    const task = await loadMultisdkTask(input.taskDir);
+    const state = task.languages[input.language];
+    if (!state.snippetsReady) {
+      throw new Error(`${input.language} apply requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
+    }
+    if (input.write && !state.validated) {
+      throw new Error(`${input.language} write requires verification evidence. Run multisdk verify first.`);
+    }
+    if (input.write && !state.dryRunPassed) {
+      throw new Error(`${input.language} write requires a successful dry-run. Run multisdk apply without --write first.`);
+    }
 
-  const manifest = await loadCodeBlockManifest(join(input.taskDir, 'manifest.json'));
-  const scopedManifestPath = await writeLanguageScopedManifest(input.taskDir, manifest, input.language);
-  if (input.write) {
-    const currentDryRun = await applyCodeBlockManifest(input.client, {
+    const manifest = await loadCodeBlockManifest(join(input.taskDir, 'manifest.json'));
+    const scopedManifestPath = await writeLanguageScopedManifest(input.taskDir, manifest, input.language);
+    if (input.write) {
+      const currentDryRun = await applyCodeBlockManifest(input.client, {
+        manifestPath: scopedManifestPath,
+        write: false,
+        expectedDocumentId: task.documentId
+      });
+      if (!sameSnippetHashes(task.languages[input.language].dryRunHashes, snippetHashesFromReport(currentDryRun))) {
+        throw new Error(`${input.language} write requires a fresh dry-run because snippet content changed.`);
+      }
+    }
+    const report = await applyCodeBlockManifest(input.client, {
       manifestPath: scopedManifestPath,
-      write: false,
+      write: input.write,
       expectedDocumentId: task.documentId
     });
-    if (!sameSnippetHashes(task.languages[input.language].dryRunHashes, snippetHashesFromReport(currentDryRun))) {
-      throw new Error(`${input.language} write requires a fresh dry-run because snippet content changed.`);
+    if (report.failed.length > 0) {
+      task.languages[input.language] = {
+        ...task.languages[input.language],
+        status: 'blocked',
+        reason: report.failed.map((failure) => failure.message).join('; ')
+      };
+      await saveMultisdkTask(task);
+      throw new Error(`${input.language} apply failed for ${report.failed.length} item(s).`);
     }
-  }
-  const report = await applyCodeBlockManifest(input.client, {
-    manifestPath: scopedManifestPath,
-    write: input.write,
-    expectedDocumentId: task.documentId
-  });
-  if (report.failed.length > 0) {
-    task.languages[input.language] = {
-      ...task.languages[input.language],
-      status: 'blocked',
-      reason: report.failed.map((failure) => failure.message).join('; ')
-    };
-    await saveMultisdkTask(task);
-    throw new Error(`${input.language} apply failed for ${report.failed.length} item(s).`);
-  }
 
-  if (input.write) {
-    task.languages[input.language] = {
-      ...task.languages[input.language],
-      status: 'written',
-      writePassed: true,
-      reason: undefined
-    };
-    invalidateLaterLanguages(task, input.language);
-  } else {
-    task.languages[input.language] = {
-      ...task.languages[input.language],
-      status: 'dry-run-passed',
-      dryRunPassed: true,
-      dryRunHashes: snippetHashesFromReport(report),
-      reason: undefined
-    };
+    if (input.write) {
+      task.languages[input.language] = {
+        ...task.languages[input.language],
+        status: 'written',
+        writePassed: true,
+        reason: undefined
+      };
+      invalidateLaterLanguages(task, input.language);
+    } else {
+      task.languages[input.language] = {
+        ...task.languages[input.language],
+        status: 'dry-run-passed',
+        dryRunPassed: true,
+        dryRunHashes: snippetHashesFromReport(report),
+        reason: undefined
+      };
+    }
+    await saveMultisdkTask(task);
+    await traceMultisdkSuccess({
+      taskDir: input.taskDir,
+      tool: 'multisdk.apply',
+      mode,
+      startedAt,
+      arguments: traceArguments,
+      artifactPaths: ['task.json'],
+      summary: input.write ? `Applied ${input.language} in write mode.` : `Dry-ran ${input.language} apply.`
+    });
+    return { task, report };
+  } catch (error) {
+    await traceMultisdkFailure({
+      taskDir: input.taskDir,
+      tool: 'multisdk.apply',
+      mode,
+      startedAt,
+      arguments: traceArguments,
+      error
+    });
+    throw error;
   }
-  await saveMultisdkTask(task);
-  return { task, report };
 }
 
 export async function diffMultisdkLanguage(input: {
@@ -206,19 +310,41 @@ export async function diffMultisdkLanguage(input: {
   language: MultisdkLanguage;
   client: CodeBlockDiffClient;
 }): Promise<{ task: MultisdkTask; report: CodeBlockDiffReport }> {
-  const task = await loadMultisdkTask(input.taskDir);
-  const state = task.languages[input.language];
-  if (!state.snippetsReady) {
-    throw new Error(`${input.language} diff requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
-  }
+  const startedAt = new Date().toISOString();
+  try {
+    const task = await loadMultisdkTask(input.taskDir);
+    const state = task.languages[input.language];
+    if (!state.snippetsReady) {
+      throw new Error(`${input.language} diff requires fresh exported snippets. Run multisdk export --language ${input.language} first.`);
+    }
 
-  const manifest = await loadCodeBlockManifest(join(input.taskDir, 'manifest.json'));
-  const scopedManifestPath = await writeLanguageScopedManifest(input.taskDir, manifest, input.language);
-  const report = await buildCodeBlockDiffReport(input.client, {
-    manifestPath: scopedManifestPath,
-    expectedDocumentId: task.documentId
-  });
-  return { task, report };
+    const manifest = await loadCodeBlockManifest(join(input.taskDir, 'manifest.json'));
+    const scopedManifestPath = await writeLanguageScopedManifest(input.taskDir, manifest, input.language);
+    const report = await buildCodeBlockDiffReport(input.client, {
+      manifestPath: scopedManifestPath,
+      expectedDocumentId: task.documentId
+    });
+    await traceMultisdkSuccess({
+      taskDir: input.taskDir,
+      tool: 'multisdk.diff',
+      mode: 'diff',
+      startedAt,
+      arguments: { language: input.language },
+      artifactPaths: [],
+      summary: `Built ${input.language} code block diff.`
+    });
+    return { task, report };
+  } catch (error) {
+    await traceMultisdkFailure({
+      taskDir: input.taskDir,
+      tool: 'multisdk.diff',
+      mode: 'diff',
+      startedAt,
+      arguments: { language: input.language },
+      error
+    });
+    throw error;
+  }
 }
 
 export async function auditMultisdkLanguage(input: {
@@ -226,50 +352,94 @@ export async function auditMultisdkLanguage(input: {
   language: MultisdkLanguage;
   inventory: CodeBlockInventory;
 }): Promise<{ task: MultisdkTask; report: CodeBlockAuditReport }> {
-  const task = await loadMultisdkTask(input.taskDir);
-  const report = auditCodeBlockInventory(input.inventory, { expectLanguages: [input.language] });
-  if (!report.passed) {
+  const startedAt = new Date().toISOString();
+  try {
+    const task = await loadMultisdkTask(input.taskDir);
+    const report = auditCodeBlockInventory(input.inventory, { expectLanguages: [input.language] });
+    if (!report.passed) {
+      task.languages[input.language] = {
+        ...task.languages[input.language],
+        status: 'blocked',
+        auditPassed: false,
+        reason: 'Audit failed.'
+      };
+      await saveMultisdkTask(task);
+      throw new Error(`${input.language} audit failed.`);
+    }
+
     task.languages[input.language] = {
       ...task.languages[input.language],
-      status: 'blocked',
-      auditPassed: false,
-      reason: 'Audit failed.'
+      status: 'audited',
+      auditPassed: true,
+      reason: undefined
     };
     await saveMultisdkTask(task);
-    throw new Error(`${input.language} audit failed.`);
+    await traceMultisdkSuccess({
+      taskDir: input.taskDir,
+      tool: 'multisdk.audit',
+      mode: 'readback-audit',
+      startedAt,
+      arguments: { language: input.language },
+      artifactPaths: ['task.json'],
+      summary: `Audited ${input.language} readback.`
+    });
+    return { task, report };
+  } catch (error) {
+    await traceMultisdkFailure({
+      taskDir: input.taskDir,
+      tool: 'multisdk.audit',
+      mode: 'readback-audit',
+      startedAt,
+      arguments: { language: input.language },
+      error
+    });
+    throw error;
   }
-
-  task.languages[input.language] = {
-    ...task.languages[input.language],
-    status: 'audited',
-    auditPassed: true,
-    reason: undefined
-  };
-  await saveMultisdkTask(task);
-  return { task, report };
 }
 
 export async function finalizeMultisdkTask(input: {
   taskDir: string;
   inventory: CodeBlockInventory;
 }): Promise<{ task: MultisdkTask; report: CodeBlockAuditReport; handoffPath: string }> {
-  const task = await loadMultisdkTask(input.taskDir);
-  const incomplete = MULTISDK_LANGUAGES.filter((language) => task.languages[language].status !== 'audited');
-  if (incomplete.length > 0) {
-    throw new Error(`Cannot finalize before all languages are audited. Incomplete: ${incomplete.join(', ')}.`);
-  }
+  const startedAt = new Date().toISOString();
+  try {
+    const task = await loadMultisdkTask(input.taskDir);
+    const incomplete = MULTISDK_LANGUAGES.filter((language) => task.languages[language].status !== 'audited');
+    if (incomplete.length > 0) {
+      throw new Error(`Cannot finalize before all languages are audited. Incomplete: ${incomplete.join(', ')}.`);
+    }
 
-  const report = auditCodeBlockInventory(input.inventory, { expectLanguages: [...MULTISDK_LANGUAGES] });
-  task.finalAuditPassed = report.passed;
-  if (!report.passed) {
+    const report = auditCodeBlockInventory(input.inventory, { expectLanguages: [...MULTISDK_LANGUAGES] });
+    task.finalAuditPassed = report.passed;
+    if (!report.passed) {
+      await saveMultisdkTask(task);
+      throw new Error('Final multi-SDK audit failed.');
+    }
+
+    const handoffPath = join(input.taskDir, 'handoff.md');
+    await writeFile(handoffPath, renderMultisdkHandoff(task), 'utf8');
     await saveMultisdkTask(task);
-    throw new Error('Final multi-SDK audit failed.');
+    await traceMultisdkSuccess({
+      taskDir: input.taskDir,
+      tool: 'multisdk.finalize',
+      mode: 'finalize',
+      startedAt,
+      arguments: {},
+      artifactPaths: ['task.json', 'handoff.md'],
+      summary: 'Finalized multi-SDK task.'
+    });
+    return { task, report, handoffPath };
+  } catch (error) {
+    await traceMultisdkFailure({
+      taskDir: input.taskDir,
+      tool: 'multisdk.finalize',
+      mode: 'finalize',
+      startedAt,
+      arguments: {},
+      error
+    });
+    throw error;
   }
-
-  const handoffPath = join(input.taskDir, 'handoff.md');
-  await writeFile(handoffPath, renderMultisdkHandoff(task), 'utf8');
-  await saveMultisdkTask(task);
-  return { task, report, handoffPath };
 }
 
 function invalidateLaterLanguages(task: MultisdkTask, language: MultisdkLanguage): void {
@@ -305,6 +475,60 @@ function sameSnippetHashes(
   if (expected.length === 0 || expected.length !== actual.length) return false;
   const actualByFile = new Map(actual.map((item) => [item.file, item.contentHash]));
   return expected.every((item) => actualByFile.get(item.file) === item.contentHash);
+}
+
+async function traceMultisdkSuccess(input: {
+  taskDir: string;
+  tool: string;
+  mode: string;
+  startedAt: string;
+  arguments?: Record<string, unknown>;
+  artifactPaths?: string[];
+  summary: string;
+}): Promise<void> {
+  try {
+    await appendHarnessTraceEvent({
+      workflow: 'multisdk',
+      taskDir: input.taskDir,
+      tool: input.tool,
+      mode: input.mode,
+      startedAt: input.startedAt,
+      status: 'passed',
+      arguments: input.arguments,
+      artifactPaths: input.artifactPaths,
+      summary: input.summary
+    });
+  } catch (error) {
+    console.warn(`Failed to write harness trace: ${errorMessage(error)}`);
+  }
+}
+
+async function traceMultisdkFailure(input: {
+  taskDir: string;
+  tool: string;
+  mode: string;
+  startedAt: string;
+  arguments?: Record<string, unknown>;
+  error: unknown;
+}): Promise<void> {
+  try {
+    await appendHarnessTraceEvent({
+      workflow: 'multisdk',
+      taskDir: input.taskDir,
+      tool: input.tool,
+      mode: input.mode,
+      startedAt: input.startedAt,
+      status: 'failed',
+      arguments: input.arguments,
+      summary: errorMessage(input.error)
+    });
+  } catch (traceError) {
+    console.warn(`Failed to write harness trace after workflow error: ${errorMessage(traceError)}`);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function writeMultisdkEvidenceSummary(task: MultisdkTask): Promise<void> {

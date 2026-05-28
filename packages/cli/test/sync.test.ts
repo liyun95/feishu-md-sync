@@ -32,9 +32,230 @@ describe('runSync', () => {
     });
 
     expect(result.mode).toBe('dry-run');
-    expect(result.patchPlan.operation).toBe('replace-all');
+    expect(result.patchPlan.operation).toBe('replace-document');
     expect(client.deleteChildren).not.toHaveBeenCalled();
     await expect(readFile(result.receiptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('dry-run rejects generated Feishu blocks with local Markdown links', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, 'For details, see [JSON Shredding](./json-shredding) and [Compatibility reference](#compatibility-reference).\n');
+    const client = fakeClient([]);
+
+    await expect(runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir
+    })).rejects.toThrow(/unsupported Feishu link URL "\.\/json-shredding"/);
+    expect(client.deleteChildren).not.toHaveBeenCalled();
+    expect(client.createChildren).not.toHaveBeenCalled();
+  });
+
+  it('write rejects invalid Feishu links before deleting existing content', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, 'For details, see [JSON Shredding](./json-shredding).\n');
+    const client = fakeClient([], [
+      { block_id: 'remote-1', block_type: 2, text: { elements: [] } }
+    ]);
+
+    await expect(runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      forceInitialOverwrite: true
+    })).rejects.toThrow(/unsupported Feishu link URL "\.\/json-shredding"/);
+    expect(client.deleteChildren).not.toHaveBeenCalled();
+    expect(client.createChildren).not.toHaveBeenCalled();
+  });
+
+  it('allows absolute http links through preflight', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, 'For details, see [Milvus docs](https://milvus.io/docs/json-indexing.md).\n');
+    const desired = markdownToFeishuBlocks('For details, see [Milvus docs](https://milvus.io/docs/json-indexing.md).\n');
+    const client = fakeClient(desired);
+
+    await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true
+    });
+
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', desired);
+  });
+
+  it('dry-runs a named section replacement without writing', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `# Title
+
+Local intro should not sync
+
+## Target
+
+New local body
+
+## Other
+
+Local other should not sync
+`);
+    const remote = markdownToFeishuBlocks(`# Title
+
+Remote intro
+
+## Target
+
+Old remote body
+
+## Other
+
+Remote-only content
+`);
+    const client = fakeClient(remote, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      section: 'Target'
+    });
+
+    expect(result.patchPlan.operation).toBe('replace-section');
+    expect(result.patchPlan.section).toMatchObject({
+      title: 'Target',
+      remoteStartIndex: 2,
+      remoteEndIndex: 4,
+      localStartIndex: 2,
+      localEndIndex: 4
+    });
+    expect(result.receipt.blockCounts.source).toBe(2);
+    expect(client.createChildren).not.toHaveBeenCalled();
+    expect(client.deleteChildren).not.toHaveBeenCalled();
+  });
+
+  it('writes only a named section and preserves remote blocks outside the section', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `# Title
+
+Local intro should not sync
+
+## Target
+
+New local body
+
+## Other
+
+Local other should not sync
+`);
+    const remote = markdownToFeishuBlocks(`# Title
+
+Remote intro
+
+## Target
+
+Old remote body
+
+## Other
+
+Remote-only content
+`);
+    const local = markdownToFeishuBlocks(await readFile(sourcePath, 'utf8'));
+    const expected = [
+      ...remote.slice(0, 2),
+      ...local.slice(2, 4),
+      ...remote.slice(4)
+    ];
+    const client = fakeClient(expected, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      section: 'Target'
+    });
+
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', local.slice(2, 4), { index: 4 });
+    expect(client.deleteChildren).toHaveBeenCalledWith('doc1234567890123', 'page', 2, 4);
+    expect(client.createChildren.mock.invocationCallOrder[0]).toBeLessThan(client.deleteChildren.mock.invocationCallOrder[0]);
+    await expect(readFile(result.receiptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(result.receiptWritten).toBe(false);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      'Section sync does not update the whole-document receipt.'
+    ]));
+  });
+
+  it('preflights only the selected section during section sync', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `## Target
+
+Safe body
+
+## Other
+
+[Local link outside target](./local-only)
+`);
+    const remote = markdownToFeishuBlocks('## Target\n\nOld body\n\n## Other\n\nRemote other\n');
+    const local = markdownToFeishuBlocks(await readFile(sourcePath, 'utf8'));
+    const expected = [
+      ...local.slice(0, 2),
+      ...remote.slice(2)
+    ];
+    const client = fakeClient(expected, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      section: 'Target'
+    });
+
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', local.slice(0, 2), { index: 2 });
+  });
+
+  it('section sync uses current remote content even when the whole-document receipt is stale', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, '## Target\n\nNew body\n\n## Other\n\nLocal other\n');
+    const baseBlocks = markdownToFeishuBlocks('## Target\n\nOld body\n\n## Other\n\nBase other\n');
+    const remoteBlocks = markdownToFeishuBlocks('## Target\n\nOld body\n\n## Other\n\nRemote changed other\n');
+    const localBlocks = markdownToFeishuBlocks(await readFile(sourcePath, 'utf8'));
+    const expected = [
+      ...localBlocks.slice(0, 2),
+      ...remoteBlocks.slice(2)
+    ];
+    const statePath = receiptPath(dir, sourcePath, 'doc1234567890123');
+    await writeReceipt(statePath, {
+      sourcePath,
+      sourceHash: 'old-source',
+      sourceSnapshot: '## Target\n\nOld body\n\n## Other\n\nBase other\n',
+      feishuDocId: 'doc1234567890123',
+      feishuStateHash: hashBlocks(baseBlocks),
+      timestamp: '2026-05-20T00:00:00.000Z',
+      blockCounts: { source: 4, feishuBefore: 4, feishuAfter: 4 },
+      warnings: [],
+      writeResult: { mode: 'write', deleted: 0, created: 4, skipped: false },
+      verificationResult: { ok: true, expectedHash: hashBlocks(baseBlocks), actualHash: hashBlocks(baseBlocks) }
+    });
+    const client = fakeClient(expected, remoteBlocks);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      section: 'Target'
+    });
+
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('Feishu changed since the last receipt; section sync will replace only section "Target"')
+    ]));
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', localBlocks.slice(0, 2), { index: 2 });
   });
 
   it('writes, verifies readback, and stores a receipt', async () => {
@@ -319,7 +540,7 @@ Milvus 3.0 updates Milvus behavior.
     });
     const client = fakeClient(mergedBlocks, remoteBlocks);
 
-    await runSync(client, {
+    const result = await runSync(client, {
       sourcePath,
       documentId: 'doc1234567890123',
       rootDir: dir,
@@ -329,7 +550,9 @@ Milvus 3.0 updates Milvus behavior.
     });
 
     expect(await readFile(sourcePath, 'utf8')).toBe('A\n\nLOCAL\n\nREMOTE\n');
-    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', mergedBlocks);
+    expect(result.patchPlan.operation).toBe('replace-contiguous-blocks');
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', mergedBlocks.slice(1, 2), { index: 2 });
+    expect(client.deleteChildren).toHaveBeenCalledWith('doc1234567890123', 'page', 1, 2);
   });
 
   it('strategy merge does not update the local file when confirmation is rejected', async () => {
@@ -432,12 +655,12 @@ Milvus 3.0 updates Milvus behavior.
     });
 
     expect(result.receiptPath).toBe(originalStatePath);
-    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', mergedBlocks);
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', mergedBlocks, { index: 3 });
     expect(await readFile(sourcePath, 'utf8')).toBe('A\n\nLOCAL\n\nREMOTE\n');
     expect(await readFile(mergedPath, 'utf8')).toBe('A\n\nLOCAL\n\nREMOTE\n');
   });
 
-  it('deletes and recreates changed existing blocks', async () => {
+  it('creates replacement blocks before deleting changed existing blocks', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, 'New body\n');
     const existingChild = { block_id: 'old', block_type: 2, text: { elements: [] } };
@@ -465,8 +688,9 @@ Milvus 3.0 updates Milvus behavior.
       yes: true
     });
 
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', desired, { index: 1 });
     expect(client.deleteChildren).toHaveBeenCalledWith('doc1234567890123', 'page', 0, 1);
-    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', desired);
+    expect(client.createChildren.mock.invocationCallOrder[0]).toBeLessThan(client.deleteChildren.mock.invocationCallOrder[0]);
   });
 });
 
