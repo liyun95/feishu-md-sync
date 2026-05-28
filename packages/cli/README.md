@@ -83,15 +83,14 @@ npm link
 md2feishu --help
 ```
 
-Required environment variables for real Feishu calls:
+For real Feishu calls, copy the example environment file from the repository root and fill in your app credentials:
 
 ```bash
-APP_ID=...
-APP_SECRET=...
-FEISHU_HOST=https://open.feishu.cn
+cp .env.example .env
+npm exec -- md2feishu doctor auth --format json
 ```
 
-The CLI checks `.env` in the current directory and in the workspace checkout when detectable. Use `md2feishu --env-file /path/to/.env ...` to choose a credentials file explicitly.
+The CLI checks `.env` in the current directory and in the workspace checkout when detectable. Use `md2feishu --env-file /path/to/.env ...` to choose a credentials file explicitly. Feishu app permissions are documented in the docs site Configuration guide.
 
 Receipts are written only after successful writes under `.sync/feishu/`, which is ignored by git.
 

@@ -36,15 +36,25 @@ After installation, ask Codex to use the matching workflow skill instead of memo
 
 ## Configure Feishu access
 
-Before the first pull or write, configure Feishu app credentials for the CLI process:
+Before the first pull or write, copy the example environment file and fill in your Feishu app credentials:
 
 ```bash
-export APP_ID=...
-export APP_SECRET=...
-export FEISHU_HOST=https://open.feishu.cn
+cp .env.example .env
 ```
 
-The Feishu app must be able to read and write the target document. For environment files, auth checks, and permission notes, see [Configuration](/guide/configuration).
+```bash
+APP_ID=cli_xxx
+APP_SECRET=xxx
+FEISHU_HOST=https://open.feishu.cn
+```
+
+Then confirm the CLI can load the credentials:
+
+```bash
+npm exec -- md2feishu doctor auth --format json
+```
+
+The Feishu app also needs API permissions and access to the target document. See [Configuration](/guide/configuration) for the minimum permission list and resource access notes.
 
 ## Choose a workflow
 

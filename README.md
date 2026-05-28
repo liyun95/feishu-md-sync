@@ -50,15 +50,14 @@ npm exec -- md2feishu workflow show baseline-sync
 npm exec -- md2feishu --help
 ```
 
-Required environment variables for real Feishu calls:
+For real Feishu calls, copy the example environment file and fill in your app credentials:
 
 ```bash
-APP_ID=...
-APP_SECRET=...
-FEISHU_HOST=https://open.feishu.cn
+cp .env.example .env
+npm exec -- md2feishu doctor auth --format json
 ```
 
-Detailed CLI usage lives in [`packages/cli/README.md`](./packages/cli/README.md).
+Detailed CLI usage lives in [`packages/cli/README.md`](./packages/cli/README.md). Feishu app permissions are documented in the [Configuration guide](https://liyun95.github.io/feishu-md-sync/guide/configuration).
 
 ## Develop
 
