@@ -18,7 +18,7 @@ Install the Feishu workflow Codex skills from this repository into:
   ${CODEX_HOME:-$HOME/.codex}/skills
 
 Options:
-  --remove-legacy   Delete older local alias skills that are replaced by the workflow skills.
+  --remove-legacy   Migration only: delete older local alias skills after installing workflow skills.
 USAGE
       exit 0
       ;;

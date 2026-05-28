@@ -23,7 +23,7 @@ The current state is good enough for a team walkthrough and controlled dogfoodin
 | Markdown preflight | Done | Unsafe generated links are reported before writes. |
 | SDK reference authoring/release split | Done | `sdk-reference-authoring` and `sdk-reference-web-content-release` are separate workflows. |
 | Docs restructure | Done | Workflow docs and agent skills point to shared workflow recipes and safety gates. |
-| Legacy skills | Done | Old operation-specific skill pages are retained as compatibility aliases. |
+| Legacy skills | Done | Old operation-specific skill pages were removed from docs; migration cleanup is available through `scripts/install-codex-skills.sh --remove-legacy`. |
 | Harness expansion | Partial | Workflow tool registries exist. Non-`multisdk` graders are conservative placeholders. |
 
 ## Live Feishu Smoke Result

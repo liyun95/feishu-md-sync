@@ -11,5 +11,5 @@ md2feishu workflow show reviewed-section-sync --format json
 Install team skills from the repository root:
 
 ```bash
-scripts/install-codex-skills.sh --remove-legacy
+scripts/install-codex-skills.sh
 ```

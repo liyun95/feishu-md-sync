@@ -28,10 +28,12 @@ npm exec -- md2feishu --help
 For Codex users, install the workflow skills as the normal team entry point:
 
 ```bash
-scripts/install-codex-skills.sh --remove-legacy
+scripts/install-codex-skills.sh
 ```
 
 After this, users can ask Codex for the workflow by name instead of learning the underlying command sequence.
+
+Use `scripts/install-codex-skills.sh --remove-legacy` only when migrating a machine that previously installed the old alias skills.
 
 During development, the most reliable command form is:
 

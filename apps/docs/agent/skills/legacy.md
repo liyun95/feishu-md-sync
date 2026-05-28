@@ -11,4 +11,6 @@ These older operation-specific skills are replaced by workflow skills. Do not in
 | `sdk-reference-publisher` | `feishu-sdk-reference-authoring`; `feishu-sdk-reference-release` only after explicit human release intent |
 | `milvus-release-notes-workflow` | `feishu-release-notes` |
 
-Run `scripts/install-codex-skills.sh --remove-legacy` from the repository root to install the workflow skills and remove these aliases from the local Codex skill root.
+New users should install with `scripts/install-codex-skills.sh`.
+
+If a machine already has these aliases installed, run `scripts/install-codex-skills.sh --remove-legacy` once to install the workflow skills and remove the aliases from the local Codex skill root.

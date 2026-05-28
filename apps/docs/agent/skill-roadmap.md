@@ -21,7 +21,7 @@ md2feishu workflow show <workflow-id> --format json
 Install them with:
 
 ```bash
-scripts/install-codex-skills.sh --remove-legacy
+scripts/install-codex-skills.sh
 ```
 
 ## Legacy Skills
@@ -36,6 +36,12 @@ These operation-specific skills should not be installed for new team usage:
 - `milvus-release-notes-workflow`
 
 `sdk-source-verifier` remains useful as an auxiliary evidence-gathering skill; it is not a replacement for a Feishu workflow skill.
+
+For machines that already have the legacy aliases installed, run:
+
+```bash
+scripts/install-codex-skills.sh --remove-legacy
+```
 
 ## Boundaries
 

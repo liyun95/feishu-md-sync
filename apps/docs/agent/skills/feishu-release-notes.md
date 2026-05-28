@@ -11,5 +11,5 @@ md2feishu workflow show release-notes --format json
 Install team skills from the repository root:
 
 ```bash
-scripts/install-codex-skills.sh --remove-legacy
+scripts/install-codex-skills.sh
 ```

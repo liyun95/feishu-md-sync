@@ -9,7 +9,7 @@ The recommended team UX is Skill-first. Install this repository, build the CLI, 
 ```bash
 npm install
 npm run build
-scripts/install-codex-skills.sh --remove-legacy
+scripts/install-codex-skills.sh
 ```
 
 This installs:
@@ -24,6 +24,12 @@ This installs:
 After that, users can ask Codex to use the matching workflow skill instead of memorizing CLI commands. The skills call `md2feishu workflow show <workflow-id> --format json` and use the CLI registry as the source of truth.
 
 Early dogfooding can share one Feishu app credential set. Per-user app setup can be introduced later if write attribution or permission isolation becomes important.
+
+If this machine previously installed the older operation-specific aliases, run the migration cleanup once:
+
+```bash
+scripts/install-codex-skills.sh --remove-legacy
+```
 
 ## Repository-Local CLI
 

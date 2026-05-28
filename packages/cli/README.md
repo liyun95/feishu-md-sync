@@ -27,10 +27,12 @@ For team usage, install the workflow skills and let Codex call the CLI recipes:
 ```bash
 npm install
 npm run build
-scripts/install-codex-skills.sh --remove-legacy
+scripts/install-codex-skills.sh
 ```
 
 The skills live in `skills/<skill-name>/SKILL.md` and map one-to-one to first-class workflows. Team members can ask Codex to use `feishu-reviewed-section-sync`, `feishu-sdk-reference-authoring`, or another workflow skill without memorizing CLI commands.
+
+Use `scripts/install-codex-skills.sh --remove-legacy` only when migrating a machine that previously installed the old alias skills.
 
 ## Documentation
 
