@@ -1,17 +1,19 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout } from 'node:process';
 import type { Command } from 'commander';
 import { parseFeishuTarget } from '../../core/doc-id.js';
+import { hashSource } from '../../core/hash.js';
 import type { FeishuClient } from '../../feishu/client.js';
 import { createMarkdownEngine, type MarkdownEngine, type MarkdownEngineName } from '../../markdown/engine.js';
 import { applyPublishTransform, type PublishTransformOptions, type PublishTransformProfile } from '../../markdown/publish-transform.js';
 import { FeishuBlockConvertClient } from '../../services/feishu/block-convert-client.js';
 import { FeishuDocsContentClient } from '../../services/feishu/docs-content-client.js';
-import { readReceipt, receiptPath } from '../../receipts/receipt.js';
+import { readReceipt, receiptPath, writeReceipt, type SyncReceipt } from '../../receipts/receipt.js';
 import { unifiedDiff } from '../../sync/diff.js';
 import { buildMergeInstructions, defaultMergedPath, threeWayMerge } from '../../sync/merge.js';
-import { pullRemoteMarkdown } from '../../sync/pull.js';
+import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull.js';
 import { runSync, type SyncStrategy } from '../../sync/run-sync.js';
 import { getSyncStatus, type SyncStatusResult } from '../../sync/status.js';
 import type { CliContext } from '../context.js';
@@ -36,6 +38,8 @@ type SyncCommandOptions = BaseCommandOptions & {
 type PullCommandOptions = BaseCommandOptions & {
   output?: string;
   markdownEngine?: string;
+  overwrite?: boolean;
+  writeReceipt?: boolean;
 };
 
 type StatusCommandOptions = BaseCommandOptions & {
@@ -126,20 +130,42 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .description('export current Feishu docx content as best-effort Markdown')
     .argument('<feishu-doc>', 'Feishu docx ID or URL')
     .option('-o, --output <file>', 'write remote Markdown to a local file')
+    .option('--overwrite', 'allow pull to replace an existing output file')
+    .option('--write-receipt', 'write a local baseline receipt after exporting to --output')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .action(async (feishuDoc: string, opts: PullCommandOptions) => {
       const normalized = normalizePullOptions(program, opts);
+      if (normalized.writeReceipt && !normalized.output) {
+        throw new Error('--write-receipt requires --output <file>.');
+      }
+      if (normalized.output) {
+        await assertPullOutputWritable(normalized.output, normalized.overwrite === true);
+      }
       const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
       const documentId = await resolveDocumentId(client, feishuDoc);
-      const markdown = await pullRemoteMarkdown(client, documentId, createCliMarkdownEngine(client, normalized.markdownEngine));
+      const pulled = await pullRemoteMarkdownWithState(client, documentId, createCliMarkdownEngine(client, normalized.markdownEngine));
       if (normalized.output) {
-        await writeFile(normalized.output, markdown, 'utf8');
+        await writeFile(normalized.output, pulled.markdown, 'utf8');
         console.log(`wrote: ${normalized.output}`);
+        if (normalized.writeReceipt) {
+          const statePath = receiptPath(process.cwd(), normalized.output, documentId);
+          const receipt = await buildPullBaselineReceipt({
+            sourcePath: normalized.output,
+            sourceMarkdown: pulled.markdown,
+            documentId,
+            remoteHash: pulled.remoteHash,
+            remoteBlockCount: pulled.remoteBlockCount,
+            timestamp: new Date().toISOString()
+          });
+          await writeReceipt(statePath, receipt);
+          console.log(`receipt: ${statePath}`);
+          console.log('baseline: clean');
+        }
         return;
       }
-      stdout.write(markdown);
+      stdout.write(pulled.markdown);
     });
 
   program
@@ -251,6 +277,8 @@ function normalizePullOptions(program: Command, opts: PullCommandOptions): PullC
   return {
     ...base,
     output: optionFromArgv('--output') ?? optionFromArgv('-o') ?? commandOptionValue<string>(opts, 'output'),
+    overwrite: flagFromArgv('--overwrite') ?? commandOptionValue<boolean>(opts, 'overwrite'),
+    writeReceipt: flagFromArgv('--write-receipt') ?? commandOptionValue<boolean>(opts, 'writeReceipt'),
     markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? 'auto')
   };
 }
@@ -430,4 +458,59 @@ function printStatus(status: SyncStatusResult, format = 'pretty'): void {
   console.log(`source hash: ${status.sourceHash}`);
   console.log(`desired hash: ${status.desiredHash}`);
   console.log(`remote hash: ${status.currentRemoteHash}`);
+}
+
+export async function assertPullOutputWritable(outputPath: string, overwrite: boolean): Promise<void> {
+  try {
+    await readFile(outputPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+
+  if (!overwrite) {
+    throw new Error(
+      `Refusing to overwrite existing output without --overwrite: ${outputPath}\n` +
+      'Preview first with a separate *.remote.md output, review the diff, then rerun with --overwrite if replacement is intended.'
+    );
+  }
+}
+
+export type PullBaselineReceiptInput = {
+  sourcePath: string;
+  sourceMarkdown: string;
+  documentId: string;
+  remoteHash: string;
+  remoteBlockCount: number;
+  timestamp: string;
+};
+
+export async function buildPullBaselineReceipt(input: PullBaselineReceiptInput): Promise<SyncReceipt> {
+  return {
+    sourcePath: path.resolve(input.sourcePath),
+    sourceHash: hashSource(input.sourceMarkdown),
+    sourceSnapshot: input.sourceMarkdown,
+    feishuDocId: input.documentId,
+    feishuStateHash: input.remoteHash,
+    feishuMarkdownSnapshot: input.sourceMarkdown,
+    timestamp: input.timestamp,
+    blockCounts: {
+      source: input.remoteBlockCount,
+      feishuBefore: input.remoteBlockCount,
+      feishuAfter: input.remoteBlockCount
+    },
+    warnings: ['Receipt created by read-only baseline pull; no Feishu write was performed.'],
+    writeResult: {
+      mode: 'dry-run',
+      deleted: 0,
+      created: 0,
+      updated: 0,
+      skipped: true
+    },
+    verificationResult: {
+      ok: true,
+      expectedHash: input.remoteHash,
+      actualHash: input.remoteHash
+    }
+  };
 }

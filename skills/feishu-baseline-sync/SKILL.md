@@ -9,25 +9,20 @@ Use the CLI workflow registry as the source of truth. Do not reconstruct the com
 
 ## Local Output Policy
 
-Baseline sync is the answer when the user says the remote Feishu document changed and they want to sync it to local Markdown. It reads Feishu and writes a local Markdown file; it does not write anything back to Feishu.
+Baseline sync is the answer when the user says the remote Feishu document changed and they want to sync it to local Markdown. It reads Feishu and writes local files only; it does not write anything back to Feishu.
 
-The first UX decision is whether to create a new remote copy or update an existing local file.
+Always run `md2feishu workflow show baseline-sync --format json` first and follow the returned steps.
 
-Default to a new reviewable file when the user has not explicitly chosen an output path. Use a filename such as:
+When the target path does not exist, pull directly to that path with `--write-receipt`.
 
-```text
-<doc-name-or-token>.remote.md
-```
+When the target path already exists:
 
-or a temporary path under `/private/tmp` for one-off inspection. Do not overwrite an existing local Markdown file by default.
+1. Pull the remote document to a separate `*.remote.md` or `/private/tmp/*.remote.md` file.
+2. Compare the existing file and the remote copy with `diff -u`.
+3. Replace the existing file only when the user has already provided exact overwrite intent, or after the diff shows no local-only edits that need preservation.
+4. Use `--overwrite --write-receipt` for the final replacement.
 
-Only update an existing Markdown file in place when the user clearly says to update that file, or when all of these are true:
-
-- The user gave the exact output path.
-- The file is already understood to be the baseline for this Feishu document.
-- Local uncommitted edits or local-only changes have been checked or ruled out.
-
-If local edits may exist, pull to a separate `*.remote.md` file first and compare before replacing anything.
+Quote Feishu URLs in shell commands because wiki URLs often contain `?`.
 
 ## Required Discovery
 
@@ -49,11 +44,11 @@ Follow the returned steps.
 
 - This workflow is read-only for Feishu; do not write remote content.
 - Save the pulled Markdown to an explicit output path.
-- If the user does not specify whether to overwrite, choose a new `*.remote.md` or temporary output path.
-- Before overwriting an existing local Markdown file, verify that the user intended an in-place update.
+- If the user does not specify whether to overwrite, choose a new `*.remote.md` or temporary output path first.
+- Before overwriting an existing local Markdown file, verify that the user intended an in-place update and reviewed or ruled out local-only edits.
 - Prefer official-first Markdown export behavior when the installed CLI supports it.
-- After pulling, run status or diff before suggesting any write workflow.
+- After the final pull with `--write-receipt`, run status before suggesting any write workflow.
 
 ## Completion
 
-Finish only when the local Markdown baseline exists and the user knows which file was written. If a separate remote copy was created, tell the user how it relates to the previous local file and whether a comparison is still needed.
+Finish only when the local Markdown baseline exists and the user knows which file was written. If `md2feishu status` reports `no-receipt`, explain that the file exists but has not been registered as a sync baseline. If a separate remote copy was created, tell the user how it relates to the previous local file and whether a comparison is still needed.

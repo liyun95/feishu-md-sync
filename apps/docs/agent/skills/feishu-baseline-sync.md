@@ -12,9 +12,13 @@ md2feishu workflow show baseline-sync --format json
 
 Default behavior:
 
-- Create a separate `*.remote.md` or temporary file when the user has not explicitly approved overwriting an existing local Markdown file.
-- Refresh an existing local file only when the user provides that path and the overwrite is intentional.
+- Pull directly to a new target path with `--write-receipt`.
+- Create a separate `*.remote.md` or temporary file when the requested local Markdown file already exists.
+- Refresh an existing local file only after comparing the existing file with the remote copy and confirming the overwrite is intentional.
+- Use `--overwrite --write-receipt` for the final replacement.
 - Tell the user which local file was written before suggesting any later Feishu write workflow.
+
+After the final pull, expect `md2feishu status` to be clean when a baseline receipt was written. If status still reports `no-receipt`, explain that the local Markdown exists but has not been registered as a sync baseline.
 
 Install team skills from the repository root:
 
