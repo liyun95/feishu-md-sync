@@ -1,54 +1,48 @@
 # Quickstart
 
-`md2feishu` syncs one local Markdown file to one existing Feishu docx document.
+`md2feishu` is the CLI behind a set of Codex workflow skills for Feishu documentation work.
 
-The CLI is safe by default: commands run as dry-runs unless you pass `--write`.
+For normal team usage, install the workflow skills and ask Codex to run the workflow by task name. Use direct CLI commands when you are debugging, automating, or maintaining the tool.
 
-## Choose a workflow
-
-- Pull Feishu into Markdown: `md2feishu workflow show baseline-sync`
-- Publish one reviewed section: `md2feishu workflow show reviewed-section-sync`
-- Complete multi-SDK examples: `md2feishu workflow show multisdk-examples`
-- Author SDK reference changes on Feishu: `md2feishu workflow show sdk-reference-authoring`
-- Release audited SDK references to web-content: `md2feishu workflow show sdk-reference-web-content-release`
-- Audit release notes: `md2feishu workflow show release-notes`
-
-See [Workflows](/guide/workflows) for the shared workflow index.
-
-## Install Locally
+## Install the workflow skills
 
 From the repository root:
 
 ```bash
 npm install
 npm run build
-npm exec -- md2feishu --help
-```
-
-For Codex users, install the workflow skills as the normal team entry point:
-
-```bash
 scripts/install-codex-skills.sh
 ```
 
-After this, users can ask Codex for the workflow by name instead of learning the underlying command sequence.
+This installs:
+
+- `feishu-baseline-sync`
+- `feishu-reviewed-section-sync`
+- `feishu-multisdk-examples`
+- `feishu-sdk-reference-authoring`
+- `feishu-sdk-reference-release`
+- `feishu-release-notes`
+
+After installation, ask Codex to use the matching workflow skill instead of memorizing command sequences.
 
 Use `scripts/install-codex-skills.sh --remove-legacy` only when migrating a machine that previously installed the old alias skills.
 
-During development, the most reliable command form is:
+## Choose a workflow
 
-```bash
-npm exec -- md2feishu <command>
-```
+| Task | Skill | Workflow recipe |
+| --- | --- | --- |
+| Pull Feishu into Markdown before editing | `feishu-baseline-sync` | `md2feishu workflow show baseline-sync` |
+| Publish one reviewed section | `feishu-reviewed-section-sync` | `md2feishu workflow show reviewed-section-sync` |
+| Complete multi-SDK examples | `feishu-multisdk-examples` | `md2feishu workflow show multisdk-examples` |
+| Author SDK reference changes on Feishu | `feishu-sdk-reference-authoring` | `md2feishu workflow show sdk-reference-authoring` |
+| Release audited SDK references to `web-content` | `feishu-sdk-reference-release` | `md2feishu workflow show sdk-reference-web-content-release` |
+| Audit release notes | `feishu-release-notes` | `md2feishu workflow show release-notes` |
 
-After linking the package locally:
+See [Workflows](/guide/workflows) for the full workflow chooser.
 
-```bash
-npm link
-md2feishu --help
-```
+## Direct CLI fallback
 
-## Minimal Workflow
+Use direct CLI commands when you need to inspect command behavior or run automation without Codex.
 
 Set credentials:
 
