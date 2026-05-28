@@ -13,10 +13,6 @@ describe('workflow registry', () => {
     ]);
   });
 
-  it('keeps the old reviewed-section-sync workflow id as a compatibility alias', () => {
-    expect(getWorkflowRecipe('reviewed-section-sync')).toEqual(getWorkflowRecipe('section-sync'));
-  });
-
   it('gives concrete next commands for a baseline sync', () => {
     const recipe = getWorkflowRecipe('baseline-sync');
     expect(recipe.title).toBe('Pull Feishu to local Markdown baseline');

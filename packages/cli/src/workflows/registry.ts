@@ -105,8 +105,7 @@ export function listWorkflowRecipes(): WorkflowRecipe[] {
 }
 
 export function getWorkflowRecipe(id: WorkflowId | string): WorkflowRecipe {
-  const normalizedId = id === 'reviewed-section-sync' ? 'section-sync' : id;
-  const recipe = RECIPES.find((item) => item.id === normalizedId);
+  const recipe = RECIPES.find((item) => item.id === id);
   if (!recipe) throw new Error(`Unknown workflow ${id}. Run md2feishu workflow list.`);
   return recipe;
 }

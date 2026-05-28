@@ -1,7 +1,6 @@
 export type HarnessWorkflow =
   | 'baseline-sync'
   | 'section-sync'
-  | 'reviewed-section-sync'
   | 'multisdk-examples'
   | 'multisdk'
   | 'sdk-reference-authoring'

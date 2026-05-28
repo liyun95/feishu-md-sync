@@ -6,7 +6,6 @@ These older operation-specific skills are replaced by workflow skills. Do not in
 | --- | --- |
 | `feishu-markdown-pull` | `feishu-baseline-sync` |
 | `feishu-markdown-push` | `feishu-section-sync` for section-scoped Feishu writes; workflow registry for other sync cases |
-| `feishu-reviewed-section-sync` | `feishu-section-sync` |
 | `feishu-codeblock-writer` | `feishu-multisdk-examples` when completing SDK examples; low-level code-block operations only when explicitly requested |
 | `milvus-multisdk-example-sync` | `feishu-multisdk-examples` |
 | `sdk-reference-publisher` | `feishu-sdk-reference-authoring`; `feishu-sdk-reference-release` only after explicit human release intent |
