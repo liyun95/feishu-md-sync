@@ -106,10 +106,12 @@ Shows a best-effort diff between local Markdown and current Feishu content expor
 ## `pull`
 
 ```bash
-md2feishu pull <feishu-doc> --output feishu.remote.md
+md2feishu pull '<feishu-doc>' --output feishu.remote.md [--write-receipt]
 ```
 
 Exports current Feishu content as best-effort Markdown.
+
+`pull` refuses to replace an existing output file unless `--overwrite` is provided. Use `--write-receipt` when the pulled Markdown should become the local baseline for later `status`, `diff`, `merge`, or section sync work. A pull-created receipt records a read-only baseline; it does not mean Feishu was written.
 
 ## `merge`
 

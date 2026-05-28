@@ -54,7 +54,15 @@ The Feishu app also needs API permissions and document access. See the [Configur
 Pull the current Feishu document into Markdown:
 
 ```bash
-npm exec -- md2feishu pull DocToken --output feishu.remote.md
+npm exec -- md2feishu pull '<feishu-doc>' --output feishu.remote.md --write-receipt
+```
+
+Refresh an existing local file only after reviewing the remote copy:
+
+```bash
+npm exec -- md2feishu pull '<feishu-doc>' --output feishu.remote.md
+diff -u doc.md feishu.remote.md
+npm exec -- md2feishu pull '<feishu-doc>' --output doc.md --overwrite --write-receipt
 ```
 
 Dry-run a section update:

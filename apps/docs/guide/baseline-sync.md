@@ -28,6 +28,14 @@ This workflow writes a local Markdown baseline from the current Feishu document.
 
 If no exact output path is agreed, agents should create a separate review file such as `doc.remote.md` instead of overwriting an existing local Markdown file. Updating an existing file in place is appropriate only when you explicitly ask for that path to be refreshed and local-only edits have been checked or ruled out. In either case, the agent should tell you the written path before proposing any later Feishu write.
 
+## Existing local files
+
+If the requested output file already exists, the baseline workflow first writes a separate remote copy, compares it with the existing file, and only then refreshes the requested file with explicit overwrite intent. This prevents a remote pull from silently erasing local-only edits.
+
+## Baseline receipt
+
+The baseline workflow can write a local receipt after a successful pull. This receipt records the remote state that produced the Markdown file; it does not mean Feishu was written. With this receipt, `md2feishu status` can report a clean baseline immediately after pull instead of the noisy `no-receipt` state.
+
 ## Safety boundary
 
 Baseline sync is read-oriented. Any later Feishu write is a separate decision and should go through the workflow that matches the write target.

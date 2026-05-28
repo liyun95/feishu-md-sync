@@ -26,12 +26,14 @@ const RECIPES: WorkflowRecipe[] = [
   {
     id: 'baseline-sync',
     title: 'Pull Feishu to local Markdown baseline',
-    whenToUse: 'Start local iteration from current Feishu content.',
-    primaryArtifacts: ['local Markdown file', '.sync/feishu receipt after first successful write'],
+    whenToUse: 'Refresh local Markdown from current Feishu content before editing, comparison, or later section sync.',
+    primaryArtifacts: ['local Markdown file', '.sync/feishu baseline receipt'],
     steps: [
       { id: 'auth', purpose: 'Check credentials without printing secrets.', command: 'md2feishu doctor auth', writes: 'none', verifies: 'APP_ID and APP_SECRET are present.' },
-      { id: 'pull', purpose: 'Export current Feishu content.', command: 'md2feishu pull <feishu-doc> --output <doc>.remote.md', writes: 'local', verifies: 'The output file exists and is reviewable.' },
-      { id: 'status', purpose: 'Compare local Markdown with Feishu.', command: 'md2feishu status <doc>.remote.md <feishu-doc>', writes: 'none', verifies: 'Status is clean or clearly reports no receipt.' }
+      { id: 'preview-pull', purpose: 'Export current Feishu content to a reviewable remote copy first.', command: "md2feishu pull '<feishu-doc>' --output <doc>.remote.md", writes: 'local', verifies: 'The remote copy exists and is reviewable.' },
+      { id: 'review-diff', purpose: 'Compare the remote copy with any existing local baseline before replacement.', command: 'diff -u <existing-doc.md> <doc>.remote.md', writes: 'none', verifies: 'Diff is understood and scoped to expected remote edits.' },
+      { id: 'replace-local', purpose: 'Replace an existing local baseline only after explicit overwrite intent.', command: "md2feishu pull '<feishu-doc>' --output <existing-doc.md> --overwrite --write-receipt", writes: 'local', verifies: 'The requested local file and receipt are refreshed from Feishu.' },
+      { id: 'status', purpose: 'Confirm the refreshed file is the current baseline.', command: "md2feishu status <existing-doc.md> '<feishu-doc>'", writes: 'none', verifies: 'Status is clean, or any remaining mismatch is explained.' }
     ]
   },
   {

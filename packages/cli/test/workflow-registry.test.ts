@@ -13,11 +13,18 @@ describe('workflow registry', () => {
     ]);
   });
 
-  it('gives concrete next commands for a baseline sync', () => {
+  it('gives safe next commands for a baseline sync', () => {
     const recipe = getWorkflowRecipe('baseline-sync');
     expect(recipe.title).toBe('Pull Feishu to local Markdown baseline');
-    expect(recipe.steps[0].command).toBe('md2feishu doctor auth');
-    expect(recipe.steps.some((step) => step.command.includes('md2feishu pull'))).toBe(true);
+    expect(recipe.steps.map((step) => step.id)).toEqual([
+      'auth',
+      'preview-pull',
+      'review-diff',
+      'replace-local',
+      'status'
+    ]);
+    expect(recipe.steps[3].command).toContain('--overwrite');
+    expect(recipe.steps[3].command).toContain('--write-receipt');
   });
 
   it('keeps SDK reference authoring separate from web-content release', () => {
