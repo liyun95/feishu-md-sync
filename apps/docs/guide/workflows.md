@@ -9,7 +9,7 @@ md2feishu workflow show <workflow-id>
 
 | User task | Skill | Workflow ID | Writes to | Human approval point |
 | --- | --- | --- | --- | --- |
-| Pull a Feishu doc into local Markdown before editing | `feishu-baseline-sync` | `baseline-sync` | Local Markdown only | Before any later Feishu write |
+| Pull or refresh a remote Feishu doc into local Markdown | `feishu-baseline-sync` | `baseline-sync` | Local Markdown only | Before any later Feishu write |
 | Sync one local Markdown section back to Feishu | `feishu-section-sync` | `section-sync` | One Feishu section | Before `--write` |
 | Complete multi-language SDK examples | `feishu-multisdk-examples` | `multisdk-examples` | Feishu code blocks | Before applying validated snippets |
 | Write and audit SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | `sdk-reference-authoring` | Feishu docs and Bitable artifacts | Before Feishu apply |
@@ -21,7 +21,7 @@ md2feishu workflow show <workflow-id>
 Use the task name and the target document or task directory:
 
 ```text
-Use feishu-baseline-sync on this Feishu document and write the baseline Markdown locally.
+Use feishu-baseline-sync on this Feishu document and write a local remote-copy Markdown file for review.
 ```
 
 ```text
