@@ -20,6 +20,18 @@ npm exec -- md2feishu workflow show release-notes
 
 SDK reference authoring stops after Feishu write and audit. Moving audited reference docs into `web-content` is a separate human-triggered release workflow.
 
+## Codex Skill Setup
+
+For team usage, install the workflow skills and let Codex call the CLI recipes:
+
+```bash
+npm install
+npm run build
+scripts/install-codex-skills.sh --remove-legacy
+```
+
+The skills live in `skills/<skill-name>/SKILL.md` and map one-to-one to first-class workflows. Team members can ask Codex to use `feishu-reviewed-section-sync`, `feishu-sdk-reference-authoring`, or another workflow skill without memorizing CLI commands.
+
 ## Documentation
 
 Local docs:

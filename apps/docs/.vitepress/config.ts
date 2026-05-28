@@ -49,13 +49,7 @@ export default defineConfig({
           { text: 'Feishu SDK Reference Release', link: '/agent/skills/feishu-sdk-reference-release' },
           { text: 'Feishu Release Notes', link: '/agent/skills/feishu-release-notes' },
           { text: 'Legacy Skill Aliases', link: '/agent/skills/legacy' },
-          { text: 'Feishu Markdown Pull', link: '/agent/skills/feishu-markdown-pull' },
-          { text: 'Feishu Markdown Push', link: '/agent/skills/feishu-markdown-push' },
-          { text: 'Feishu Codeblock Writer', link: '/agent/skills/feishu-codeblock-writer' },
           { text: 'SDK Source Verifier', link: '/agent/skills/sdk-source-verifier' },
-          { text: 'SDK Reference Publisher', link: '/agent/skills/sdk-reference-publisher' },
-          { text: 'Milvus Multi-SDK Sync', link: '/agent/skills/milvus-multisdk-example-sync' },
-          { text: 'Milvus Release Notes Workflow', link: '/agent/skills/milvus-release-notes-workflow' },
           { text: 'Skill Roadmap', link: '/agent/skill-roadmap' }
         ]
       },

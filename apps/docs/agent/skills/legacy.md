@@ -1,6 +1,6 @@
 # Legacy Skill Aliases
 
-These older operation-specific skill pages are retained only as compatibility aliases. New agent work should use workflow skills.
+These older operation-specific skills are replaced by workflow skills. Do not install them for new team usage.
 
 | Legacy skill | Replacement workflow skill |
 | --- | --- |
@@ -10,3 +10,5 @@ These older operation-specific skill pages are retained only as compatibility al
 | `milvus-multisdk-example-sync` | `feishu-multisdk-examples` |
 | `sdk-reference-publisher` | `feishu-sdk-reference-authoring`; `feishu-sdk-reference-release` only after explicit human release intent |
 | `milvus-release-notes-workflow` | `feishu-release-notes` |
+
+Run `scripts/install-codex-skills.sh --remove-legacy` from the repository root to install the workflow skills and remove these aliases from the local Codex skill root.

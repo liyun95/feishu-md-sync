@@ -17,7 +17,7 @@ Each first-class workflow has a matching agent skill. The skill is responsible f
 
 The CLI remains the source of truth for execution. Skills must not duplicate command sequences manually when `workflow show` can provide them.
 
-Legacy operation-specific skills should redirect to workflow skills. Keep legacy pages only as compatibility aliases until external agent installations have migrated.
+The installable skill sources live under `skills/<skill-name>/SKILL.md`. Legacy operation-specific skills should be removed from local agent installations after migration.
 
 ## Read-Only Commands
 

@@ -17,4 +17,4 @@ Source locations:
 
 Output a support matrix with source paths or URLs, commit/tag, minimal API usage, and verification result or plan. For Go `client/v2@master`, run inside the Milvus source `client/` module when repo-local replacements are required.
 
-Do not write Feishu docs, Bitable records, or code blocks. Source scanning and historical release scripts remain in `/Users/liyun/sdk-doc-sync`; hand off approved write manifests to `sdk-reference-publisher`.
+Do not write Feishu docs, Bitable records, or code blocks. Hand off approved reference-writing evidence to `feishu-sdk-reference-authoring`; use `feishu-sdk-reference-release` only after explicit human release intent.

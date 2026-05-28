@@ -25,6 +25,14 @@ npm run build
 npm exec -- md2feishu --help
 ```
 
+For Codex users, install the workflow skills as the normal team entry point:
+
+```bash
+scripts/install-codex-skills.sh --remove-legacy
+```
+
+After this, users can ask Codex for the workflow by name instead of learning the underlying command sequence.
+
 During development, the most reliable command form is:
 
 ```bash
