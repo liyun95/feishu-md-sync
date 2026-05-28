@@ -10,6 +10,17 @@ The client reads document blocks and identifies the page block before comparing 
 
 The current patch planner uses no-op detection, named-section replacement, contiguous block replacement for small explainable edits, and whole-document replacement as the conservative fallback. After write, it reads the document again and verifies the resulting hash.
 
+## Block-level sync boundary
+
+Official Markdown export/import is used as a representation layer. The sync engine uses Docx block APIs for writes:
+
+- `GET /docx/v1/documents/:document_id/blocks`
+- `PATCH /docx/v1/documents/:document_id/blocks/batch_update`
+- `POST /docx/v1/documents/:document_id/blocks/:block_id/children`
+- `DELETE /docx/v1/documents/:document_id/blocks/:block_id/children/batch_delete`
+
+Do not treat Markdown convert as a sync engine. It does not provide remote block IDs or an edit script.
+
 ## Hashing
 
 Hashing normalizes Feishu block state so equivalent formatting noise does not create false remote-change conflicts.

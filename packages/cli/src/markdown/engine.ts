@@ -4,6 +4,8 @@ import type { FeishuBlock } from '../feishu/types.js';
 import { markdownToFeishuBlocks } from './blocks.js';
 import { feishuBlocksToMarkdown } from './from-blocks.js';
 import { normalizeFeishuBlockLinkUrls } from './links.js';
+import { normalizeOfficialMarkdownExport } from './official-normalize.js';
+import { assertMarkdownSourceSafeForLocalRenderer } from '../sync/preflight.js';
 
 export type MarkdownEngineName = 'local' | 'official' | 'auto';
 
@@ -60,7 +62,7 @@ async function exportMarkdown(
 
   try {
     return {
-      markdown: await official.getMarkdownContent(input.documentId),
+      markdown: normalizeOfficialMarkdownExport(await official.getMarkdownContent(input.documentId)),
       engine: 'official',
       warnings: []
     };
@@ -111,6 +113,7 @@ function localExport(input: MarkdownExportInput): { markdown: string; engine: 'l
 }
 
 function localImport(input: MarkdownImportInput): { blocks: FeishuBlock[]; engine: 'local'; warnings: string[] } {
+  assertMarkdownSourceSafeForLocalRenderer(input.markdown);
   return {
     blocks: markdownToFeishuBlocks(input.markdown),
     engine: 'local',

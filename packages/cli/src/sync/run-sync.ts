@@ -1,9 +1,10 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBlocks, hashSource } from '../core/hash.js';
-import type { FeishuBlock, FeishuDocClient } from '../feishu/types.js';
+import type { FeishuBlock, FeishuDocClient, WriteResult } from '../feishu/types.js';
 import { createMarkdownEngine, type MarkdownEngine } from '../markdown/engine.js';
 import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
+import { extractUniqueMarkdownSection } from '../markdown/section-extract.js';
 import { findActiveMultisdkTasks, formatActiveMultisdkTaskWarning } from '../multisdk/guard.js';
 import { readReceipt, receiptPath, type SyncReceipt, writeReceipt } from '../receipts/receipt.js';
 import { buildMarkdownPreflightReport, type MarkdownPreflightReport } from '../services/markdown/preflight.js';
@@ -13,6 +14,8 @@ import { defaultMergedPath, threeWayMerge } from './merge.js';
 import { applyPatch, planSmartPatch, type PatchPlan } from './patch.js';
 import { assertFeishuBlocksWritable } from './preflight.js';
 import { planSectionPatch } from './section.js';
+import { applyBlockLevelSectionPatch } from './block-level-apply.js';
+import { planBlockLevelSectionPatch, type BlockLevelSectionPatch } from './block-level-plan.js';
 
 export type SyncOptions = {
   sourcePath: string;
@@ -35,6 +38,7 @@ export type SyncRunResult = {
   mode: 'dry-run' | 'write';
   receiptPath: string;
   patchPlan: PatchPlan;
+  blockLevelSectionPatch?: BlockLevelSectionPatch | null;
   receipt: SyncReceipt;
   warnings: string[];
   receiptWritten: boolean;
@@ -139,13 +143,34 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     warnings.push('No previous receipt found; treating this as the first sync baseline.');
   }
 
-  const desiredImport = await markdownEngine.importMarkdown({ markdown: effectiveSourceContent });
+  const effectiveMarkdownForImport = options.section
+    ? extractUniqueMarkdownSection(effectiveSourceContent, options.section).markdown
+    : effectiveSourceContent;
+  const importEngine = options.section && markdownEngine.name === 'auto'
+    ? createMarkdownEngine({ mode: 'local' })
+    : markdownEngine;
+  if (options.section && markdownEngine.name === 'auto') {
+    warnings.push('Section sync used the local Markdown renderer for stable block-level planning; official Feishu export remains enabled for pull/readback.');
+  }
+  const desiredImport = await importEngine.importMarkdown({ markdown: effectiveMarkdownForImport });
   warnings.push(...desiredImport.warnings);
   const desiredBlocks = desiredImport.blocks;
   const sourceHash = hashSource(effectiveSourceContent);
   const sectionPatch = options.section ? planSectionPatch(currentChildren, desiredBlocks, options.section) : null;
   const patchPlan = sectionPatch?.patchPlan ?? planSmartPatch(currentChildren, desiredBlocks);
   const patchBlocks = sectionPatch?.replacementBlocks ?? replacementBlocksForPlan(patchPlan, desiredBlocks);
+  const blockLevelSectionPatch = options.section && sectionPatch
+    ? planBlockLevelSectionPatch({
+      remoteSectionBlocks: sectionPatch.remoteRange.blocks,
+      desiredSectionBlocks: sectionPatch.localRange.blocks,
+      parentBlockId: pageBlock.block_id,
+      remoteStartIndex: sectionPatch.remoteRange.startIndex
+    })
+    : null;
+  const expectedAfterChildren = blockLevelSectionPatch && sectionPatch
+    ? expectedChildrenForBlockLevelPatch(currentChildren, sectionPatch.localRange.blocks, blockLevelSectionPatch.operations)
+    : (sectionPatch?.expectedChildren ?? desiredBlocks);
+  const expectedAfterHash = hashBlocks(expectedAfterChildren);
   assertFeishuBlocksWritable(patchBlocks);
 
   if (conflict.reason === 'no-receipt' && mode === 'write' && currentChildren.length > 0 && !options.forceInitialOverwrite && !options.section) {
@@ -169,18 +194,42 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     }
   }
 
-  let writeResult = { deleted: 0, created: 0, skipped: patchPlan.operation === 'noop' };
+  let writeResult: WriteResult = { deleted: 0, created: 0, skipped: patchPlan.operation === 'noop' };
   let afterChildren = currentChildren;
   let afterHash = currentHash;
 
   if (mode === 'write') {
-    writeResult = await applyPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
+    if (blockLevelSectionPatch && sectionPatch) {
+      if (blockLevelSectionPatch.unsafeForWrite) {
+        throw new Error(
+          `Refusing unsafe block-level fallback write for section "${options.section}". ` +
+          `Fallback reason: ${blockLevelSectionPatch.fallbackReason}. Run dry-run and narrow the edit before writing.`
+        );
+      }
+      const blockLevelResult = await applyBlockLevelSectionPatch(client, options.documentId, {
+        remoteSectionBlocks: sectionPatch.remoteRange.blocks,
+        desiredSectionBlocks: sectionPatch.localRange.blocks,
+        remoteStartIndex: sectionPatch.remoteRange.startIndex,
+        operations: blockLevelSectionPatch.operations
+      });
+      writeResult = {
+        deleted: blockLevelResult.deleted,
+        created: blockLevelResult.created,
+        updated: blockLevelResult.updated,
+        skipped: blockLevelResult.updated === 0 && blockLevelResult.created === 0 && blockLevelResult.deleted === 0
+      };
+      warnings.push(blockLevelSectionPatch.fallbackReason
+        ? `Section sync used bounded block-level fallback: ${blockLevelSectionPatch.fallbackReason}.`
+        : 'Section sync used Feishu block-level patching.');
+    } else {
+      writeResult = await applyPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
+    }
     const readbackBlocks = await client.getDocumentBlocks(options.documentId);
     const readbackPage = findPageBlock(readbackBlocks, options.documentId);
     afterChildren = comparableDirectChildBlocks(readbackBlocks, readbackPage);
     afterHash = hashBlocks(afterChildren);
-    if (afterHash !== patchPlan.desiredHash) {
-      throw new Error(`Verification mismatch after write. Expected ${patchPlan.desiredHash}, got ${afterHash}.`);
+    if (afterHash !== expectedAfterHash) {
+      throw new Error(`Verification mismatch after write. Expected ${expectedAfterHash}, got ${afterHash}.`);
     }
     if (shouldWriteMergedSource) {
       await writeFile(absoluteSourcePath, effectiveSourceContent, 'utf8');
@@ -208,7 +257,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     blockCounts: {
       source: options.section ? patchPlan.createCount : desiredBlocks.length,
       feishuBefore: currentChildren.length,
-      feishuAfter: mode === 'write' ? afterChildren.length : currentChildren.length - patchPlan.deleteCount + patchPlan.createCount
+      feishuAfter: mode === 'write' ? afterChildren.length : expectedAfterChildren.length
     },
     warnings,
     writeResult: {
@@ -216,8 +265,8 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
       ...writeResult
     },
     verificationResult: {
-      ok: mode === 'dry-run' ? true : afterHash === patchPlan.desiredHash,
-      expectedHash: patchPlan.desiredHash,
+      ok: mode === 'dry-run' ? true : afterHash === expectedAfterHash,
+      expectedHash: expectedAfterHash,
       actualHash: mode === 'write' ? afterHash : patchPlan.currentHash
     }
   };
@@ -231,6 +280,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     mode,
     receiptPath: statePath,
     patchPlan,
+    blockLevelSectionPatch,
     receipt,
     warnings,
     receiptWritten,
@@ -266,4 +316,41 @@ function replacementBlocksForPlan(plan: PatchPlan, desiredBlocks: FeishuBlock[])
     throw new Error('Contiguous block patch plan is missing local range metadata.');
   }
   return desiredBlocks.slice(plan.localStartIndex, plan.localEndIndex);
+}
+
+function expectedChildrenForBlockLevelPatch(
+  currentChildren: FeishuBlock[],
+  desiredSectionBlocks: FeishuBlock[],
+  operations: BlockLevelSectionPatch['operations']
+): FeishuBlock[] {
+  let expected = currentChildren.slice();
+
+  const updates = operations.filter((operation) => operation.kind === 'update');
+  for (const operation of updates) {
+    expected[operation.remoteIndex] = desiredSectionBlocks[operation.desiredIndex];
+  }
+
+  const structural = operations.filter((operation) => operation.kind !== 'update');
+  for (const operation of structural) {
+    if (operation.kind === 'create') {
+      expected = [
+        ...expected.slice(0, operation.index),
+        ...operation.blocks,
+        ...expected.slice(operation.index)
+      ];
+    } else if (operation.kind === 'delete') {
+      expected = [
+        ...expected.slice(0, operation.startIndex),
+        ...expected.slice(operation.endIndex)
+      ];
+    } else {
+      expected = [
+        ...expected.slice(0, operation.startIndex),
+        ...operation.blocks,
+        ...expected.slice(operation.endIndex)
+      ];
+    }
+  }
+
+  return expected;
 }

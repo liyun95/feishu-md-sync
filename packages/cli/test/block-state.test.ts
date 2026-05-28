@@ -43,4 +43,21 @@ describe('block-state helpers', () => {
       { block_id: 'java', block_type: 14, code: { elements: [] } }
     ]);
   });
+
+  it('resolves source-synced container children for comparable blocks', () => {
+    const page = { block_id: 'page', block_type: 1, children: ['source'] };
+    const blocks = [
+      page,
+      { block_id: 'source', block_type: 49, children: ['python'] },
+      { block_id: 'python', block_type: 14, code: { elements: [] } }
+    ];
+
+    expect(comparableDirectChildBlocks(blocks, page)).toEqual([
+      {
+        block_id: 'source',
+        block_type: 49,
+        children: [{ block_id: 'python', block_type: 14, code: { elements: [] } }]
+      }
+    ]);
+  });
 });

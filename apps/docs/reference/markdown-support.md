@@ -19,6 +19,12 @@
 - Bold text
 - `==highlight==` markers
 
+## Official Feishu Markdown export
+
+When `--markdown-engine auto` can use Feishu's official Markdown export, `pull` normalizes Feishu's escaped Markdown before writing the local file. This prevents raw sequences such as `\.` or `\&\#39;` from being written back as visible text when the local renderer is used as a fallback.
+
+For `sync --section`, `auto` keeps official export/readback but uses the local renderer for the selected section's desired blocks. This avoids unsafe block ordering from Markdown convert while still writing through Feishu's native Docx block APIs.
+
 ## Known Limitations
 
 - Feishu to Markdown export is best-effort.

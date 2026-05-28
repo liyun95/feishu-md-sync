@@ -31,6 +31,19 @@ export function validateFeishuBlocksForWrite(blocks: FeishuBlock[]): FeishuPrefl
   return issues;
 }
 
+export function assertMarkdownSourceSafeForLocalRenderer(markdown: string): void {
+  const withoutCode = markdown.replace(/```[\s\S]*?```/g, '');
+  const escapedEntityCount = (withoutCode.match(/\\&(?:lt|gt|amp|quot|#34|#39);/g) ?? []).length;
+  const escapedPunctuationCount = (withoutCode.match(/\\[._\-()[\]{}]/g) ?? []).length;
+
+  if (escapedEntityCount >= 2 || escapedPunctuationCount >= 12) {
+    throw new Error(
+      'Refusing to render likely raw escaped Feishu Markdown with the local renderer. ' +
+      'Run pull again after official Markdown normalization, or use --markdown-engine official after dry-run safety checks pass.'
+    );
+  }
+}
+
 function visitValue(
   value: unknown,
   path: string,
