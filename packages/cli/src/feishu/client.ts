@@ -8,6 +8,13 @@ import type {
   FeishuDriveFile
 } from './types.js';
 import { FeishuTokenProvider } from './token.js';
+import { FeishuApiError } from '../services/feishu/errors.js';
+import { withFeishuRetry } from '../services/feishu/retry.js';
+import { FeishuBitableClient } from '../services/feishu/bitable-client.js';
+import { FeishuDocxClient } from '../services/feishu/docx-client.js';
+import { FeishuDriveClient } from '../services/feishu/drive-client.js';
+
+export { FeishuApiError } from '../services/feishu/errors.js';
 
 type FeishuResponse<T> = {
   code: number;
@@ -22,28 +29,24 @@ type ClientConfig = {
   timeoutMs?: number;
 };
 
-export class FeishuApiError extends Error {
-  constructor(
-    message: string,
-    readonly code?: number,
-    readonly status?: number
-  ) {
-    super(message);
-    this.name = 'FeishuApiError';
-  }
-}
-
 export class FeishuClient implements FeishuDocClient {
   private readonly host: string;
   private readonly tokenProvider: FeishuTokenProvider;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly docx: FeishuDocxClient;
+  private readonly drive: FeishuDriveClient;
+  private readonly bitable: FeishuBitableClient;
 
   constructor(config: ClientConfig = {}) {
     this.host = config.host ?? process.env.FEISHU_HOST ?? 'https://open.feishu.cn';
     this.tokenProvider = config.tokenProvider ?? new FeishuTokenProvider({ host: this.host });
     this.fetchImpl = config.fetchImpl ?? fetch;
     this.timeoutMs = config.timeoutMs ?? 20_000;
+    const request = this.request.bind(this);
+    this.docx = new FeishuDocxClient(request);
+    this.drive = new FeishuDriveClient(request);
+    this.bitable = new FeishuBitableClient(request);
   }
 
   async getDocumentBlocks(documentId: string): Promise<FeishuBlock[]> {
@@ -51,16 +54,7 @@ export class FeishuClient implements FeishuDocClient {
     let pageToken: string | undefined;
 
     do {
-      const params = new URLSearchParams({
-        page_size: '500',
-        document_revision_id: '-1'
-      });
-      if (pageToken) params.set('page_token', pageToken);
-
-      const data = await this.request<{ items?: FeishuBlock[]; has_more?: boolean; page_token?: string }>(
-        'GET',
-        `/open-apis/docx/v1/documents/${documentId}/blocks?${params.toString()}`
-      );
+      const data = await this.docx.getDocumentBlocksPage(documentId, pageToken);
       blocks.push(...(data.items ?? []));
       pageToken = data.has_more ? data.page_token : undefined;
     } while (pageToken);
@@ -87,11 +81,7 @@ export class FeishuClient implements FeishuDocClient {
   }
 
   async deleteChildren(documentId: string, parentBlockId: string, startIndex: number, endIndex: number): Promise<void> {
-    await this.request(
-      'DELETE',
-      `/open-apis/docx/v1/documents/${documentId}/blocks/${parentBlockId}/children/batch_delete`,
-      { start_index: startIndex, end_index: endIndex }
-    );
+    await this.docx.deleteChildren(documentId, parentBlockId, startIndex, endIndex);
   }
 
   async createChildren(
@@ -106,11 +96,21 @@ export class FeishuClient implements FeishuDocClient {
 
     for (const segment of segments) {
       const batch = segment.blocks.map(toCreateBlock);
-      const data = await this.request<{ children?: FeishuBlock[] }>(
-        'POST',
-        `/open-apis/docx/v1/documents/${documentId}/blocks/${parentBlockId}/children`,
-        createChildrenBody(batch, options.index === undefined ? undefined : options.index + created.length)
-      );
+      let data: { children?: FeishuBlock[] };
+      try {
+        data = await this.docx.createChildren(
+          documentId,
+          parentBlockId,
+          createChildrenBody(batch, options.index === undefined ? undefined : options.index + created.length)
+        );
+      } catch (error) {
+        throw enrichCreateChildrenError(error, {
+          parentBlockId,
+          startIndex: segment.startIndex,
+          totalCount: blocks.length,
+          batch
+        });
+      }
       const createdBatch = data.children ?? [];
       created.push(...createdBatch);
 
@@ -130,75 +130,37 @@ export class FeishuClient implements FeishuDocClient {
   async batchUpdateBlocks(documentId: string, requests: FeishuBlockUpdateRequest[]): Promise<FeishuBlock[]> {
     if (requests.length === 0) return [];
 
-    const data = await this.request<{ blocks?: FeishuBlock[] }>(
-      'PATCH',
-      `/open-apis/docx/v1/documents/${documentId}/blocks/batch_update`,
-      { requests }
-    );
+    const data = await this.docx.batchUpdateBlocks(documentId, requests);
 
     return data.blocks ?? [];
   }
 
   async listFolder(folderToken: string, type?: string): Promise<FeishuDriveFile[]> {
-    const params = new URLSearchParams({ folder_token: folderToken });
-    if (type) params.set('type', type);
-    const data = await this.request<{ files?: FeishuDriveFile[]; items?: FeishuDriveFile[] }>(
-      'GET',
-      `/open-apis/drive/v1/files?${params.toString()}`
-    );
-    return data.files ?? data.items ?? [];
+    return this.drive.listFolder(folderToken, type);
   }
 
   async createFolder(name: string, parentToken: string): Promise<FeishuDriveFile> {
-    const data = await this.request<{ file?: FeishuDriveFile }>(
-      'POST',
-      '/open-apis/drive/v1/files/create_folder',
-      { name, folder_token: parentToken }
-    );
-    return data.file ?? data;
+    return this.drive.createFolder(name, parentToken);
   }
 
   async copyFile(token: string, targetFolderToken: string, name?: string, type?: string): Promise<FeishuDriveFile> {
-    const data = await this.request<{ file?: FeishuDriveFile }>(
-      'POST',
-      `/open-apis/drive/v1/files/${token}/copy`,
-      { folder_token: targetFolderToken, name, type }
-    );
-    return data.file ?? {};
+    return this.drive.copyFile(token, targetFolderToken, name, type);
   }
 
   async moveFile(token: string, targetFolderToken: string, type?: string): Promise<FeishuDriveFile> {
-    const data = await this.request<{ file?: FeishuDriveFile }>(
-      'POST',
-      `/open-apis/drive/v1/files/${token}/move`,
-      { folder_token: targetFolderToken, type }
-    );
-    return data.file ?? data;
+    return this.drive.moveFile(token, targetFolderToken, type);
   }
 
   async createDocxDocument(title: string, folderToken: string): Promise<FeishuDriveFile> {
-    const data = await this.request<{ document?: FeishuDriveFile; file?: FeishuDriveFile }>(
-      'POST',
-      '/open-apis/docx/v1/documents',
-      { title, folder_token: folderToken }
-    );
-    return data.document ?? data.file ?? {};
+    return this.docx.createDocument(title, folderToken);
   }
 
   async listBitableTables(appToken: string): Promise<BitableTable[]> {
-    const data = await this.request<{ items?: BitableTable[] }>(
-      'GET',
-      `/open-apis/bitable/v1/apps/${appToken}/tables`
-    );
-    return data.items ?? [];
+    return this.bitable.listTables(appToken);
   }
 
   async listBitableFields(appToken: string, tableId: string): Promise<BitableField[]> {
-    const data = await this.request<{ items?: BitableField[] }>(
-      'GET',
-      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/fields`
-    );
-    return data.items ?? [];
+    return this.bitable.listFields(appToken, tableId);
   }
 
   async listBitableRecords(appToken: string, tableId: string): Promise<BitableRecord[]> {
@@ -206,12 +168,7 @@ export class FeishuClient implements FeishuDocClient {
     let pageToken: string | undefined;
 
     do {
-      const params = new URLSearchParams({ page_size: '500' });
-      if (pageToken) params.set('page_token', pageToken);
-      const data = await this.request<{ items?: BitableRecord[]; has_more?: boolean; page_token?: string }>(
-        'GET',
-        `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records?${params.toString()}`
-      );
+      const data = await this.bitable.listRecordsPage(appToken, tableId, pageToken);
       records.push(...(data.items ?? []));
       pageToken = data.has_more ? data.page_token : undefined;
     } while (pageToken);
@@ -224,12 +181,7 @@ export class FeishuClient implements FeishuDocClient {
     tableId: string,
     fields: Record<string, unknown>
   ): Promise<BitableRecord> {
-    const data = await this.request<{ record?: BitableRecord }>(
-      'POST',
-      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`,
-      { fields }
-    );
-    return data.record ?? {};
+    return this.bitable.createRecord(appToken, tableId, fields);
   }
 
   async updateBitableRecord(
@@ -238,12 +190,7 @@ export class FeishuClient implements FeishuDocClient {
     recordId: string,
     fields: Record<string, unknown>
   ): Promise<BitableRecord> {
-    const data = await this.request<{ record?: BitableRecord }>(
-      'PUT',
-      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`,
-      { fields }
-    );
-    return data.record ?? {};
+    return this.bitable.updateRecord(appToken, tableId, recordId, fields);
   }
 
   private async populateTableCells(documentId: string, sourceBlock: FeishuBlock, createdBlock: FeishuBlock): Promise<void> {
@@ -258,11 +205,7 @@ export class FeishuClient implements FeishuDocClient {
       const cellContent = sourceCells[index];
       if (typeof cellId !== 'string' || !isBlockLike(cellContent)) continue;
 
-      await this.request(
-        'POST',
-        `/open-apis/docx/v1/documents/${documentId}/blocks/${cellId}/children`,
-        { children: [toCreateBlock(cellContent)], index: 0 }
-      );
+      await this.docx.createChildren(documentId, cellId, { children: [toCreateBlock(cellContent)], index: 0 });
     }
   }
 
@@ -278,7 +221,11 @@ export class FeishuClient implements FeishuDocClient {
     await this.createChildren(documentId, createdBlock.block_id, childBlocks);
   }
 
-  private async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+  async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+    return withFeishuRetry(() => this.requestOnce<T>(method, path, body), { sleep: async () => undefined });
+  }
+
+  private async requestOnce<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.tokenProvider.token();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -298,15 +245,14 @@ export class FeishuClient implements FeishuDocClient {
       if (!response.ok || payload.code !== 0) {
         throw new FeishuApiError(
           `Feishu API ${method} ${path} failed: ${payload.msg ?? response.statusText}`,
-          payload.code,
-          response.status
+          { code: payload.code, status: response.status, method, path, responseBody: payload }
         );
       }
 
       return (payload.data ?? {}) as T;
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
-        throw new FeishuApiError(`Feishu API ${method} ${path} timed out after ${this.timeoutMs}ms`);
+        throw new FeishuApiError(`Feishu API ${method} ${path} timed out after ${this.timeoutMs}ms`, { method, path });
       }
       throw error;
     } finally {
@@ -341,32 +287,81 @@ function createChildrenBody(children: FeishuBlock[], index?: number): { children
   return index === undefined ? { children } : { children, index };
 }
 
-function segmentBlocksForCreate(blocks: FeishuBlock[], batchSize: number): Array<{ blocks: FeishuBlock[] }> {
-  const segments: Array<{ blocks: FeishuBlock[] }> = [];
+function segmentBlocksForCreate(blocks: FeishuBlock[], batchSize: number): Array<{ startIndex: number; blocks: FeishuBlock[] }> {
+  const segments: Array<{ startIndex: number; blocks: FeishuBlock[] }> = [];
   let batch: FeishuBlock[] = [];
+  let batchStartIndex = 0;
 
-  for (const block of blocks) {
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
     if (block.block_type === 31) {
       if (batch.length > 0) {
-        segments.push({ blocks: batch });
+        segments.push({ startIndex: batchStartIndex, blocks: batch });
         batch = [];
       }
-      segments.push({ blocks: [block] });
+      segments.push({ startIndex: index, blocks: [block] });
+      batchStartIndex = index + 1;
       continue;
     }
 
+    if (batch.length === 0) {
+      batchStartIndex = index;
+    }
     batch.push(block);
     if (batch.length === batchSize) {
-      segments.push({ blocks: batch });
+      segments.push({ startIndex: batchStartIndex, blocks: batch });
       batch = [];
+      batchStartIndex = index + 1;
     }
   }
 
   if (batch.length > 0) {
-    segments.push({ blocks: batch });
+    segments.push({ startIndex: batchStartIndex, blocks: batch });
   }
 
   return segments;
+}
+
+function enrichCreateChildrenError(
+  error: unknown,
+  input: {
+    parentBlockId: string;
+    startIndex: number;
+    totalCount: number;
+    batch: FeishuBlock[];
+  }
+): Error {
+  const originalMessage = error instanceof Error ? error.message : String(error);
+  const rangeStart = input.startIndex + 1;
+  const rangeEnd = input.startIndex + input.batch.length;
+  const firstBlock = input.batch[0];
+  const blockType = firstBlock?.block_type ?? 'unknown';
+  const message =
+    `Failed to create Feishu child blocks ${rangeStart}-${rangeEnd} under parent block ${input.parentBlockId} ` +
+    `(${input.totalCount} total replacement blocks). First generated block type: ${blockType}. ` +
+    `First generated block preview: ${jsonPreview(firstBlock)}. Feishu error: ${originalMessage}`;
+
+  if (error instanceof FeishuApiError) {
+    return new FeishuApiError(message, {
+      code: error.code,
+      status: error.status,
+      method: error.method,
+      path: error.path,
+      requestId: error.requestId,
+      responseBody: error.responseBody
+    });
+  }
+  return new Error(message);
+}
+
+function jsonPreview(value: unknown): string {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = '[unserializable block]';
+  }
+  return serialized.length > 1200 ? `${serialized.slice(0, 1200)}...` : serialized;
 }
 
 function isBlockLike(value: unknown): value is FeishuBlock {
@@ -385,6 +380,6 @@ async function parseJson(response: Response): Promise<FeishuResponse<unknown>> {
   try {
     return await response.json() as FeishuResponse<unknown>;
   } catch {
-    throw new FeishuApiError(`Feishu API returned malformed JSON.`, undefined, response.status);
+    throw new FeishuApiError(`Feishu API returned malformed JSON.`, { status: response.status });
   }
 }

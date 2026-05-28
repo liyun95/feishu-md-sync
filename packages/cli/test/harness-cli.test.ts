@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest';
 const execFileAsync = promisify(execFile);
 
 describe('harness CLI commands', () => {
+  it('documents the section sync option', async () => {
+    const result = await runCli(['sync', '--help']);
+
+    expect(result.stdout).toContain('--section <heading>');
+  });
+
   it('prints the multisdk tools registry as JSON', async () => {
     const result = await runCli(['harness', 'tools', '--workflow', 'multisdk', '--format', 'json']);
     const parsed = JSON.parse(result.stdout);
@@ -12,6 +18,14 @@ describe('harness CLI commands', () => {
     expect(parsed.kind).toBe('feishu-harness-tools');
     expect(parsed.workflow).toBe('multisdk');
     expect(parsed.tools.map((tool: { name: string }) => tool.name)).toContain('multisdk apply');
+  });
+
+  it('prints the SDK reference release tools registry as JSON', async () => {
+    const result = await runCli(['harness', 'tools', '--workflow', 'sdk-reference-web-content-release', '--format', 'json']);
+    const parsed = JSON.parse(result.stdout);
+
+    expect(parsed.workflow).toBe('sdk-reference-web-content-release');
+    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toContain('reference export');
   });
 
   it('prints the environment report without secrets', async () => {

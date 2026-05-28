@@ -2,28 +2,8 @@ import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MULTISDK_LANGUAGES, type MultisdkLanguage } from '../multisdk/language.js';
 import { loadMultisdkTask, type MultisdkTask } from '../multisdk/task.js';
+import type { HarnessGrade, HarnessGradeCheck, HarnessGradeSeverity } from './task.js';
 import { readHarnessTraceEvents, type HarnessTraceEvent } from './trace.js';
-
-export type HarnessGradeResult = 'passed' | 'blocked' | 'incomplete';
-export type HarnessGradeSeverity = 'passed' | 'blocked' | 'incomplete';
-
-export type HarnessGradeCheck = {
-  id: string;
-  passed: boolean;
-  severity: HarnessGradeSeverity;
-  message: string;
-};
-
-export type HarnessGrade = {
-  kind: 'feishu-harness-grade';
-  version: 1;
-  workflow: 'multisdk';
-  taskDir: string;
-  generatedAt: string;
-  result: HarnessGradeResult;
-  checks: HarnessGradeCheck[];
-  nextCommands: string[];
-};
 
 export type GradeMultisdkTaskOptions = {
   taskDir: string;

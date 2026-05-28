@@ -1,4 +1,5 @@
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
+import { normalizeMarkdownLinkUrl } from './links.js';
 
 const LANGUAGE_BY_ID: Record<number, string> = {
   7: 'bash',
@@ -67,7 +68,7 @@ function renderElements(elements: TextElement[] = []): string {
     let text = run.content;
     if (style.inline_code) text = `\`${text}\``;
     if (style.bold) text = `**${text}**`;
-    if (style.link?.url) text = `[${text}](${style.link.url})`;
+    if (style.link?.url) text = `[${text}](${normalizeMarkdownLinkUrl(style.link.url)})`;
     return text;
   }).join('');
 }

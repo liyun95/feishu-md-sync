@@ -2,10 +2,12 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBlocks, hashSource } from '../core/hash.js';
 import type { FeishuDocClient } from '../feishu/types.js';
-import { markdownToFeishuBlocks } from '../markdown/blocks.js';
+import { createMarkdownEngine, type MarkdownEngine } from '../markdown/engine.js';
 import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
 import { readReceipt, receiptPath, type SyncReceipt } from '../receipts/receipt.js';
+import { buildMarkdownPreflightReport, type MarkdownPreflightReport } from '../services/markdown/preflight.js';
 import { comparableDirectChildBlocks, findPageBlock } from './block-state.js';
+import { assertFeishuBlocksWritable } from './preflight.js';
 
 export type SyncState =
   | 'no-receipt'
@@ -32,6 +34,7 @@ export type SyncStatusOptions = {
   documentId: string;
   rootDir?: string;
   publishTransform?: PublishTransformOptions;
+  markdownEngine?: MarkdownEngine;
 };
 
 export type SyncStatusResult = StatusResult & {
@@ -39,6 +42,7 @@ export type SyncStatusResult = StatusResult & {
   sourceHash: string;
   desiredHash: string;
   currentRemoteHash: string;
+  preflight: MarkdownPreflightReport;
 };
 
 export function computeSyncStatus(input: StatusInput): StatusResult {
@@ -70,7 +74,10 @@ export async function getSyncStatus(client: FeishuDocClient, options: SyncStatus
   const absoluteSourcePath = path.resolve(options.sourcePath);
   const sourceContent = await readFile(absoluteSourcePath, 'utf8');
   const transformedSourceContent = applyPublishTransform(sourceContent, options.publishTransform);
-  const desiredBlocks = markdownToFeishuBlocks(transformedSourceContent);
+  const preflight = buildMarkdownPreflightReport(transformedSourceContent);
+  const engine = options.markdownEngine ?? createMarkdownEngine({ mode: 'local' });
+  const desiredBlocks = (await engine.importMarkdown({ markdown: transformedSourceContent })).blocks;
+  assertFeishuBlocksWritable(desiredBlocks);
   const sourceHash = hashSource(transformedSourceContent);
   const desiredHash = hashBlocks(desiredBlocks);
   const existingBlocks = await client.getDocumentBlocks(options.documentId);
@@ -85,6 +92,7 @@ export async function getSyncStatus(client: FeishuDocClient, options: SyncStatus
     receiptPath: statePath,
     sourceHash,
     desiredHash,
-    currentRemoteHash
+    currentRemoteHash,
+    preflight
   };
 }

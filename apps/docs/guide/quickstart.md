@@ -4,6 +4,17 @@
 
 The CLI is safe by default: commands run as dry-runs unless you pass `--write`.
 
+## Choose a workflow
+
+- Pull Feishu into Markdown: `md2feishu workflow show baseline-sync`
+- Publish one reviewed section: `md2feishu workflow show reviewed-section-sync`
+- Complete multi-SDK examples: `md2feishu workflow show multisdk-examples`
+- Author SDK reference changes on Feishu: `md2feishu workflow show sdk-reference-authoring`
+- Release audited SDK references to web-content: `md2feishu workflow show sdk-reference-web-content-release`
+- Audit release notes: `md2feishu workflow show release-notes`
+
+See [Workflows](/guide/workflows) for the shared workflow index.
+
 ## Install Locally
 
 From the repository root:

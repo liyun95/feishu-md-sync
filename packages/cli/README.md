@@ -4,6 +4,22 @@ Standalone TypeScript CLI for syncing one local Markdown file to one existing Fe
 
 The command defaults to dry-run. A write requires `--write` plus either confirmation or `--yes`.
 
+## Workflow-First Usage
+
+Start from workflow recipes instead of memorizing command combinations:
+
+```bash
+npm exec -- md2feishu workflow list
+npm exec -- md2feishu workflow show baseline-sync
+npm exec -- md2feishu workflow show reviewed-section-sync
+npm exec -- md2feishu workflow show multisdk-examples
+npm exec -- md2feishu workflow show sdk-reference-authoring
+npm exec -- md2feishu workflow show sdk-reference-web-content-release
+npm exec -- md2feishu workflow show release-notes
+```
+
+SDK reference authoring stops after Feishu write and audit. Moving audited reference docs into `web-content` is a separate human-triggered release workflow.
+
 ## Documentation
 
 Local docs:
@@ -21,6 +37,7 @@ npm run docs:build
 The documentation site lives in `apps/docs/` and includes:
 
 - CLI quickstart and conflict workflows
+- Shared workflow recipes
 - Agent Guide for non-interactive use
 - Command and strategy reference
 - Maintainer architecture notes
@@ -40,6 +57,7 @@ npm exec -- md2feishu diff ./doc.md DocToken
 npm exec -- md2feishu pull DocToken --output feishu.remote.md
 npm exec -- md2feishu merge ./doc.md DocToken
 npm exec -- md2feishu sync ./doc.md DocToken --write --yes --strategy merge
+npm exec -- md2feishu sync ./doc.md DocToken --section "Index type overview" --write --yes
 npm exec -- md2feishu doctor auth --format json
 ```
 
@@ -84,6 +102,7 @@ npm exec -- md2feishu ./doc.md DocToken
 # Explicit sync command
 npm exec -- md2feishu sync ./doc.md DocToken
 npm exec -- md2feishu sync ./doc.md DocToken --write --yes
+npm exec -- md2feishu sync ./doc.md DocToken --section "Heading text"
 
 # Inspect local/remote state without writing
 npm exec -- md2feishu status ./doc.md DocToken
@@ -161,6 +180,21 @@ The first write to a non-empty existing Feishu document also requires:
 This protects the common dangerous case: the remote document already has content, but no local receipt exists yet.
 
 If a matching active `multisdk` task exists under `runs/`, whole-document `sync --write` is also refused unless `--force-whole-document-sync` is provided. Prefer `md2feishu multisdk diff` and `md2feishu multisdk apply` for language-scoped code-block changes.
+
+## Section-level sync
+
+Use section-level sync when a reviewed Feishu document should receive only one local Markdown heading section:
+
+```bash
+npm exec -- md2feishu sync ./doc.md DocToken --section "Index type overview"
+npm exec -- md2feishu sync ./doc.md DocToken --section "Index type overview" --write --yes
+```
+
+The section title must match exactly after whitespace normalization. The CLI replaces the matching heading block and its section body, ending before the next same-level or higher-level heading. Blocks outside that section remain unchanged in Feishu.
+
+Section writes use the current Feishu document as the base and do not update the whole-document receipt. This keeps later whole-document `status` checks honest when local Markdown and Feishu still differ outside the synced section.
+
+Section sync fails before writing if the heading is missing, duplicated locally or remotely, or the generated replacement section contains unsupported Feishu block data such as local-only link URLs.
 
 After a language lane has been written, reviewed, and audited in Feishu, use `multisdk land-docs` to patch only that language's reviewed code blocks into a downstream docs repo:
 

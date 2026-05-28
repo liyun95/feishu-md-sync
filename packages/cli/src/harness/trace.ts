@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
-import type { HarnessWorkflow } from './tools.js';
+import type { HarnessWorkflow } from './task.js';
 
 export type HarnessTraceStatus = 'passed' | 'failed';
 

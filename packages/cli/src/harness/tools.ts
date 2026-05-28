@@ -1,4 +1,4 @@
-export type HarnessWorkflow = 'multisdk';
+import type { HarnessWorkflow } from './task.js';
 
 export type HarnessToolMode =
   | 'read'
@@ -185,9 +185,93 @@ const MULTISDK_TOOLS: HarnessTool[] = [
   }
 ];
 
+const BASELINE_SYNC_TOOLS: HarnessTool[] = [
+  readTool('doctor auth', 'Report auth env loading without printing secrets.'),
+  localTool('pull', ['feishuDoc'], ['output markdown when --output is provided'], 'Export current Feishu content as best-effort Markdown.'),
+  readTool('status', 'Show local/remote sync status without writing.', ['markdownFile', 'feishuDoc']),
+  readTool('diff', 'Show a best-effort diff between local Markdown and current Feishu content.', ['markdownFile', 'feishuDoc']),
+  localTool('merge', ['markdownFile', 'feishuDoc'], ['merged Markdown file'], 'Merge local Markdown with current Feishu content into a .merged.md file.')
+];
+
+const REVIEWED_SECTION_SYNC_TOOLS: HarnessTool[] = [
+  readTool('diff', 'Inspect local versus remote changes.', ['markdownFile', 'feishuDoc']),
+  {
+    name: 'sync --section',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['markdownFile', 'feishuDoc', '--section'],
+    writeRequires: ['--write', 'unique local and remote section heading', 'reviewed dry-run plan'],
+    artifacts: ['dry-run/write output', 'readback verification'],
+    description: 'Dry-run or write one named section while preserving content outside the section.'
+  }
+];
+
+const REFERENCE_AUTHORING_TOOLS: HarnessTool[] = [
+  readTool('reference preflight', 'Check SDK source freshness before planning reference changes.', ['--sdk', '--repo', '--version-line']),
+  localTool('reference plan', ['--impact', '--out'], ['reference manifest'], 'Convert an approved impact matrix into a publish manifest.'),
+  {
+    name: 'reference apply',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: false,
+    writesExternalRepos: false,
+    requires: ['--manifest'],
+    writeRequires: ['--write', 'approved manifest', 'dry-run review'],
+    artifacts: ['Feishu apply report'],
+    description: 'Dry-run or apply SDK reference writes to Feishu Drive and Bitable.'
+  },
+  readTool('reference audit', 'Read back resources referenced by a publish manifest.', ['--manifest'])
+];
+
+const REFERENCE_RELEASE_TOOLS: HarnessTool[] = [
+  readTool('reference audit', 'Re-check Feishu state before release.', ['--manifest']),
+  {
+    name: 'reference export',
+    mode: 'external-dry-run-or-write',
+    writesFeishu: false,
+    writesLocalFiles: true,
+    writesExternalRepos: true,
+    requires: ['--manifest', '--web-content-repo', '--manual'],
+    writeRequires: ['explicit human release intent', 'passing reference audit'],
+    artifacts: ['web-content export report', 'changed files'],
+    description: 'Export audited Feishu SDK references into a web-content checkout.'
+  }
+];
+
+const RELEASE_NOTES_TOOLS: HarnessTool[] = [
+  localTool('release init', ['--release-line', '--version', '--release-doc', '--milvus-docs', '--out'], ['task.json'], 'Initialize a release notes task.'),
+  localTool('release pull', ['taskDir'], ['feishu/release-notes.remote.md'], 'Pull Feishu release notes into the task snapshot.'),
+  localTool('release scan-sdk-tags', ['taskDir'], ['sdk/tags.json'], 'Scan SDK tag sources and write a version matrix.'),
+  localTool('release audit', ['taskDir'], ['audit/report.md', 'audit/report.json'], 'Audit release notes, Variables.json, and user-doc links.'),
+  localTool('release approve', ['taskDir', '--by'], ['approval hash in task.json'], 'Approve the current release report hash.'),
+  {
+    name: 'release apply',
+    mode: 'external-dry-run-or-write',
+    writesFeishu: false,
+    writesLocalFiles: true,
+    writesExternalRepos: true,
+    requires: ['taskDir'],
+    writeRequires: ['--write', 'passing current audit', 'approval hash matches current report'],
+    artifacts: ['local Milvus docs changes'],
+    description: 'Dry-run or write approved release docs changes.'
+  }
+];
+
+const SUPPORTED_WORKFLOWS: HarnessWorkflow[] = [
+  'baseline-sync',
+  'reviewed-section-sync',
+  'multisdk-examples',
+  'multisdk',
+  'sdk-reference-authoring',
+  'sdk-reference-web-content-release',
+  'release-notes'
+];
+
 export function parseHarnessWorkflow(value: string): HarnessWorkflow {
-  if (value === 'multisdk') return value;
-  throw new Error(`Unsupported harness workflow ${value || '(empty)'}. Expected multisdk.`);
+  if (SUPPORTED_WORKFLOWS.includes(value as HarnessWorkflow)) return value as HarnessWorkflow;
+  throw new Error(`Unsupported harness workflow ${value || '(empty)'}. Expected one of: ${SUPPORTED_WORKFLOWS.join(', ')}.`);
 }
 
 export function getHarnessTools(workflow: HarnessWorkflow): HarnessToolsRegistry {
@@ -195,6 +279,43 @@ export function getHarnessTools(workflow: HarnessWorkflow): HarnessToolsRegistry
     kind: 'feishu-harness-tools',
     version: 1,
     workflow,
-    tools: workflow === 'multisdk' ? MULTISDK_TOOLS : []
+    tools: toolsForWorkflow(workflow)
+  };
+}
+
+function toolsForWorkflow(workflow: HarnessWorkflow): HarnessTool[] {
+  if (workflow === 'multisdk' || workflow === 'multisdk-examples') return MULTISDK_TOOLS;
+  if (workflow === 'baseline-sync') return BASELINE_SYNC_TOOLS;
+  if (workflow === 'reviewed-section-sync') return REVIEWED_SECTION_SYNC_TOOLS;
+  if (workflow === 'sdk-reference-authoring') return REFERENCE_AUTHORING_TOOLS;
+  if (workflow === 'sdk-reference-web-content-release') return REFERENCE_RELEASE_TOOLS;
+  return RELEASE_NOTES_TOOLS;
+}
+
+function readTool(name: string, description: string, requires: string[] = []): HarnessTool {
+  return {
+    name,
+    mode: 'read',
+    writesFeishu: false,
+    writesLocalFiles: false,
+    writesExternalRepos: false,
+    requires,
+    writeRequires: [],
+    artifacts: [],
+    description
+  };
+}
+
+function localTool(name: string, requires: string[], artifacts: string[], description: string): HarnessTool {
+  return {
+    name,
+    mode: 'write-task',
+    writesFeishu: false,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires,
+    writeRequires: [],
+    artifacts,
+    description
   };
 }

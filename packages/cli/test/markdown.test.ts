@@ -122,6 +122,42 @@ The name of the database.
     expect(markdown).toBe('[Choose the Right Analyzer for Your Use Case](https://zilliverse.feishu.cn/wiki/Pulhw06e5iXJTFkidFXcGbylnod)\n');
   });
 
+  it('normalizes percent-encoded absolute link URLs when parsing Markdown', () => {
+    const elements = parseInlineText(
+      '[Compatibility reference](https%3A%2F%2Fzilliverse.feishu.cn%2Fdocx%2FFGsmd1p9soQi5uxMqIccCvJpnFf%23anchor)'
+    );
+
+    expect(elements[0].text_run?.text_element_style.link?.url).toBe(
+      'https://zilliverse.feishu.cn/docx/FGsmd1p9soQi5uxMqIccCvJpnFf#anchor'
+    );
+  });
+
+  it('normalizes percent-encoded absolute link URLs when rendering Markdown', () => {
+    const markdown = feishuBlocksToMarkdown([
+      {
+        block_type: 2,
+        text: {
+          elements: [
+            {
+              text_run: {
+                content: 'Compatibility reference',
+                text_element_style: {
+                  link: {
+                    url: 'https%3A%2F%2Fzilliverse.feishu.cn%2Fdocx%2FFGsmd1p9soQi5uxMqIccCvJpnFf%23anchor'
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]);
+
+    expect(markdown).toBe(
+      '[Compatibility reference](https://zilliverse.feishu.cn/docx/FGsmd1p9soQi5uxMqIccCvJpnFf#anchor)\n'
+    );
+  });
+
   it.each([
     ['python', 49],
     ['java', 29],

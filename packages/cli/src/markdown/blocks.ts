@@ -1,4 +1,5 @@
 import type { FeishuBlock, TextElement, TextElementStyle } from '../feishu/types.js';
+import { normalizeMarkdownLinkUrl } from './links.js';
 
 const BLOCK_TYPES = {
   text: 2,
@@ -178,7 +179,7 @@ export function parseInlineText(text: string): TextElement[] {
     } else {
       const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (link) {
-        elements.push(textElement(link[1], { link: { url: link[2] } }));
+        elements.push(textElement(link[1], { link: { url: normalizeMarkdownLinkUrl(link[2]) } }));
       }
     }
 

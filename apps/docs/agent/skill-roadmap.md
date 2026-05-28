@@ -1,8 +1,15 @@
 # Skill Roadmap
 
-V1 splits Feishu documentation work into focused skills instead of one generic sync skill.
+V2 maps each first-class workflow to one obvious skill. The CLI workflow registry remains the source of truth:
+
+```bash
+md2feishu workflow list
+md2feishu workflow show <workflow-id> --format json
+```
 
 ## V1 Skills
+
+These operation-specific skills are becoming legacy aliases:
 
 - `feishu-markdown-pull`: export Feishu docx/wiki documents into local Markdown.
 - `feishu-markdown-push`: publish local Markdown to existing Feishu documents with receipts, status, diff, merge, and sync.
@@ -15,6 +22,15 @@ V1 splits Feishu documentation work into focused skills instead of one generic s
 ## Boundaries
 
 Feishu Markdown pull must not write Feishu. Feishu Markdown push must not patch individual code blocks. Code-block writes must not judge SDK correctness. SDK source verification must not write Feishu. SDK reference publishing must not scan source or infer doc impact. Milvus multi-SDK workflow composes source verification and code-block writing. Milvus release notes workflow composes the release CLI, Feishu Markdown pull/push, and SDK source verification; it must not bypass approval before local `--write`.
+
+## Workflow Skill Pressure Scenarios
+
+- Baseline sync: agent must not write to Feishu after pull unless the user switches workflows.
+- Reviewed section sync: agent must not use whole-document write when the user asks for one section.
+- Multi-SDK examples: agent must not write unverified snippets.
+- SDK reference authoring: agent must stop after Feishu audit and must not export to `web-content`.
+- SDK reference release: agent must require explicit human release intent before touching `web-content`.
+- Release notes: agent must not apply local docs changes without approval of the current report hash.
 
 ## Follow-Ups
 
