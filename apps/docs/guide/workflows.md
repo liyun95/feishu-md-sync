@@ -9,8 +9,8 @@ md2feishu workflow show <workflow-id>
 
 | User task | Skill | Workflow ID | Writes to | Human approval point |
 | --- | --- | --- | --- | --- |
-| Pull a Feishu doc into local Markdown before editing | `feishu-baseline-sync` | `baseline-sync` | Local Markdown only | Before any later Feishu write |
-| Publish one reviewed section back to Feishu | `feishu-reviewed-section-sync` | `reviewed-section-sync` | One Feishu section | Before `--write` |
+| Pull or refresh a remote Feishu doc into local Markdown | `feishu-baseline-sync` | `baseline-sync` | Local Markdown only | Before any later Feishu write |
+| Sync one local Markdown section back to Feishu | `feishu-section-sync` | `section-sync` | One Feishu section | Before `--write` |
 | Complete multi-language SDK examples | `feishu-multisdk-examples` | `multisdk-examples` | Feishu code blocks | Before applying validated snippets |
 | Write and audit SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | `sdk-reference-authoring` | Feishu docs and Bitable artifacts | Before Feishu apply |
 | Release audited SDK reference docs to `web-content` | `feishu-sdk-reference-release` | `sdk-reference-web-content-release` | External `web-content` checkout | At workflow start; this is a separate human-triggered release |
@@ -21,11 +21,11 @@ md2feishu workflow show <workflow-id>
 Use the task name and the target document or task directory:
 
 ```text
-Use feishu-baseline-sync on this Feishu document and write the baseline Markdown locally.
+Use feishu-baseline-sync on this Feishu document and write a local remote-copy Markdown file for review.
 ```
 
 ```text
-Use feishu-reviewed-section-sync to update only the reviewed section named "Index type overview".
+Use feishu-section-sync to update only the section named "Index type overview" from my local Markdown.
 ```
 
 ```text
@@ -42,7 +42,7 @@ The CLI recipe is still available when you need exact commands:
 
 ```bash
 md2feishu workflow show baseline-sync
-md2feishu workflow show reviewed-section-sync
+md2feishu workflow show section-sync
 md2feishu workflow show multisdk-examples
 md2feishu workflow show sdk-reference-authoring
 md2feishu workflow show sdk-reference-web-content-release

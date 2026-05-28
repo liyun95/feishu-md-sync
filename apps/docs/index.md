@@ -30,7 +30,7 @@ features:
 | I want to... | Start with |
 | --- | --- |
 | Pull a Feishu doc into local Markdown before editing | [Baseline Sync](/guide/baseline-sync) |
-| Update one reviewed section without rewriting the whole doc | [Reviewed Section Sync](/guide/section-sync) |
+| Sync one local Markdown section without rewriting the whole doc | [Section Sync](/guide/section-sync) |
 | Complete Java, JavaScript, Go, or REST examples from a Python source example | [Multi-SDK Examples](/guide/multisdk-workflow) |
 | Write and audit SDK reference changes in Feishu | [SDK Reference Authoring](/guide/sdk-reference-workflow) |
 | Release audited SDK reference content into `web-content` | [SDK Reference Release](/guide/sdk-reference-release-workflow) |

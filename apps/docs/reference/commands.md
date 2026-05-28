@@ -54,7 +54,7 @@ The `milvus` publish profile strips frontmatter, drops a first H1 when it duplic
 
 If `runs/**/task.json` contains an active `multisdk` task for the same Feishu document, `sync --write` fails closed by default. Use `multisdk apply <task-dir> --language <lang>` for code-block patches. Use `--force-whole-document-sync` only when the intended operation is a whole-document write.
 
-Section sync is for reviewed Feishu documents where only one local heading section should be published:
+Section sync is for updating one named Feishu section from local Markdown while preserving the rest of the remote document:
 
 ```bash
 md2feishu sync ./doc.md DocToken --section "Index type overview"

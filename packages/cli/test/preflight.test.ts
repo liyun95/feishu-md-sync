@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FeishuBlock } from '../src/feishu/types.js';
-import { assertFeishuBlocksWritable, validateFeishuBlocksForWrite } from '../src/sync/preflight.js';
+import { assertFeishuBlocksWritable, assertMarkdownSourceSafeForLocalRenderer, validateFeishuBlocksForWrite } from '../src/sync/preflight.js';
 
 describe('Feishu block preflight', () => {
   it('accepts absolute http and https link URLs', () => {
@@ -92,5 +92,22 @@ describe('Feishu block preflight', () => {
       path: 'children[0].text.elements[0].text_run.text_element_style.link.url',
       url: '../schema.md'
     });
+  });
+});
+
+describe('Markdown source preflight', () => {
+  it('rejects likely raw official Feishu escaped Markdown before local rendering', () => {
+    const markdown = [
+      '## FAQ',
+      '',
+      'Start with `AUTOINDEX`\\. It covers data\\&\\#39;s cardinality\\.',
+      'Use \\&lt;include target=\\&\\#34;milvus\\&\\#34;\\&gt;Milvus\\&lt;/include\\&gt;.'
+    ].join('\n');
+
+    expect(() => assertMarkdownSourceSafeForLocalRenderer(markdown)).toThrow(/escaped Feishu Markdown/);
+  });
+
+  it('allows ordinary Markdown with a small number of intentional escapes', () => {
+    expect(() => assertMarkdownSourceSafeForLocalRenderer('Use \\*literal stars\\* here.\n')).not.toThrow();
   });
 });

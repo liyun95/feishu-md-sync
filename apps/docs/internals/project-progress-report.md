@@ -65,12 +65,12 @@ md2feishu workflow show baseline-sync
 md2feishu pull "$DOC" --markdown-engine auto --output doc.remote.md
 ```
 
-### Reviewed Section Sync
+### Section Sync
 
 Use this when a writer edited one section locally and wants to preserve Feishu review edits elsewhere.
 
 ```bash
-md2feishu workflow show reviewed-section-sync
+md2feishu workflow show section-sync
 md2feishu sync doc.md "$DOC" --section "Heading"
 md2feishu sync doc.md "$DOC" --section "Heading" --write -y
 ```

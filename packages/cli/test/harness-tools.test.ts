@@ -37,6 +37,7 @@ describe('harness tools registry', () => {
   });
 
   it('parses supported workflows and rejects unsupported workflows', () => {
+    expect(parseHarnessWorkflow('section-sync')).toBe('section-sync');
     expect(parseHarnessWorkflow('multisdk')).toBe('multisdk');
     expect(() => parseHarnessWorkflow('release')).toThrow(/Unsupported harness workflow release/);
     expect(() => parseHarnessWorkflow('')).toThrow(/Unsupported harness workflow/);

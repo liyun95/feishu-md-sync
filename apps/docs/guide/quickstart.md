@@ -2,11 +2,18 @@
 
 `md2feishu` is the CLI behind a set of Codex workflow skills for Feishu documentation work.
 
-For normal team usage, install the workflow skills and ask Codex to run the workflow by task name. Use direct CLI commands when you are debugging, automating, or maintaining the tool.
+For normal team usage, install the workflow skills and ask Codex to run the workflow by task name. The CLI stays available when you need exact command control for debugging, automation, or maintenance.
 
-## Install the workflow skills
+## Get the repository
 
-From the repository root:
+Clone the repo and install from its root:
+
+```bash
+git clone https://github.com/liyun95/feishu-md-sync.git
+cd feishu-md-sync
+```
+
+## Install workflow skills
 
 ```bash
 npm install
@@ -14,43 +21,57 @@ npm run build
 scripts/install-codex-skills.sh
 ```
 
-This installs:
+This installs the workflow skills used by Codex:
 
-- `feishu-baseline-sync`
-- `feishu-reviewed-section-sync`
-- `feishu-multisdk-examples`
-- `feishu-sdk-reference-authoring`
-- `feishu-sdk-reference-release`
-- `feishu-release-notes`
+| Skill | What it is for |
+| --- | --- |
+| [`feishu-baseline-sync`](/agent/skills/feishu-baseline-sync) | Pull a remote Feishu document into local Markdown before editing. |
+| [`feishu-section-sync`](/agent/skills/feishu-section-sync) | Sync one named local Markdown section back to the matching Feishu section. |
+| [`feishu-multisdk-examples`](/agent/skills/feishu-multisdk-examples) | Complete and validate Java, JavaScript, Go, or REST examples from a source example. |
+| [`feishu-sdk-reference-authoring`](/agent/skills/feishu-sdk-reference-authoring) | Write and audit SDK reference changes in Feishu. |
+| [`feishu-sdk-reference-release`](/agent/skills/feishu-sdk-reference-release) | Release audited SDK reference content into `web-content` after a human starts release. |
+| [`feishu-release-notes`](/agent/skills/feishu-release-notes) | Audit release notes and apply approved local docs changes. |
 
 After installation, ask Codex to use the matching workflow skill instead of memorizing command sequences.
 
-Use `scripts/install-codex-skills.sh --remove-legacy` only when migrating a machine that previously installed the old alias skills.
+## Configure Feishu access
+
+Before the first pull or write, copy the example environment file and fill in your Feishu app credentials:
+
+```bash
+cp .env.example .env
+```
+
+```bash
+APP_ID=cli_xxx
+APP_SECRET=xxx
+FEISHU_HOST=https://open.feishu.cn
+```
+
+Then confirm the CLI can load the credentials:
+
+```bash
+npm exec -- md2feishu doctor auth --format json
+```
+
+The Feishu app also needs API permissions and access to the target document. See [Configuration](/guide/configuration) for the minimum permission list and resource access notes.
 
 ## Choose a workflow
 
-| Task | Skill | Workflow recipe |
+| When you need to... | Use this skill | What the workflow does |
 | --- | --- | --- |
-| Pull Feishu into Markdown before editing | `feishu-baseline-sync` | `md2feishu workflow show baseline-sync` |
-| Publish one reviewed section | `feishu-reviewed-section-sync` | `md2feishu workflow show reviewed-section-sync` |
-| Complete multi-SDK examples | `feishu-multisdk-examples` | `md2feishu workflow show multisdk-examples` |
-| Author SDK reference changes on Feishu | `feishu-sdk-reference-authoring` | `md2feishu workflow show sdk-reference-authoring` |
-| Release audited SDK references to `web-content` | `feishu-sdk-reference-release` | `md2feishu workflow show sdk-reference-web-content-release` |
-| Audit release notes | `feishu-release-notes` | `md2feishu workflow show release-notes` |
+| Pull a remote Feishu document into local Markdown before making edits | `feishu-baseline-sync` | Exports the current Feishu content to a local baseline file. It does not write back to Feishu. |
+| Sync one local Markdown section back to the remote Feishu document | `feishu-section-sync` | Replaces one uniquely named section after a dry-run and approval. Content outside that section is preserved. |
+| Complete missing SDK examples across languages | `feishu-multisdk-examples` | Generates, validates, and applies language-scoped code-block updates for selected SDKs. |
+| Write SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | Plans, writes, and audits Feishu reference content. It stops after the Feishu audit. |
+| Move audited SDK reference content into `web-content` | `feishu-sdk-reference-release` | Starts only after a human asks for release, then prepares the external docs repository handoff. |
+| Audit release notes before docs apply | `feishu-release-notes` | Checks SDK tags, Variables usage, and user-doc links before applying approved local docs changes. |
 
-See [Workflows](/guide/workflows) for the full workflow chooser.
+See [Workflows](/guide/workflows) for the full workflow chooser and exact approval points.
 
 ## Direct CLI fallback
 
 Use direct CLI commands when you need to inspect command behavior or run automation without Codex.
-
-Set credentials:
-
-```bash
-export APP_ID=...
-export APP_SECRET=...
-export FEISHU_HOST=https://open.feishu.cn
-```
 
 Run a dry-run:
 

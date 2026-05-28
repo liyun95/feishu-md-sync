@@ -2,7 +2,7 @@ import type { HarnessGrade } from '../../harness/task.js';
 
 export async function gradeSyncTask(input: {
   taskDir: string;
-  workflow: 'baseline-sync' | 'reviewed-section-sync';
+  workflow: 'baseline-sync' | 'section-sync';
 }): Promise<HarnessGrade> {
   return {
     kind: 'feishu-harness-grade',

@@ -5,7 +5,7 @@ describe('workflow registry', () => {
   it('lists user-story oriented workflows', () => {
     expect(listWorkflowRecipes().map((recipe) => recipe.id)).toEqual([
       'baseline-sync',
-      'reviewed-section-sync',
+      'section-sync',
       'multisdk-examples',
       'sdk-reference-authoring',
       'sdk-reference-web-content-release',

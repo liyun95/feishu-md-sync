@@ -19,6 +19,7 @@ export type SyncReceipt = {
     mode: 'dry-run' | 'write';
     deleted: number;
     created: number;
+    updated?: number;
     skipped: boolean;
   };
   verificationResult: {

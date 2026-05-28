@@ -2,11 +2,11 @@
 
 ## Use this when
 
-Use this workflow when you need to pull current Feishu content into local Markdown before editing, comparing, or preparing a later reviewed write.
+Use this workflow when the remote Feishu document changed and you need to pull or refresh that content into local Markdown before editing, comparing, or preparing a later write.
 
 ## Do not use this when
 
-Do not use this workflow when you already have reviewed local changes that should be written back to Feishu. Use [Reviewed Section Sync](/guide/section-sync) for one reviewed section, or inspect the direct CLI reference for advanced whole-document sync cases.
+Do not use this workflow when you already have local changes that should be written back to Feishu. Use [Section Sync](/guide/section-sync) for one named section, or inspect the direct CLI reference for advanced whole-document sync cases.
 
 ## Skill
 
@@ -25,6 +25,8 @@ md2feishu workflow show baseline-sync
 ## What changes
 
 This workflow writes a local Markdown baseline from the current Feishu document. It does not write to Feishu.
+
+If no exact output path is agreed, agents should create a separate review file such as `doc.remote.md` instead of overwriting an existing local Markdown file. Updating an existing file in place is appropriate only when you explicitly ask for that path to be refreshed and local-only edits have been checked or ruled out. In either case, the agent should tell you the written path before proposing any later Feishu write.
 
 ## Safety boundary
 

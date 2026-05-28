@@ -28,7 +28,7 @@ export default defineConfig({
         items: [
           { text: 'Choose a Workflow', link: '/guide/workflows' },
           { text: 'Baseline Sync', link: '/guide/baseline-sync' },
-          { text: 'Reviewed Section Sync', link: '/guide/section-sync' },
+          { text: 'Section Sync', link: '/guide/section-sync' },
           { text: 'Multi-SDK Examples', link: '/guide/multisdk-workflow' },
           { text: 'SDK Reference Authoring', link: '/guide/sdk-reference-workflow' },
           { text: 'SDK Reference Release', link: '/guide/sdk-reference-release-workflow' },

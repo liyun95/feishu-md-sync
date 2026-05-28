@@ -367,31 +367,55 @@ function printResult(result: Awaited<ReturnType<typeof runSync>>, format = 'pret
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  console.log(`${result.mode}: ${result.patchPlan.operation}`);
-  console.log(`source blocks: ${result.receipt.blockCounts.source}`);
-  console.log(`feishu blocks: ${result.receipt.blockCounts.feishuBefore} -> ${result.receipt.blockCounts.feishuAfter}`);
-  console.log(`desired hash: ${result.patchPlan.desiredHash}`);
-  if (result.patchPlan.section) {
-    const section = result.patchPlan.section;
-    console.log(`section: ${section.title}`);
-    console.log(`section range: remote ${section.remoteStartIndex}-${section.remoteEndIndex}, local ${section.localStartIndex}-${section.localEndIndex}`);
-  }
-  if (result.patchPlan.operation === 'replace-contiguous-blocks') {
-    console.log(`remote range: ${result.patchPlan.remoteStartIndex}..${result.patchPlan.remoteEndIndex}`);
-    console.log(`local range: ${result.patchPlan.localStartIndex}..${result.patchPlan.localEndIndex}`);
-  }
-  if (result.patchPlan.operation !== 'noop') {
-    console.log(`will delete: ${result.patchPlan.deleteCount}`);
-    console.log(`will create: ${result.patchPlan.createCount}`);
-  }
-
-  if (result.mode === 'write' && result.receiptWritten) {
-    console.log(`receipt: ${result.receiptPath}`);
+  for (const line of syncResultSummaryLines(result)) {
+    console.log(line);
   }
 
   for (const warning of result.warnings) {
     console.warn(`warning: ${warning}`);
   }
+}
+
+export function syncResultSummaryLines(result: Awaited<ReturnType<typeof runSync>>): string[] {
+  const lines = [
+    `${result.mode}: ${result.patchPlan.operation}`,
+    `source blocks: ${result.receipt.blockCounts.source}`,
+    `feishu blocks: ${result.receipt.blockCounts.feishuBefore} -> ${result.receipt.blockCounts.feishuAfter}`,
+    `desired hash: ${result.patchPlan.desiredHash}`
+  ];
+
+  if (result.patchPlan.section) {
+    const section = result.patchPlan.section;
+    lines.push(`section: ${section.title}`);
+    lines.push(`section range: remote ${section.remoteStartIndex}-${section.remoteEndIndex}, local ${section.localStartIndex}-${section.localEndIndex}`);
+  }
+  if (result.blockLevelSectionPatch) {
+    const operations = result.blockLevelSectionPatch.operations;
+    lines.push('patch mode: block-level');
+    lines.push(`block updates: ${operations.filter((operation) => operation.kind === 'update').length}`);
+    lines.push(`block creates: ${operations.filter((operation) => operation.kind === 'create').length}`);
+    lines.push(`block deletes: ${operations.filter((operation) => operation.kind === 'delete').length}`);
+    if (result.blockLevelSectionPatch.fallbackReason) {
+      lines.push(`block fallback: ${result.blockLevelSectionPatch.fallbackReason}`);
+    }
+    if (result.blockLevelSectionPatch.unsafeForWrite) {
+      lines.push('block fallback write: unsafe');
+    }
+  }
+  if (result.patchPlan.operation === 'replace-contiguous-blocks') {
+    lines.push(`remote range: ${result.patchPlan.remoteStartIndex}..${result.patchPlan.remoteEndIndex}`);
+    lines.push(`local range: ${result.patchPlan.localStartIndex}..${result.patchPlan.localEndIndex}`);
+  }
+  if (result.patchPlan.operation !== 'noop') {
+    lines.push(`will delete: ${result.patchPlan.deleteCount}`);
+    lines.push(`will create: ${result.patchPlan.createCount}`);
+  }
+
+  if (result.mode === 'write' && result.receiptWritten) {
+    lines.push(`receipt: ${result.receiptPath}`);
+  }
+
+  return lines;
 }
 
 function printStatus(status: SyncStatusResult, format = 'pretty'): void {

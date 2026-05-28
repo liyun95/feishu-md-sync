@@ -54,7 +54,16 @@ function renderBlock(block: FeishuBlock): string {
     return renderCallout(block);
   }
 
+  if (block.block_type === 49) {
+    return renderSourceSynced(block);
+  }
+
   return `<!-- unsupported Feishu block_type ${block.block_type} omitted by pull -->`;
+}
+
+function renderSourceSynced(block: FeishuBlock): string {
+  const children = Array.isArray(block.children) ? block.children.filter(isBlock) : [];
+  return children.map(renderBlock).filter((part) => part.trim() !== '').join('\n\n');
 }
 
 function renderElements(elements: TextElement[] = []): string {

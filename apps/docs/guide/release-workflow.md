@@ -6,7 +6,7 @@ Use this workflow when Milvus release notes from Feishu need SDK tag checks, Var
 
 ## Do not use this when
 
-Do not use this workflow for SDK reference authoring or general Feishu section updates. Use the SDK reference workflows or reviewed section sync instead.
+Do not use this workflow for SDK reference authoring or general Feishu section updates. Use the SDK reference workflows or section sync instead.
 
 ## Skill
 

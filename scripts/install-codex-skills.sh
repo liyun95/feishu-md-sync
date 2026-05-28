@@ -31,7 +31,7 @@ done
 
 workflow_skills=(
   feishu-baseline-sync
-  feishu-reviewed-section-sync
+  feishu-section-sync
   feishu-multisdk-examples
   feishu-sdk-reference-authoring
   feishu-sdk-reference-release

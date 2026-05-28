@@ -193,7 +193,7 @@ const BASELINE_SYNC_TOOLS: HarnessTool[] = [
   localTool('merge', ['markdownFile', 'feishuDoc'], ['merged Markdown file'], 'Merge local Markdown with current Feishu content into a .merged.md file.')
 ];
 
-const REVIEWED_SECTION_SYNC_TOOLS: HarnessTool[] = [
+const SECTION_SYNC_TOOLS: HarnessTool[] = [
   readTool('diff', 'Inspect local versus remote changes.', ['markdownFile', 'feishuDoc']),
   {
     name: 'sync --section',
@@ -202,7 +202,7 @@ const REVIEWED_SECTION_SYNC_TOOLS: HarnessTool[] = [
     writesLocalFiles: true,
     writesExternalRepos: false,
     requires: ['markdownFile', 'feishuDoc', '--section'],
-    writeRequires: ['--write', 'unique local and remote section heading', 'reviewed dry-run plan'],
+    writeRequires: ['--write', 'unique local and remote section heading', 'approved dry-run plan'],
     artifacts: ['dry-run/write output', 'readback verification'],
     description: 'Dry-run or write one named section while preserving content outside the section.'
   }
@@ -261,7 +261,7 @@ const RELEASE_NOTES_TOOLS: HarnessTool[] = [
 
 const SUPPORTED_WORKFLOWS: HarnessWorkflow[] = [
   'baseline-sync',
-  'reviewed-section-sync',
+  'section-sync',
   'multisdk-examples',
   'multisdk',
   'sdk-reference-authoring',
@@ -286,7 +286,7 @@ export function getHarnessTools(workflow: HarnessWorkflow): HarnessToolsRegistry
 function toolsForWorkflow(workflow: HarnessWorkflow): HarnessTool[] {
   if (workflow === 'multisdk' || workflow === 'multisdk-examples') return MULTISDK_TOOLS;
   if (workflow === 'baseline-sync') return BASELINE_SYNC_TOOLS;
-  if (workflow === 'reviewed-section-sync') return REVIEWED_SECTION_SYNC_TOOLS;
+  if (workflow === 'section-sync') return SECTION_SYNC_TOOLS;
   if (workflow === 'sdk-reference-authoring') return REFERENCE_AUTHORING_TOOLS;
   if (workflow === 'sdk-reference-web-content-release') return REFERENCE_RELEASE_TOOLS;
   return RELEASE_NOTES_TOOLS;

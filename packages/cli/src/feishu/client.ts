@@ -262,7 +262,7 @@ export class FeishuClient implements FeishuDocClient {
 }
 
 function stripInlineChildren(block: FeishuBlock): FeishuBlock {
-  const { children: _children, ...rest } = block;
+  const { block_id: _blockId, children: _children, parent_id: _parentId, ...rest } = block;
   return rest;
 }
 

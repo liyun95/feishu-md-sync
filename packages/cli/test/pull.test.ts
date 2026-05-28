@@ -48,6 +48,19 @@ describe('feishuBlocksToMarkdown', () => {
 
     expect(markdown).toBe(':::note\n**Behavior change** in `AUTOINDEX`\n:::\n');
   });
+
+  it('renders resolved source-synced containers as their child blocks', () => {
+    const markdown = feishuBlocksToMarkdown([
+      {
+        block_type: 49,
+        children: [
+          { block_type: 14, code: { elements: [run('print("ok")')], style: { language: 49 } } }
+        ]
+      }
+    ]);
+
+    expect(markdown).toBe('```python\nprint("ok")\n```\n');
+  });
 });
 
 function run(content: string, style: Partial<NonNullable<TextElement['text_run']>['text_element_style']> = {}): TextElement {

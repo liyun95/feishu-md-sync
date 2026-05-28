@@ -51,6 +51,7 @@ export type FeishuBlockUpdateRequest = {
 export type WriteResult = {
   deleted: number;
   created: number;
+  updated?: number;
   skipped: boolean;
 };
 
@@ -93,4 +94,5 @@ export interface FeishuDocClient {
     blocks: FeishuBlock[],
     options?: { index?: number }
   ): Promise<FeishuBlock[]>;
+  batchUpdateBlocks?(documentId: string, requests: FeishuBlockUpdateRequest[]): Promise<FeishuBlock[]>;
 }
