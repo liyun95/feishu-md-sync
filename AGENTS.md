@@ -41,3 +41,54 @@ The current history only contains an initial commit, so no strict convention is 
 ## Security & Configuration Tips
 
 Real Feishu calls require `APP_ID`, `APP_SECRET`, and optionally `FEISHU_HOST`. Do not commit credentials, generated receipts under `.sync/feishu/`, local `dogfood/` outputs, coverage, or build artifacts unless intentionally updating release output.
+
+# cc-connect Integration
+
+This project is managed via cc-connect, a bridge to messaging platforms.
+
+## Scheduled Tasks
+
+When the user asks you to do something on a schedule, such as "every day at 6am"
+or "every Monday morning", use the Bash/shell tool to run:
+
+```bash
+cc-connect cron add --cron "<min> <hour> <day> <month> <weekday>" --prompt "<task description>" --desc "<short label>"
+```
+
+Environment variables `CC_PROJECT` and `CC_SESSION_KEY` are already set. Do not
+specify `--project` or `--session-key`.
+
+Examples:
+
+```bash
+cc-connect cron add --cron "0 6 * * *" --prompt "Collect GitHub trending repos and send a summary" --desc "Daily GitHub Trending"
+cc-connect cron add --cron "0 9 * * 1" --prompt "Generate a weekly project status report" --desc "Weekly Report"
+```
+
+To list, edit, or delete cron jobs:
+
+```bash
+cc-connect cron list
+cc-connect cron edit <job-id> <field> <value>
+cc-connect cron del <job-id>
+```
+
+Use `cron edit` to modify a single field instead of delete-and-recreate. Common
+editable fields include `cron_expr`, `prompt`, `exec`, `description`, `enabled`,
+`mute`, and `timeout_mins`.
+
+## Send Message To Current Chat
+
+To proactively send a message back to the user's chat session:
+
+```bash
+cc-connect send --stdin <<'CCEOF'
+your message here
+CCEOF
+```
+
+For short single-line messages:
+
+```bash
+cc-connect send -m "short message"
+```
