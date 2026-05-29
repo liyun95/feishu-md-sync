@@ -3,22 +3,15 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 skill_root="${CODEX_HOME:-"$HOME/.codex"}/skills"
-remove_legacy=0
 
 for arg in "$@"; do
   case "$arg" in
-    --remove-legacy)
-      remove_legacy=1
-      ;;
     -h|--help)
       cat <<'USAGE'
-Usage: scripts/install-codex-skills.sh [--remove-legacy]
+Usage: scripts/install-codex-skills.sh
 
 Install the Feishu workflow Codex skills from this repository into:
   ${CODEX_HOME:-$HOME/.codex}/skills
-
-Options:
-  --remove-legacy   Migration only: delete older local alias skills after installing workflow skills.
 USAGE
       exit 0
       ;;
@@ -31,20 +24,15 @@ done
 
 workflow_skills=(
   feishu-baseline-sync
-  feishu-section-sync
+  feishu-push
   feishu-multisdk-examples
   feishu-sdk-reference-authoring
   feishu-sdk-reference-release
   feishu-release-notes
 )
 
-legacy_skills=(
-  feishu-codeblock-writer
-  feishu-markdown-pull
-  feishu-markdown-push
-  milvus-multisdk-example-sync
-  milvus-release-notes-workflow
-  sdk-reference-publisher
+retired_workflow_skills=(
+  feishu-section-sync
 )
 
 mkdir -p "$skill_root"
@@ -60,13 +48,11 @@ for skill in "${workflow_skills[@]}"; do
   echo "installed $skill"
 done
 
-if [[ "$remove_legacy" == "1" ]]; then
-  for skill in "${legacy_skills[@]}"; do
-    if [[ -d "$skill_root/$skill" ]]; then
-      rm -rf "$skill_root/$skill"
-      echo "removed legacy $skill"
-    fi
-  done
-fi
+for skill in "${retired_workflow_skills[@]}"; do
+  if [[ -d "$skill_root/$skill" ]]; then
+    rm -rf "$skill_root/$skill"
+    echo "removed retired workflow $skill"
+  fi
+done
 
 echo "Codex skills installed in $skill_root"

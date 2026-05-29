@@ -10,7 +10,7 @@ md2feishu workflow show <workflow-id>
 | User task | Skill | Workflow ID | Writes to | Human approval point |
 | --- | --- | --- | --- | --- |
 | Pull or refresh a remote Feishu doc into local Markdown | `feishu-baseline-sync` | `baseline-sync` | Local Markdown only | Before any later Feishu write |
-| Sync one local Markdown section back to Feishu | `feishu-section-sync` | `section-sync` | One Feishu section | Before `--write` |
+| Push local Markdown changes back to Feishu | `feishu-push` | `push` | Feishu document content | Before `--write`; before `--replace-all` for full replacement |
 | Complete multi-language SDK examples | `feishu-multisdk-examples` | `multisdk-examples` | Feishu code blocks | Before applying validated snippets |
 | Write and audit SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | `sdk-reference-authoring` | Feishu docs and Bitable artifacts | Before Feishu apply |
 | Release audited SDK reference docs to `web-content` | `feishu-sdk-reference-release` | `sdk-reference-web-content-release` | External `web-content` checkout | At workflow start; this is a separate human-triggered release |
@@ -25,7 +25,11 @@ Use feishu-baseline-sync on this Feishu document and write a local remote-copy M
 ```
 
 ```text
-Use feishu-section-sync to update only the section named "Index type overview" from my local Markdown.
+Use feishu-push to push my local Markdown changes to this Feishu document.
+```
+
+```text
+Use feishu-push with heading scope "Index type overview" so only that section is considered.
 ```
 
 ```text
@@ -42,7 +46,7 @@ The CLI recipe is still available when you need exact commands:
 
 ```bash
 md2feishu workflow show baseline-sync
-md2feishu workflow show section-sync
+md2feishu workflow show push
 md2feishu workflow show multisdk-examples
 md2feishu workflow show sdk-reference-authoring
 md2feishu workflow show sdk-reference-web-content-release

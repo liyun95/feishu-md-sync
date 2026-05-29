@@ -37,9 +37,21 @@ describe('harness tools registry', () => {
   });
 
   it('parses supported workflows and rejects unsupported workflows', () => {
-    expect(parseHarnessWorkflow('section-sync')).toBe('section-sync');
+    expect(parseHarnessWorkflow('push')).toBe('push');
     expect(parseHarnessWorkflow('multisdk')).toBe('multisdk');
     expect(() => parseHarnessWorkflow('release')).toThrow(/Unsupported harness workflow release/);
     expect(() => parseHarnessWorkflow('')).toThrow(/Unsupported harness workflow/);
+  });
+
+  it('lists push as the Markdown write tool surface', () => {
+    const registry = getHarnessTools('push');
+
+    expect(registry.workflow).toBe('push');
+    expect(registry.tools.find((tool) => tool.name === 'push')).toEqual(expect.objectContaining({
+      mode: 'dry-run-or-write',
+      writesFeishu: true,
+      requires: ['markdownFile', 'feishuDoc'],
+      writeRequires: ['--write', 'approved dry-run strategy plan', '--replace-all when selected strategy is document-replace']
+    }));
   });
 });

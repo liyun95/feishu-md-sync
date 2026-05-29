@@ -22,7 +22,7 @@ export function extractUniqueMarkdownSection(markdown: string, sectionTitle: str
     throw new Error(`Could not find local section "${sectionTitle}".`);
   }
   if (matches.length > 1) {
-    throw new Error(`Found ${matches.length} local sections named "${sectionTitle}". Section sync requires a unique heading.`);
+    throw new Error(`Found ${matches.length} local sections named "${sectionTitle}". Scoped push requires a unique heading.`);
   }
 
   const match = matches[0];

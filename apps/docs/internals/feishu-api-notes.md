@@ -43,7 +43,7 @@ Pull, diff, and merge depend on best-effort export from Feishu blocks to Markdow
 - Confirm tables are usable for docs authoring.
 - Confirm images either round-trip or produce an explicit warning.
 - Convert the same Markdown through official block convert and local convert.
-- Dry-run section sync with official import blocks.
+- Dry-run scoped push with official import blocks.
 - Write only to a disposable Feishu doc before treating official output as proven for a new document family.
 
 ## Auth And Errors

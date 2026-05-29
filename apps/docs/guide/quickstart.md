@@ -26,7 +26,7 @@ This installs the workflow skills used by Codex:
 | Skill | What it is for |
 | --- | --- |
 | [`feishu-baseline-sync`](/agent/skills/feishu-baseline-sync) | Pull a remote Feishu document into local Markdown before editing. |
-| [`feishu-section-sync`](/agent/skills/feishu-section-sync) | Sync one named local Markdown section back to the matching Feishu section. |
+| [`feishu-push`](/agent/skills/feishu-push) | Push local Markdown changes back to Feishu after a dry-run strategy review. |
 | [`feishu-multisdk-examples`](/agent/skills/feishu-multisdk-examples) | Complete and validate Java, JavaScript, Go, or REST examples from a source example. |
 | [`feishu-sdk-reference-authoring`](/agent/skills/feishu-sdk-reference-authoring) | Write and audit SDK reference changes in Feishu. |
 | [`feishu-sdk-reference-release`](/agent/skills/feishu-sdk-reference-release) | Release audited SDK reference content into `web-content` after a human starts release. |
@@ -61,7 +61,7 @@ The Feishu app also needs API permissions and access to the target document. See
 | When you need to... | Use this skill | What the workflow does |
 | --- | --- | --- |
 | Pull a remote Feishu document into local Markdown before making edits | `feishu-baseline-sync` | Exports the current Feishu content to a local baseline file. It does not write back to Feishu. |
-| Sync one local Markdown section back to the remote Feishu document | `feishu-section-sync` | Replaces one uniquely named section after a dry-run and approval. Content outside that section is preserved. |
+| Push local Markdown changes back to the remote Feishu document | `feishu-push` | Dry-runs the push, chooses block-patch, section-replace, or document-replace, then writes only after approval. |
 | Complete missing SDK examples across languages | `feishu-multisdk-examples` | Generates, validates, and applies language-scoped code-block updates for selected SDKs. |
 | Write SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | Plans, writes, and audits Feishu reference content. It stops after the Feishu audit. |
 | Move audited SDK reference content into `web-content` | `feishu-sdk-reference-release` | Starts only after a human asks for release, then prepares the external docs repository handoff. |
@@ -76,13 +76,13 @@ Use direct CLI commands when you need to inspect command behavior or run automat
 Run a dry-run:
 
 ```bash
-npm exec -- md2feishu sync ./doc.md DocToken
+npm exec -- md2feishu push ./doc.md DocToken
 ```
 
 Write after inspecting the plan:
 
 ```bash
-npm exec -- md2feishu sync ./doc.md DocToken --write --yes
+npm exec -- md2feishu push ./doc.md DocToken --write --yes
 ```
 
 ## Supported Targets
@@ -90,7 +90,7 @@ npm exec -- md2feishu sync ./doc.md DocToken --write --yes
 Use any of these forms:
 
 ```bash
-npm exec -- md2feishu sync ./doc.md DocToken
-npm exec -- md2feishu sync ./doc.md https://example.feishu.cn/docx/DocToken
-npm exec -- md2feishu sync ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
+npm exec -- md2feishu push ./doc.md DocToken
+npm exec -- md2feishu push ./doc.md https://example.feishu.cn/docx/DocToken
+npm exec -- md2feishu push ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
 ```

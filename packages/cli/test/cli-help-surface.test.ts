@@ -11,9 +11,18 @@ describe('CLI help surface', () => {
       env: { ...process.env, APP_ID: '', APP_SECRET: '' }
     });
 
-    for (const command of ['sync', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
+    for (const command of ['sync', 'push', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
       expect(stdout).toContain(command);
     }
+  });
+
+  it('does not expose section scope as a public sync option', async () => {
+    const { stdout } = await execFileAsync('npx', ['tsx', 'src/cli/index.ts', 'sync', '--help'], {
+      cwd: new URL('..', import.meta.url),
+      env: { ...process.env, APP_ID: '', APP_SECRET: '' }
+    });
+
+    expect(stdout).not.toContain('--section');
   });
 
   it('honors sync subcommand options before doing IO', async () => {

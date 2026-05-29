@@ -1,6 +1,6 @@
 export type WorkflowId =
   | 'baseline-sync'
-  | 'section-sync'
+  | 'push'
   | 'multisdk-examples'
   | 'sdk-reference-authoring'
   | 'sdk-reference-web-content-release'
@@ -26,7 +26,7 @@ const RECIPES: WorkflowRecipe[] = [
   {
     id: 'baseline-sync',
     title: 'Pull Feishu to local Markdown baseline',
-    whenToUse: 'Refresh local Markdown from current Feishu content before editing, comparison, or later section sync.',
+    whenToUse: 'Refresh local Markdown from current Feishu content before editing, comparison, or later Feishu push.',
     primaryArtifacts: ['local Markdown file', '.sync/feishu baseline receipt'],
     steps: [
       { id: 'auth', purpose: 'Check credentials without printing secrets.', command: 'md2feishu doctor auth', writes: 'none', verifies: 'APP_ID and APP_SECRET are present.' },
@@ -37,14 +37,15 @@ const RECIPES: WorkflowRecipe[] = [
     ]
   },
   {
-    id: 'section-sync',
-    title: 'Sync one local Markdown section to Feishu',
-    whenToUse: 'A local Markdown heading section is ready to replace the matching Feishu section while preserving the rest of the remote document.',
-    primaryArtifacts: ['dry-run patch plan', 'Feishu readback verification'],
+    id: 'push',
+    title: 'Push local Markdown changes to Feishu',
+    whenToUse: 'Local Markdown changes are ready to write back to an existing Feishu document after dry-run strategy review.',
+    primaryArtifacts: ['push strategy plan', 'Feishu readback verification'],
     steps: [
-      { id: 'diff', purpose: 'Inspect local versus remote changes.', command: 'md2feishu diff <doc.md> <feishu-doc>', writes: 'none', verifies: 'The change scope is small enough for section sync.' },
-      { id: 'dry-run', purpose: 'Plan the selected section replacement.', command: 'md2feishu sync <doc.md> <feishu-doc> --section "<heading>"', writes: 'none', verifies: 'Operation is replace-section and block counts look correct.' },
-      { id: 'write', purpose: 'Write only the selected section.', command: 'md2feishu sync <doc.md> <feishu-doc> --section "<heading>" --write -y', writes: 'feishu', verifies: 'Readback verification passes.' }
+      { id: 'dry-run', purpose: 'Plan the push and let the CLI choose block, section, or document strategy.', command: 'md2feishu push <doc.md> <feishu-doc>', writes: 'none', verifies: 'Selected strategy, scope, risk, and operation counts are clear.' },
+      { id: 'write', purpose: 'Apply the reviewed push plan.', command: 'md2feishu push <doc.md> <feishu-doc> --write -y', writes: 'feishu', verifies: 'Readback verification passes.' },
+      { id: 'replace-all', purpose: 'Apply a high-risk whole-document replacement only when explicitly intended.', command: 'md2feishu push <doc.md> <feishu-doc> --strategy document-replace --replace-all --write -y', writes: 'feishu', verifies: 'Dry-run recommended document-replace and the full replacement was approved.' },
+      { id: 'visual-verify', purpose: 'Confirm rendered Feishu content looks correct after the write.', command: 'Open the Feishu document and inspect the changed area.', writes: 'none', verifies: 'No unexpected formatting, escaped Markdown, or unrelated content changes are visible.' }
     ]
   },
   {
