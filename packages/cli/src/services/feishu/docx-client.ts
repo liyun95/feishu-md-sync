@@ -32,11 +32,11 @@ export class FeishuDocxClient {
     return this.request('PATCH', `/open-apis/docx/v1/documents/${documentId}/blocks/batch_update`, { requests });
   }
 
-  async createDocument(title: string, folderToken: string): Promise<FeishuDriveFile> {
+  async createDocument(title: string, folderToken?: string): Promise<FeishuDriveFile> {
     const data = await this.request<{ document?: FeishuDriveFile; file?: FeishuDriveFile }>(
       'POST',
       '/open-apis/docx/v1/documents',
-      { title, folder_token: folderToken }
+      folderToken ? { title, folder_token: folderToken } : { title }
     );
     return data.document ?? data.file ?? {};
   }

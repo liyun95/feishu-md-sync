@@ -11,10 +11,13 @@ import { applyPublishTransform, type PublishTransformOptions, type PublishTransf
 import { FeishuBlockConvertClient } from '../../services/feishu/block-convert-client.js';
 import { FeishuDocsContentClient } from '../../services/feishu/docs-content-client.js';
 import { readReceipt, receiptPath, writeReceipt, type SyncReceipt } from '../../receipts/receipt.js';
+import { runPublishNew } from '../../sync/publish-new.js';
+import { publishNewHelpAfter, publishNewJson, publishNewSummaryLines } from '../../sync/publish-new-output.js';
 import { unifiedDiff } from '../../sync/diff.js';
 import { buildMergeInstructions, defaultMergedPath, threeWayMerge } from '../../sync/merge.js';
 import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull.js';
 import { runSync, type SyncStrategy } from '../../sync/run-sync.js';
+import { assertRequestedPushStrategy, buildPushPlan, type PushPlan, type PushStrategy } from '../../sync/push-plan.js';
 import { getSyncStatus, type SyncStatusResult } from '../../sync/status.js';
 import type { CliContext } from '../context.js';
 
@@ -31,8 +34,33 @@ type SyncCommandOptions = BaseCommandOptions & {
   forceInitialOverwrite?: boolean;
   forceWholeDocumentSync?: boolean;
   publishProfile?: string;
-  section?: string;
   markdownEngine?: string;
+};
+
+type PushCommandOptions = BaseCommandOptions & {
+  format?: string;
+  write?: boolean;
+  yes?: boolean;
+  strategy?: string;
+  replaceAll?: boolean;
+  forceWholeDocumentSync?: boolean;
+  publishProfile?: string;
+  scope?: string;
+  markdownEngine?: string;
+};
+
+type PublishNewCommandOptions = BaseCommandOptions & {
+  title?: string;
+  wikiSpaceId?: string;
+  wikiParent?: string;
+  folderToken?: string;
+  appOwned?: boolean;
+  write?: boolean;
+  yes?: boolean;
+  allowDuplicateTitle?: boolean;
+  publishProfile?: string;
+  markdownEngine?: string;
+  format?: string;
 };
 
 type PullCommandOptions = BaseCommandOptions & {
@@ -55,6 +83,19 @@ type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOpt
   markdownEngine: MarkdownEngineName;
 };
 
+type NormalizedPushCommandOptions = PushCommandOptions & Required<BaseCommandOptions> & {
+  format: string;
+  strategy: PushStrategy;
+  publishTransform?: PublishTransformOptions;
+  markdownEngine: MarkdownEngineName;
+};
+
+type NormalizedPublishNewCommandOptions = PublishNewCommandOptions & Required<BaseCommandOptions> & {
+  format: string;
+  publishTransform?: PublishTransformOptions;
+  markdownEngine: MarkdownEngineName;
+};
+
 export function registerSyncCommands(program: Command, context: CliContext): void {
   program
     .name('md2feishu')
@@ -67,7 +108,6 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--force-initial-overwrite', 'allow first write to replace an existing non-empty Feishu doc')
     .option('--force-whole-document-sync', 'allow whole-document sync when an active multisdk task exists')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
-    .option('--section <heading>', 'replace only the named heading section instead of the whole document')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
@@ -92,7 +132,6 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--force-initial-overwrite', 'allow first write to replace an existing non-empty Feishu doc')
     .option('--force-whole-document-sync', 'allow whole-document sync when an active multisdk task exists')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
-    .option('--section <heading>', 'replace only the named heading section instead of the whole document')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
@@ -100,6 +139,50 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .action(async (markdownFile: string, feishuDoc: string, opts: SyncCommandOptions) => {
       await runSyncCommand(context, markdownFile, feishuDoc, normalizeSyncOptions(program, opts));
+    });
+
+  program
+    .command('push')
+    .description('push local Markdown changes to an existing Feishu document')
+    .argument('<markdown-file>', 'local Markdown file')
+    .argument('<feishu-doc>', 'Feishu docx ID or URL')
+    .option('--write', 'write to Feishu; omitted means dry-run')
+    .option('-y, --yes', 'skip write confirmation')
+    .option('--scope <scope>', 'optional scope guard, for example heading:"FAQ"')
+    .option('--strategy <strategy>', 'push strategy: auto | block-patch | section-replace | document-replace', 'auto')
+    .option('--replace-all', 'allow document-replace writes to replace the existing Feishu document')
+    .option('--force-whole-document-sync', 'allow whole-document push when an active multisdk task exists')
+    .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--env-file <file>', 'load credentials from an explicit dotenv file')
+    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+    .action(async (markdownFile: string, feishuDoc: string, opts: PushCommandOptions) => {
+      await runPushCommand(context, markdownFile, feishuDoc, normalizePushOptions(program, opts));
+    });
+
+  program
+    .command('publish-new')
+    .description('publish a local Markdown file to a new Feishu document')
+    .argument('<markdown-file>', 'local Markdown file')
+    .option('--title <title>', 'Feishu document title; defaults to first H1 or file basename')
+    .option('--wiki-space-id <space-id>', 'Feishu wiki space ID for final placement')
+    .option('--wiki-parent <node-token-or-url>', 'Feishu wiki parent node token or URL for final placement')
+    .option('--folder-token <folder-token>', 'Feishu Drive folder token; required as staging folder for wiki publish')
+    .option('--app-owned', 'create an app-owned docx without a Drive folder token')
+    .option('--write', 'create the Feishu document; omitted means dry-run')
+    .option('-y, --yes', 'skip write confirmation')
+    .option('--allow-duplicate-title', 'create even when same-title candidates already exist')
+    .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'local')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--env-file <file>', 'load credentials from an explicit dotenv file')
+    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+    .addHelpText('after', publishNewHelpAfter())
+    .action(async (markdownFile: string, opts: PublishNewCommandOptions) => {
+      await runPublishNewCommand(context, markdownFile, normalizePublishNewOptions(program, opts));
     });
 
   program
@@ -252,8 +335,47 @@ function normalizeSyncOptions(program: Command, opts: SyncCommandOptions): Norma
     forceWholeDocumentSync: flagFromArgv('--force-whole-document-sync') ?? commandOptionValue<boolean>(opts, 'forceWholeDocumentSync') ?? globals.forceWholeDocumentSync,
     publishProfile,
     publishTransform: parsePublishTransform(publishProfile),
-    section: optionFromArgv('--section') ?? commandOptionValue<string>(opts, 'section') ?? globals.section,
     markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto')
+  };
+}
+
+function normalizePushOptions(program: Command, opts: PushCommandOptions): NormalizedPushCommandOptions {
+  const globals = program.opts<PushCommandOptions>();
+  const base = normalizeBaseOptions(program, opts);
+  const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile') ?? globals.publishProfile;
+  return {
+    ...base,
+    format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
+    write: flagFromArgv('--write') ?? commandOptionValue<boolean>(opts, 'write') ?? globals.write,
+    yes: flagFromArgv('--yes') ?? flagFromArgv('-y') ?? commandOptionValue<boolean>(opts, 'yes') ?? globals.yes,
+    strategy: parsePushStrategy(optionFromArgv('--strategy') ?? commandOptionValue<string>(opts, 'strategy') ?? globals.strategy ?? 'auto'),
+    replaceAll: flagFromArgv('--replace-all') ?? commandOptionValue<boolean>(opts, 'replaceAll') ?? globals.replaceAll,
+    forceWholeDocumentSync: flagFromArgv('--force-whole-document-sync') ?? commandOptionValue<boolean>(opts, 'forceWholeDocumentSync') ?? globals.forceWholeDocumentSync,
+    publishProfile,
+    publishTransform: parsePublishTransform(publishProfile),
+    scope: optionFromArgv('--scope') ?? commandOptionValue<string>(opts, 'scope') ?? globals.scope,
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto')
+  };
+}
+
+function normalizePublishNewOptions(program: Command, opts: PublishNewCommandOptions): NormalizedPublishNewCommandOptions {
+  const globals = program.opts<PublishNewCommandOptions>();
+  const base = normalizeBaseOptions(program, opts);
+  const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile') ?? globals.publishProfile;
+  return {
+    ...base,
+    title: optionFromArgv('--title') ?? commandOptionValue<string>(opts, 'title') ?? globals.title,
+    wikiSpaceId: optionFromArgv('--wiki-space-id') ?? commandOptionValue<string>(opts, 'wikiSpaceId') ?? globals.wikiSpaceId,
+    wikiParent: optionFromArgv('--wiki-parent') ?? commandOptionValue<string>(opts, 'wikiParent') ?? globals.wikiParent,
+    folderToken: optionFromArgv('--folder-token') ?? commandOptionValue<string>(opts, 'folderToken') ?? globals.folderToken,
+    appOwned: flagFromArgv('--app-owned') ?? commandOptionValue<boolean>(opts, 'appOwned') ?? globals.appOwned,
+    write: flagFromArgv('--write') ?? commandOptionValue<boolean>(opts, 'write') ?? globals.write,
+    yes: flagFromArgv('--yes') ?? flagFromArgv('-y') ?? commandOptionValue<boolean>(opts, 'yes') ?? globals.yes,
+    allowDuplicateTitle: flagFromArgv('--allow-duplicate-title') ?? commandOptionValue<boolean>(opts, 'allowDuplicateTitle') ?? globals.allowDuplicateTitle,
+    format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
+    publishProfile,
+    publishTransform: parsePublishTransform(publishProfile),
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'local')
   };
 }
 
@@ -344,12 +466,115 @@ async function runSyncCommand(context: CliContext, markdownFile: string, feishuD
     forceInitialOverwrite: opts.forceInitialOverwrite,
     forceWholeDocumentSync: opts.forceWholeDocumentSync,
     publishTransform: opts.publishTransform,
-    section: opts.section,
     markdownEngine: createCliMarkdownEngine(client, opts.markdownEngine),
     confirm
   });
 
   printResult(result, opts.format);
+}
+
+async function runPushCommand(context: CliContext, markdownFile: string, feishuDoc: string, opts: NormalizedPushCommandOptions): Promise<void> {
+  const scope = parsePushScope(opts.scope);
+  if (opts.strategy === 'section-replace' && !scope.section) {
+    throw new Error('--strategy section-replace requires --scope heading:"<heading>".');
+  }
+  if (opts.strategy === 'document-replace' && scope.section) {
+    throw new Error('--strategy document-replace cannot be combined with --scope.');
+  }
+
+  const client = context.createFeishuClient({ host: opts.host, timeoutMs: opts.timeoutMs });
+  const documentId = await resolveDocumentId(client, feishuDoc);
+  const markdownEngine = createCliMarkdownEngine(client, opts.markdownEngine);
+  const planResult = await runSync(client, {
+    sourcePath: markdownFile,
+    documentId,
+    dryRun: true,
+    yes: true,
+    strategy: 'fail',
+    forceDocumentReplace: opts.strategy === 'document-replace',
+    forceWholeDocumentSync: opts.forceWholeDocumentSync,
+    publishTransform: opts.publishTransform,
+    section: scope.section,
+    sectionPatchMode: opts.strategy === 'section-replace' ? 'section-replace' : 'auto',
+    markdownEngine
+  });
+  const plan = buildPushPlan(planResult);
+  assertRequestedPushStrategy(plan, opts.strategy);
+
+  if (!opts.write) {
+    printPushResult(plan, planResult, opts.format);
+    return;
+  }
+
+  if (plan.selectedStrategy === 'document-replace' && !opts.replaceAll) {
+    printPushResult(plan, planResult, opts.format);
+    throw new Error('Refusing document-replace write without --replace-all.');
+  }
+
+  const confirm = async (question: string): Promise<boolean> => {
+    const rl = readline.createInterface({ input, output: stdout });
+    const answer = await rl.question(`${question} [y/N] `);
+    rl.close();
+    return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
+  };
+
+  const writeResult = await runSync(client, {
+    sourcePath: markdownFile,
+    documentId,
+    dryRun: false,
+    yes: opts.yes,
+    strategy: 'fail',
+    forceInitialOverwrite: plan.selectedStrategy === 'document-replace' && opts.replaceAll,
+    forceDocumentReplace: plan.selectedStrategy === 'document-replace',
+    forceWholeDocumentSync: opts.forceWholeDocumentSync,
+    publishTransform: opts.publishTransform,
+    section: scope.section,
+    sectionPatchMode: plan.selectedStrategy === 'section-replace' ? 'section-replace' : 'auto',
+    markdownEngine,
+    confirm
+  });
+  printPushResult(buildPushPlan(writeResult), writeResult, opts.format);
+}
+
+async function runPublishNewCommand(context: CliContext, markdownFile: string, opts: NormalizedPublishNewCommandOptions): Promise<void> {
+  const client = context.createFeishuClient({ host: opts.host, timeoutMs: opts.timeoutMs });
+  const markdownEngine = createCliMarkdownEngine(client, opts.markdownEngine);
+  const confirm = async (question: string): Promise<boolean> => {
+    const rl = readline.createInterface({ input, output: stdout });
+    const answer = await rl.question(`${question} [y/N] `);
+    rl.close();
+    return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
+  };
+
+  const result = await runPublishNew(client, {
+    sourcePath: markdownFile,
+    options: {
+      title: opts.title,
+      wikiSpaceId: opts.wikiSpaceId,
+      wikiParent: opts.wikiParent,
+      folderToken: opts.folderToken,
+      appOwned: opts.appOwned,
+      allowDuplicateTitle: opts.allowDuplicateTitle
+    },
+    env: process.env,
+    write: opts.write,
+    yes: opts.yes,
+    publishTransform: opts.publishTransform,
+    markdownEngine,
+    confirm
+  });
+
+  if (opts.format === 'json') {
+    console.log(publishNewJson(result));
+    return;
+  }
+
+  for (const line of publishNewSummaryLines(result)) {
+    console.log(line);
+  }
+  for (const warning of result.markdownEngineWarnings) {
+    console.warn(`warning: ${warning}`);
+  }
 }
 
 async function resolveDocumentId(client: FeishuClient, feishuDoc: string): Promise<string> {
@@ -362,6 +587,34 @@ function parseStrategy(value: string): SyncStrategy {
     return value;
   }
   throw new Error(`Invalid --strategy ${value}. Expected fail, local-wins, or merge.`);
+}
+
+function parsePushStrategy(value: string): PushStrategy {
+  if (value === 'auto' || value === 'block-patch' || value === 'section-replace' || value === 'document-replace') {
+    return value;
+  }
+  throw new Error(`Invalid --strategy ${value}. Expected auto, block-patch, section-replace, or document-replace.`);
+}
+
+function parsePushScope(value: string | undefined): { section?: string } {
+  if (!value) return {};
+  const headingPrefix = 'heading:';
+  if (!value.startsWith(headingPrefix)) {
+    throw new Error(`Invalid --scope ${value}. Expected heading:"<heading>".`);
+  }
+  const rawHeading = value.slice(headingPrefix.length).trim();
+  const heading = stripMatchingQuotes(rawHeading);
+  if (!heading) {
+    throw new Error(`Invalid --scope ${value}. Heading must not be empty.`);
+  }
+  return { section: heading };
+}
+
+function stripMatchingQuotes(value: string): string {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 function parsePublishTransform(value: string | undefined): PublishTransformOptions | undefined {
@@ -402,6 +655,53 @@ function printResult(result: Awaited<ReturnType<typeof runSync>>, format = 'pret
   for (const warning of result.warnings) {
     console.warn(`warning: ${warning}`);
   }
+}
+
+function printPushResult(plan: PushPlan, result: Awaited<ReturnType<typeof runSync>>, format = 'pretty'): void {
+  if (format === 'json') {
+    console.log(JSON.stringify({ pushPlan: plan, syncResult: result }, null, 2));
+    return;
+  }
+
+  for (const line of pushResultSummaryLines(plan, result)) {
+    console.log(line);
+  }
+
+  for (const warning of result.warnings) {
+    console.warn(`warning: ${warning}`);
+  }
+}
+
+export function pushResultSummaryLines(plan: PushPlan, result: Awaited<ReturnType<typeof runSync>>): string[] {
+  const changeLabel = result.mode === 'write' ? 'Applied Feishu changes:' : 'Planned Feishu changes:';
+  const lines = [
+    'Intent: push local Markdown to Feishu',
+    `Selected strategy: ${plan.selectedStrategy}`,
+    `Scope: ${plan.scope}`,
+    `Risk: ${plan.risk}`,
+    '',
+    changeLabel,
+    `- update ${plan.updates} blocks`,
+    `- create ${plan.creates} blocks`,
+    `- delete ${plan.deletes} blocks`
+  ];
+
+  if (plan.fallbackReason) {
+    lines.push('', `Why: block-level patch is unsafe because ${plan.fallbackReason}.`);
+  }
+
+  if (result.mode === 'dry-run') {
+    lines.push('', plan.approvalMessage);
+  }
+
+  if (result.mode === 'write') {
+    lines.push(`Readback verification: ${result.receipt.verificationResult.ok ? 'passed' : 'failed'}`);
+    if (result.receiptWritten) {
+      lines.push(`Receipt: ${result.receiptPath}`);
+    }
+  }
+
+  return lines;
 }
 
 export function syncResultSummaryLines(result: Awaited<ReturnType<typeof runSync>>): string[] {

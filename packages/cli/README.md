@@ -11,8 +11,9 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 | Need | Recommended entry |
 | --- | --- |
 | Pull a Feishu document into local Markdown before editing | `feishu-baseline-sync` skill or `md2feishu pull` |
-| Sync one local Markdown section back to Feishu | `feishu-section-sync` skill or `md2feishu sync --section` |
-| Inspect a planned write before applying it | `md2feishu sync` without `--write` |
+| Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` skill or `md2feishu publish-new` |
+| Push local Markdown changes back to Feishu | `feishu-push` skill or `md2feishu push` |
+| Inspect a planned write before applying it | `md2feishu push` without `--write` |
 | Resolve local/remote drift | `md2feishu status`, `md2feishu diff`, and `md2feishu merge` |
 | Work on multi-SDK examples, SDK references, or release notes | Use the matching workflow skill first |
 
@@ -30,7 +31,8 @@ Show the workflow recipe before running lower-level commands:
 
 ```bash
 npm exec -- md2feishu workflow show baseline-sync
-npm exec -- md2feishu workflow show section-sync
+npm exec -- md2feishu workflow show publish-new
+npm exec -- md2feishu workflow show push
 ```
 
 ## Configure Feishu Access
@@ -65,24 +67,44 @@ diff -u doc.md feishu.remote.md
 npm exec -- md2feishu pull '<feishu-doc>' --output doc.md --overwrite --write-receipt
 ```
 
-Dry-run a section update:
+Dry-run a push. The CLI chooses block-patch, section-replace, or document-replace from the local and remote state:
 
 ```bash
-npm exec -- md2feishu sync ./doc.md DocToken --section "Index type overview"
+npm exec -- md2feishu push ./doc.md DocToken
+```
+
+For the full dry-run review workflow, strategy meanings, and scoped receipt caveats, see the [Feishu Push guide](https://liyun95.github.io/feishu-md-sync/guide/push).
+
+Dry-run first publication for a file with no Feishu URL yet:
+
+```bash
+npm exec -- md2feishu publish-new ./doc.md --folder-token <folder-token>
 ```
 
 Write only after reviewing the dry-run:
 
 ```bash
-npm exec -- md2feishu sync ./doc.md DocToken --section "Index type overview" --write --yes
+npm exec -- md2feishu push ./doc.md DocToken --write --yes
+```
+
+Use a heading scope as a guard when only one section should be considered:
+
+```bash
+npm exec -- md2feishu push ./doc.md DocToken --scope heading:"Index type overview"
+```
+
+Allow full document replacement only when the dry-run recommends it and replacement is intentional:
+
+```bash
+npm exec -- md2feishu push ./doc.md DocToken --strategy document-replace --replace-all --write --yes
 ```
 
 Supported target forms:
 
 ```bash
-npm exec -- md2feishu sync ./doc.md DocToken
-npm exec -- md2feishu sync ./doc.md https://example.feishu.cn/docx/DocToken
-npm exec -- md2feishu sync ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
+npm exec -- md2feishu push ./doc.md DocToken
+npm exec -- md2feishu push ./doc.md https://example.feishu.cn/docx/DocToken
+npm exec -- md2feishu push ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
 ```
 
 ## More References

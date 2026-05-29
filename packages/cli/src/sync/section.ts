@@ -71,7 +71,7 @@ export function findUniqueSectionRange(
     throw new Error(`Could not find ${sourceLabel} section "${sectionTitle}".`);
   }
   if (matches.length > 1) {
-    throw new Error(`Found ${matches.length} ${sourceLabel} sections named "${sectionTitle}". Section sync requires a unique heading.`);
+    throw new Error(`Found ${matches.length} ${sourceLabel} sections named "${sectionTitle}". Scoped push requires a unique heading.`);
   }
 
   const match = matches[0];

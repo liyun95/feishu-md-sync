@@ -5,10 +5,14 @@ import { describe, expect, it } from 'vitest';
 const execFileAsync = promisify(execFile);
 
 describe('harness CLI commands', () => {
-  it('documents the section sync option', async () => {
+  it('documents the push command and hides the old section option', async () => {
     const result = await runCli(['sync', '--help']);
 
-    expect(result.stdout).toContain('--section <heading>');
+    expect(result.stdout).not.toContain('--section <heading>');
+
+    const pushHelp = await runCli(['push', '--help']);
+    expect(pushHelp.stdout).toContain('--scope <scope>');
+    expect(pushHelp.stdout).toContain('--replace-all');
   });
 
   it('prints the multisdk tools registry as JSON', async () => {

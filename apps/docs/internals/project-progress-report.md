@@ -23,7 +23,7 @@ The current state is good enough for a team walkthrough and controlled dogfoodin
 | Markdown preflight | Done | Unsafe generated links are reported before writes. |
 | SDK reference authoring/release split | Done | `sdk-reference-authoring` and `sdk-reference-web-content-release` are separate workflows. |
 | Docs restructure | Done | Workflow docs and agent skills point to shared workflow recipes and safety gates. |
-| Legacy skills | Done | Old operation-specific skill pages were removed from docs; migration cleanup is available through `scripts/install-codex-skills.sh --remove-legacy`. |
+| Skill surface | Done | Operation-specific skill pages were removed from docs; installable skills now map to first-class workflows. |
 | Harness expansion | Partial | Workflow tool registries exist. Non-`multisdk` graders are conservative placeholders. |
 
 ## Live Feishu Smoke Result
@@ -65,17 +65,17 @@ md2feishu workflow show baseline-sync
 md2feishu pull "$DOC" --markdown-engine auto --output doc.remote.md
 ```
 
-### Section Sync
+### Feishu Push
 
-Use this when a writer edited one section locally and wants to preserve Feishu review edits elsewhere.
+Use this when a writer edited local Markdown and wants the CLI to choose the safest Feishu write strategy.
 
 ```bash
-md2feishu workflow show section-sync
-md2feishu sync doc.md "$DOC" --section "Heading"
-md2feishu sync doc.md "$DOC" --section "Heading" --write -y
+md2feishu workflow show push
+md2feishu push doc.md "$DOC" --scope heading:"Heading"
+md2feishu push doc.md "$DOC" --scope heading:"Heading" --write -y
 ```
 
-This is the recommended write workflow for reviewed documents.
+This is the recommended Markdown write workflow for reviewed documents.
 
 ### Multi-SDK Example Completion
 
@@ -121,7 +121,7 @@ md2feishu workflow show release-notes
 | --- | --- | --- |
 | `workflow next <task-dir>` is not implemented | Agents can list/show recipes, but cannot ask the CLI for task-specific next action. | Add `workflow next` backed by task artifact readers. |
 | Non-`multisdk` harness graders are placeholders | `harness grade` reports conservative `incomplete` for sync/reference/release workflows. | Implement artifact readers for receipts, patch plans, reference manifests, audit reports, and release approvals. |
-| Whole-document official round-trip is not write-safe by default | Official convert can change block granularity significantly. | Keep whole-document writes behind dry-run and explicit confirmation; focus default UX on section sync. |
+| Whole-document official round-trip is not write-safe by default | Official convert can change block granularity significantly. | Keep whole-document writes behind dry-run and explicit confirmation; focus default UX on Feishu push strategy review. |
 | Section/block planner needs more real fixtures | Current planner is conservative and should stay that way until tested on more reviewed docs. | Build a fixture corpus from real docs and add regression tests for common edit shapes. |
 | Presentation docs are not optimized as a story | README and docs are usable references, but not a ready-made team talk. | Add a short demo script or presentation outline based on this report. |
 
@@ -133,7 +133,7 @@ md2feishu workflow show release-notes
 2. Make non-`multisdk` harness grading real.
    Convert sync receipts, reference audit reports, web-content export reports, and release approval hashes into grade checks.
 
-3. Promote section sync as the default writing story.
+3. Promote Feishu push as the default writing story.
    Keep whole-document sync available, but document it as a deliberate operation after reviewing the dry-run plan.
 
 4. Build a live fixture suite.
@@ -158,7 +158,7 @@ They are not yet a polished presentation deck. For a team sharing session, use t
 1. Problem: one-off Feishu scripts were powerful but hard to operate safely.
 2. New model: workflow-first CLI with dry-run-first writes.
 3. Demo: `workflow list`, `workflow show baseline-sync`, `pull --markdown-engine auto`.
-4. Demo: edit one section, run `sync --section`, inspect dry-run, then explain write gate.
+4. Demo: edit local Markdown, run `push`, inspect the selected strategy, then explain write gates.
 5. Agent story: skills now select workflow recipes instead of memorizing command sequences.
 6. Roadmap: `workflow next`, real graders, fixture corpus.
 

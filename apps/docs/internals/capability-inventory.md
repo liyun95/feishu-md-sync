@@ -7,7 +7,8 @@ This inventory reflects the current `md2feishu` command surface and should be up
 | Workflow | Commands | Primary artifacts | Write targets |
 | --- | --- | --- | --- |
 | Baseline sync | `pull`, `status`, `diff`, `merge`, `sync` | `.sync/feishu/*.json`, `.merged.md` | Feishu docx |
-| Section sync | `sync --section <heading>` | dry-run/write receipt output; whole-document receipt intentionally unchanged | Feishu docx section blocks |
+| Publish new | `publish-new` | new Feishu docx URL, `.sync/feishu/*.json` | New Feishu docx, optional wiki placement |
+| Feishu push | `push [--scope heading:"..."]` | strategy dry-run/write output; readback verification | Feishu docx blocks, sections, or whole document |
 | Code blocks | `code-blocks inspect/plan/export/apply/audit/update` | manifest JSON, snippet files | Feishu code blocks |
 | Multi-SDK examples | `multisdk init/status/export/profile/verify/diff/apply/audit/land-docs/finalize` | `task.json`, `manifest.json`, snippets, evidence, trace, handoff | Feishu code blocks, optional local docs repo |
 | SDK reference authoring | `reference preflight/plan/apply/audit` | impact matrix, publish manifest, Feishu apply report, Feishu audit report | Feishu Drive, Bitable |

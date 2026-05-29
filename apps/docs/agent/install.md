@@ -13,12 +13,11 @@ scripts/install-codex-skills.sh
 After installation, ask Codex to use the workflow skill that matches the task:
 
 - `feishu-baseline-sync`
-- `feishu-section-sync`
+- `feishu-publish-new`
+- `feishu-push`
 - `feishu-multisdk-examples`
 - `feishu-sdk-reference-authoring`
 - `feishu-sdk-reference-release`
 - `feishu-release-notes`
-
-Use `scripts/install-codex-skills.sh --remove-legacy` only when migrating a machine that previously installed older alias skills.
 
 For workflow selection, see [Choose a Workflow](/guide/workflows).

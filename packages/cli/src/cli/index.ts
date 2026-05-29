@@ -71,5 +71,6 @@ function printRemoteConflictHelp(message: string): void {
   console.error('  md2feishu diff <file.md> <doc>');
   console.error('  md2feishu merge <file.md> <doc>');
   console.error('  md2feishu pull <doc> --output feishu.remote.md');
+  console.error('  md2feishu push <file.md> <doc>');
   console.error('  md2feishu sync <file.md> <doc> --write --strategy local-wins --yes');
 }

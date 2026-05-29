@@ -26,8 +26,10 @@ export type SyncOptions = {
   strategy?: SyncStrategy;
   forceInitialOverwrite?: boolean;
   forceWholeDocumentSync?: boolean;
+  forceDocumentReplace?: boolean;
   publishTransform?: PublishTransformOptions;
   section?: string;
+  sectionPatchMode?: 'auto' | 'block-level' | 'section-replace';
   markdownEngine?: MarkdownEngine;
   confirm?: (question: string) => Promise<boolean>;
 };
@@ -100,7 +102,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
 
   if (options.section && !conflict.ok) {
     warnings.push(
-      `Feishu changed since the last receipt; section sync will replace only section "${options.section}" in the current remote document.`
+      `Feishu changed since the last receipt; scoped push will write only section "${options.section}" in the current remote document.`
     );
   } else if (!conflict.ok && strategy === 'merge') {
     if (!previousReceipt?.sourceSnapshot) {
@@ -150,16 +152,25 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     ? createMarkdownEngine({ mode: 'local' })
     : markdownEngine;
   if (options.section && markdownEngine.name === 'auto') {
-    warnings.push('Section sync used the local Markdown renderer for stable block-level planning; official Feishu export remains enabled for pull/readback.');
+    warnings.push('Scoped push used the local Markdown renderer for stable block-level planning; official Feishu export remains enabled for pull/readback.');
   }
   const desiredImport = await importEngine.importMarkdown({ markdown: effectiveMarkdownForImport });
   warnings.push(...desiredImport.warnings);
   const desiredBlocks = desiredImport.blocks;
   const sourceHash = hashSource(effectiveSourceContent);
+  const sectionPatchMode = options.sectionPatchMode ?? 'auto';
   const sectionPatch = options.section ? planSectionPatch(currentChildren, desiredBlocks, options.section) : null;
-  const patchPlan = sectionPatch?.patchPlan ?? planSmartPatch(currentChildren, desiredBlocks);
+  const patchPlan = sectionPatch?.patchPlan ?? (options.forceDocumentReplace
+    ? {
+      operation: 'replace-document' as const,
+      deleteCount: currentChildren.length,
+      createCount: desiredBlocks.length,
+      currentHash,
+      desiredHash: hashBlocks(desiredBlocks)
+    }
+    : planSmartPatch(currentChildren, desiredBlocks));
   const patchBlocks = sectionPatch?.replacementBlocks ?? replacementBlocksForPlan(patchPlan, desiredBlocks);
-  const blockLevelSectionPatch = options.section && sectionPatch
+  const blockLevelSectionPatch = options.section && sectionPatch && sectionPatchMode !== 'section-replace'
     ? planBlockLevelSectionPatch({
       remoteSectionBlocks: sectionPatch.remoteRange.blocks,
       desiredSectionBlocks: sectionPatch.localRange.blocks,
@@ -219,8 +230,11 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
         skipped: blockLevelResult.updated === 0 && blockLevelResult.created === 0 && blockLevelResult.deleted === 0
       };
       warnings.push(blockLevelSectionPatch.fallbackReason
-        ? `Section sync used bounded block-level fallback: ${blockLevelSectionPatch.fallbackReason}.`
-        : 'Section sync used Feishu block-level patching.');
+        ? `Scoped push used bounded block-level fallback: ${blockLevelSectionPatch.fallbackReason}.`
+        : 'Scoped push used Feishu block-level patching.');
+    } else if (sectionPatch && sectionPatchMode === 'section-replace') {
+      writeResult = await applyPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
+      warnings.push(`Push used section replacement for "${options.section}".`);
     } else {
       writeResult = await applyPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
     }
@@ -239,7 +253,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
       warnings.push(`Updated original source file from resolved merge output: ${resolvedMergeOriginalPath}.`);
     }
     if (options.section) {
-      warnings.push('Section sync does not update the whole-document receipt.');
+      warnings.push('Scoped push does not update the whole-document receipt.');
     }
   }
 

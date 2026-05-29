@@ -13,6 +13,7 @@ import { withFeishuRetry } from '../services/feishu/retry.js';
 import { FeishuBitableClient } from '../services/feishu/bitable-client.js';
 import { FeishuDocxClient } from '../services/feishu/docx-client.js';
 import { FeishuDriveClient } from '../services/feishu/drive-client.js';
+import { FeishuWikiClient, type FeishuWikiMoveResult, type FeishuWikiNode } from '../services/feishu/wiki-client.js';
 
 export { FeishuApiError } from '../services/feishu/errors.js';
 
@@ -36,6 +37,7 @@ export class FeishuClient implements FeishuDocClient {
   private readonly timeoutMs: number;
   private readonly docx: FeishuDocxClient;
   private readonly drive: FeishuDriveClient;
+  private readonly wiki: FeishuWikiClient;
   private readonly bitable: FeishuBitableClient;
 
   constructor(config: ClientConfig = {}) {
@@ -46,6 +48,7 @@ export class FeishuClient implements FeishuDocClient {
     const request = this.request.bind(this);
     this.docx = new FeishuDocxClient(request);
     this.drive = new FeishuDriveClient(request);
+    this.wiki = new FeishuWikiClient(request);
     this.bitable = new FeishuBitableClient(request);
   }
 
@@ -63,21 +66,17 @@ export class FeishuClient implements FeishuDocClient {
   }
 
   async resolveWikiNode(wikiNodeToken: string): Promise<string> {
-    const params = new URLSearchParams({ token: wikiNodeToken });
-    const data = await this.request<{ node?: { obj_token?: string; obj_type?: string } }>(
-      'GET',
-      `/open-apis/wiki/v2/spaces/get_node?${params.toString()}`
-    );
+    const node = await this.getWikiNode(wikiNodeToken);
 
-    if (!data.node?.obj_token) {
+    if (!node.objToken) {
       throw new FeishuApiError(`Could not resolve wiki node ${wikiNodeToken} to a docx object token.`);
     }
 
-    if (data.node.obj_type && data.node.obj_type !== 'docx') {
-      throw new FeishuApiError(`Wiki node ${wikiNodeToken} is ${data.node.obj_type}, not docx.`);
+    if (node.objType && node.objType !== 'docx') {
+      throw new FeishuApiError(`Wiki node ${wikiNodeToken} is ${node.objType}, not docx.`);
     }
 
-    return data.node.obj_token;
+    return node.objToken;
   }
 
   async deleteChildren(documentId: string, parentBlockId: string, startIndex: number, endIndex: number): Promise<void> {
@@ -151,8 +150,58 @@ export class FeishuClient implements FeishuDocClient {
     return this.drive.moveFile(token, targetFolderToken, type);
   }
 
-  async createDocxDocument(title: string, folderToken: string): Promise<FeishuDriveFile> {
+  async createDocxDocument(title: string, folderToken?: string): Promise<FeishuDriveFile> {
     return this.docx.createDocument(title, folderToken);
+  }
+
+  async moveDocxToWiki(input: {
+    documentId: string;
+    spaceId: string;
+    parentNodeToken: string;
+  }): Promise<FeishuWikiMoveResult> {
+    return this.wiki.moveDocxToWiki(input);
+  }
+
+  async getWikiNode(wikiNodeToken: string): Promise<{
+    spaceId?: string;
+    title?: string;
+    nodeToken?: string;
+    objToken?: string;
+    objType?: string;
+    url?: string;
+  }> {
+    const node = await this.wiki.getNode(wikiNodeToken);
+    return {
+      spaceId: node.space_id,
+      title: node.title,
+      nodeToken: node.node_token,
+      objToken: node.obj_token,
+      objType: node.obj_type,
+      url: node.url
+    };
+  }
+
+  async listWikiChildren(spaceId: string, parentNodeToken: string): Promise<Array<{
+    title?: string;
+    nodeToken?: string;
+    objToken?: string;
+    url?: string;
+  }>> {
+    const nodes: FeishuWikiNode[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const data = await this.wiki.listChildrenPage(spaceId, parentNodeToken, pageToken);
+      nodes.push(...(data.items ?? []));
+      pageToken = data.has_more ? data.page_token : undefined;
+    } while (pageToken);
+
+    return nodes.map((node) => ({
+      title: node.title,
+      nodeToken: node.node_token,
+      objToken: node.obj_token,
+      url: node.url
+    }));
   }
 
   async listBitableTables(appToken: string): Promise<BitableTable[]> {

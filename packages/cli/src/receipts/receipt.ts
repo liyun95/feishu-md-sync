@@ -27,6 +27,17 @@ export type SyncReceipt = {
     expectedHash: string;
     actualHash: string;
   };
+  publish?: PublishReceiptMetadata;
+};
+
+export type PublishReceiptMetadata = {
+  workflow: 'publish-new';
+  title: string;
+  documentUrl?: string;
+  wikiUrl?: string;
+  wikiNodeToken?: string;
+  destination: unknown;
+  creationStrategy: 'block-pipeline';
 };
 
 export function receiptPath(rootDir: string, sourcePath: string, docId: string): string {

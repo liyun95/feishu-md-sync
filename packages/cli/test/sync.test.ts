@@ -190,12 +190,12 @@ Remote-only content
     await expect(readFile(result.receiptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(result.receiptWritten).toBe(false);
     expect(result.warnings).toEqual(expect.arrayContaining([
-      'Section sync used Feishu block-level patching.',
-      'Section sync does not update the whole-document receipt.'
+      'Scoped push used Feishu block-level patching.',
+      'Scoped push does not update the whole-document receipt.'
     ]));
   });
 
-  it('preflights only the selected section during section sync', async () => {
+  it('preflights only the selected section during scoped push', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, `## Target
 
@@ -229,7 +229,7 @@ Safe body
     expect(client.deleteChildren).not.toHaveBeenCalled();
   });
 
-  it('creates only an inserted block during section sync', async () => {
+  it('creates only an inserted block during scoped push', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, `## FAQ
 
@@ -297,11 +297,11 @@ Local ignored
       expect.objectContaining({ kind: 'create', index: 1 })
     ]);
     expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining('Section sync used the local Markdown renderer')
+      expect.stringContaining('Scoped push used the local Markdown renderer')
     ]));
   });
 
-  it('section sync uses current remote content even when the whole-document receipt is stale', async () => {
+  it('scoped push uses current remote content even when the whole-document receipt is stale', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, '## Target\n\nNew body\n\n## Other\n\nLocal other\n');
     const baseBlocks = markdownToFeishuBlocks('## Target\n\nOld body\n\n## Other\n\nBase other\n');
@@ -336,7 +336,7 @@ Local ignored
     });
 
     expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining('Feishu changed since the last receipt; section sync will replace only section "Target"')
+      expect.stringContaining('Feishu changed since the last receipt; scoped push will write only section "Target"')
     ]));
     expect(client.batchUpdateBlocks).toHaveBeenCalledWith('doc1234567890123', [
       expect.objectContaining({ block_id: 'child-1' })

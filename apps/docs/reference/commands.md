@@ -18,6 +18,8 @@ Equivalent to:
 md2feishu sync ./doc.md DocToken
 ```
 
+For local Markdown that does not have a Feishu URL yet, use `md2feishu publish-new` first. For existing Feishu documents, prefer `md2feishu push` because it prints a user-facing strategy plan.
+
 ## `workflow`
 
 ```bash
@@ -44,7 +46,6 @@ Options:
 - `--force-initial-overwrite` - allow first write to replace existing non-empty Feishu content.
 - `--force-whole-document-sync` - allow whole-document sync when an active `multisdk` task exists for the same document.
 - `--publish-profile <profile>` - apply a publish transform before diffing or writing. Currently supports `milvus`.
-- `--section <heading>` - replace only the named heading section. The heading must be unique in both local Markdown and current Feishu content.
 - `--markdown-engine <engine>` - `auto`, `official`, or `local`. `auto` tries official Feishu Markdown APIs first and falls back to local conversion.
 - `--format <format>` - `pretty` or `json`.
 - `--host <url>` - Feishu API host.
@@ -54,14 +55,75 @@ The `milvus` publish profile strips frontmatter, drops a first H1 when it duplic
 
 If `runs/**/task.json` contains an active `multisdk` task for the same Feishu document, `sync --write` fails closed by default. Use `multisdk apply <task-dir> --language <lang>` for code-block patches. Use `--force-whole-document-sync` only when the intended operation is a whole-document write.
 
-Section sync is for updating one named Feishu section from local Markdown while preserving the rest of the remote document:
+## `push`
 
 ```bash
-md2feishu sync ./doc.md DocToken --section "Index type overview"
-md2feishu sync ./doc.md DocToken --section "Index type overview" --write -y
+md2feishu push <markdown-file> <feishu-doc> [options]
 ```
 
-The command replaces the matching heading block and its body, ending before the next same-level or higher-level heading. Feishu blocks outside the selected section are preserved. Section writes do not update the whole-document receipt.
+Options:
+
+- `--write` - write to Feishu. Omitted means dry-run.
+- `-y, --yes` - skip write confirmation.
+- `--scope <scope>` - optional guard such as `heading:"FAQ"`.
+- `--strategy <strategy>` - `auto`, `block-patch`, `section-replace`, or `document-replace`.
+- `--replace-all` - allow `document-replace` writes to replace the existing Feishu document.
+- `--force-whole-document-sync` - allow whole-document push when an active `multisdk` task exists for the same document.
+- `--publish-profile <profile>` - apply a publish transform before planning or writing. Currently supports `milvus`.
+- `--markdown-engine <engine>` - `auto`, `official`, or `local`. `publish-new` defaults to `local` for stable first-publication baselines.
+- `--format <format>` - `pretty` or `json`.
+- `--host <url>` - Feishu API host.
+- `--timeout-ms <number>` - Feishu API timeout.
+
+Dry-run a push:
+
+```bash
+md2feishu push ./doc.md DocToken
+```
+
+Use a heading scope as a guard:
+
+```bash
+md2feishu push ./doc.md DocToken --scope heading:"Index type overview"
+```
+
+Write only after reviewing the dry-run:
+
+```bash
+md2feishu push ./doc.md DocToken --write -y
+```
+
+Allow full document replacement only when intentional:
+
+```bash
+md2feishu push ./doc.md DocToken --strategy document-replace --replace-all --write -y
+```
+
+## `publish-new`
+
+```bash
+md2feishu publish-new <doc.md>
+md2feishu publish-new <doc.md> --title "Doc Title"
+md2feishu publish-new <doc.md> --title "Doc Title" --wiki-space-id <space-id> --wiki-parent <node-token>
+md2feishu publish-new <doc.md> --title "Doc Title" --folder-token <folder-token>
+md2feishu publish-new <doc.md> --title "Doc Title" --app-owned
+```
+
+Options:
+
+- `--title <title>` - Feishu title. Defaults to the first H1, then the Markdown file basename.
+- `--wiki-space-id <space-id>` - wiki space ID for final placement.
+- `--wiki-parent <node-token-or-url>` - wiki parent node token or URL.
+- `--folder-token <folder-token>` - Drive folder token. Required as a staging folder for wiki publication.
+- `--app-owned` - create a docx owned directly by the Feishu app, without a Drive folder token.
+- `--write` - create the Feishu document. Omitted means dry-run.
+- `-y, --yes` - skip write confirmation.
+- `--allow-duplicate-title` - create anyway after same-title candidates are reported.
+- `--publish-profile <profile>` - apply a publish transform before creating blocks. Currently supports `milvus`.
+- `--markdown-engine <engine>` - `auto`, `official`, or `local`.
+- `--format <format>` - `pretty` or `json`.
+
+Default mode is dry-run. Add `--write` to create the Feishu document. After a successful write, use the printed `md2feishu push ./doc.md '<new-feishu-url>'` command for later updates.
 
 ## `doctor auth`
 
@@ -111,7 +173,7 @@ md2feishu pull '<feishu-doc>' --output feishu.remote.md [--write-receipt]
 
 Exports current Feishu content as best-effort Markdown.
 
-`pull` refuses to replace an existing output file unless `--overwrite` is provided. Use `--write-receipt` when the pulled Markdown should become the local baseline for later `status`, `diff`, `merge`, or section sync work. A pull-created receipt records a read-only baseline; it does not mean Feishu was written.
+`pull` refuses to replace an existing output file unless `--overwrite` is provided. Use `--write-receipt` when the pulled Markdown should become the local baseline for later `status`, `diff`, `merge`, or push work. A pull-created receipt records a read-only baseline; it does not mean Feishu was written.
 
 ## `merge`
 

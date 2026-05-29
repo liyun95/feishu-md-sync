@@ -9,13 +9,13 @@ Use this page when you need to understand the workflow. Use `md2feishu workflow 
 ### Use this when
 
 - The Feishu document changed and you want to pull the current remote content before editing.
-- You need a local Markdown baseline for review, comparison, or later section sync.
+- You need a local Markdown baseline for review, comparison, or a later Feishu push.
 - You want an agent to refresh local content without risking a Feishu write.
 
 ### Do not use this when
 
 - You already have local Markdown changes that should be written to Feishu.
-- You want to replace one named Feishu section from local Markdown. Use [Section Sync](/guide/section-sync).
+- You want to push local Markdown changes back to Feishu. Use [Feishu Push](/guide/push).
 - You want an advanced whole-document write. Inspect the direct CLI reference and safety gates first.
 
 ## Run the workflow
@@ -97,7 +97,7 @@ Baseline sync reads Feishu and writes local files. It does not write Feishu cont
 
 If the target local file already exists, `pull --output <file>` refuses to replace it unless `--overwrite` is explicit. This prevents a remote pull from silently erasing local-only edits.
 
-Any later Feishu write is a separate decision. Use the workflow that matches the intended write target, such as [Section Sync](/guide/section-sync) for one named section.
+Any later Feishu write is a separate decision. Use [Feishu Push](/guide/push) so the CLI can choose the safest write strategy from a dry-run plan.
 
 ### Completion check
 
@@ -139,7 +139,7 @@ md2feishu pull 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=tr
 ## Related reference
 
 - [Choose a Workflow](/guide/workflows)
-- [Section Sync](/guide/section-sync)
+- [Feishu Push](/guide/push)
 - [Safety Gates](/reference/safety-gates)
 - [Commands](/reference/commands)
 - [Receipts](/reference/receipts)
