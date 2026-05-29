@@ -1,5 +1,6 @@
 export type WorkflowId =
   | 'baseline-sync'
+  | 'publish-new'
   | 'push'
   | 'multisdk-examples'
   | 'sdk-reference-authoring'
@@ -34,6 +35,18 @@ const RECIPES: WorkflowRecipe[] = [
       { id: 'review-diff', purpose: 'Compare the remote copy with any existing local baseline before replacement.', command: 'diff -u <existing-doc.md> <doc>.remote.md', writes: 'none', verifies: 'Diff is understood and scoped to expected remote edits.' },
       { id: 'replace-local', purpose: 'Replace an existing local baseline only after explicit overwrite intent.', command: "md2feishu pull '<feishu-doc>' --output <existing-doc.md> --overwrite --write-receipt", writes: 'local', verifies: 'The requested local file and receipt are refreshed from Feishu.' },
       { id: 'status', purpose: 'Confirm the refreshed file is the current baseline.', command: "md2feishu status <existing-doc.md> '<feishu-doc>'", writes: 'none', verifies: 'Status is clean, or any remaining mismatch is explained.' }
+    ]
+  },
+  {
+    id: 'publish-new',
+    title: 'Publish a new Feishu document',
+    whenToUse: 'A local Markdown file has no corresponding Feishu document yet and needs a first publication plus local receipt binding.',
+    primaryArtifacts: ['new Feishu docx URL', '.sync/feishu receipt'],
+    steps: [
+      { id: 'dry-run', purpose: 'Plan the new document title, destination, duplicate check, and block creation.', command: 'md2feishu publish-new <doc.md>', writes: 'none', verifies: 'Title, destination, strategy, duplicate candidates, and block count are clear.' },
+      { id: 'write', purpose: 'Create the new Feishu document after reviewing the dry-run.', command: 'md2feishu publish-new <doc.md> --write -y', writes: 'feishu', verifies: 'Readback verification passes and a receipt is written.' },
+      { id: 'next-push', purpose: 'Use the returned URL for subsequent updates.', command: "md2feishu push <doc.md> '<new-feishu-url>'", writes: 'none', verifies: 'The push dry-run reads the newly published target.' },
+      { id: 'visual-verify', purpose: 'Confirm rendered Feishu content and final wiki or folder placement.', command: 'Open the returned Feishu URL and inspect the document.', writes: 'none', verifies: 'No unexpected formatting, escaped Markdown, duplicate placement, or missing wiki move is visible.' }
     ]
   },
   {

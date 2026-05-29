@@ -9,7 +9,7 @@ export async function gradeHarnessTask(input: { workflow: HarnessWorkflow; taskD
   if (input.workflow === 'multisdk' || input.workflow === 'multisdk-examples') {
     return gradeMultisdkTask({ taskDir: input.taskDir });
   }
-  if (input.workflow === 'baseline-sync' || input.workflow === 'push') {
+  if (input.workflow === 'baseline-sync' || input.workflow === 'publish-new' || input.workflow === 'push') {
     return gradeSyncTask({ taskDir: input.taskDir, workflow: input.workflow });
   }
   if (input.workflow === 'sdk-reference-authoring') return gradeReferenceAuthoringTask({ taskDir: input.taskDir });

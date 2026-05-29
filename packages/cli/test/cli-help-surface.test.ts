@@ -11,9 +11,29 @@ describe('CLI help surface', () => {
       env: { ...process.env, APP_ID: '', APP_SECRET: '' }
     });
 
-    for (const command of ['sync', 'push', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
+    for (const command of ['sync', 'push', 'publish-new', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
       expect(stdout).toContain(command);
     }
+  });
+
+  it('documents publish-new as first-publication with safe common usage shapes', async () => {
+    const { stdout } = await execFileAsync('npx', ['tsx', 'src/cli/index.ts', 'publish-new', '--help'], {
+      cwd: new URL('..', import.meta.url),
+      env: { ...process.env, APP_ID: '', APP_SECRET: '' }
+    });
+
+    expect(stdout).toContain('publish a local Markdown file to a new Feishu document');
+    expect(stdout).toContain('md2feishu publish-new <doc.md>');
+    expect(stdout).toContain('md2feishu publish-new <doc.md> --title "Doc Title"');
+    expect(stdout).toContain('md2feishu publish-new <doc.md> --title "Doc Title" --wiki-space-id <space-id> --wiki-parent <node-token>');
+    expect(stdout).toContain('md2feishu publish-new <doc.md> --title "Doc Title" --folder-token <folder-token>');
+    expect(stdout).toContain('md2feishu publish-new <doc.md> --title "Doc Title" --app-owned');
+    expect(stdout).toContain('Default: dry-run. Add --write to create the Feishu document.');
+    expect(stdout).toContain('--markdown-engine <engine>');
+    expect(stdout).toContain('(default: "local")');
+    expect(stdout).toContain('--folder-token');
+    expect(stdout).toContain('--app-owned');
+    expect(stdout).toContain('--wiki-space-id');
   });
 
   it('does not expose section scope as a public sync option', async () => {

@@ -13,6 +13,7 @@ scripts/install-codex-skills.sh
 After installation, ask Codex to use the workflow skill that matches the task:
 
 - `feishu-baseline-sync`
+- `feishu-publish-new`
 - `feishu-push`
 - `feishu-multisdk-examples`
 - `feishu-sdk-reference-authoring`

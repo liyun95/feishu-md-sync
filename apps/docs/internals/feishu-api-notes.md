@@ -35,6 +35,14 @@ Examples:
 
 Pull, diff, and merge depend on best-effort export from Feishu blocks to Markdown. Unsupported block types are omitted with an HTML comment.
 
+## First Publication
+
+`publish-new` creates an empty docx, inserts rendered child blocks, optionally moves the docx into wiki, reads the final blocks back, and writes a receipt only after hash verification passes.
+
+The V1 block-pipeline path defaults to the local Markdown renderer. Live testing showed Feishu's official Markdown block conversion can return structural table-cell blocks that are not valid direct page children for `POST /docx/v1/documents/:document_id/blocks/:block_id/children`.
+
+Wiki publication still needs a Drive staging folder because the docx is created first and then moved into the target wiki parent.
+
 ## Official Markdown API Smoke Checklist
 
 - Export a reviewed doc with `--markdown-engine official`.

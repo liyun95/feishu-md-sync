@@ -11,6 +11,8 @@ import { applyPublishTransform, type PublishTransformOptions, type PublishTransf
 import { FeishuBlockConvertClient } from '../../services/feishu/block-convert-client.js';
 import { FeishuDocsContentClient } from '../../services/feishu/docs-content-client.js';
 import { readReceipt, receiptPath, writeReceipt, type SyncReceipt } from '../../receipts/receipt.js';
+import { runPublishNew } from '../../sync/publish-new.js';
+import { publishNewHelpAfter, publishNewJson, publishNewSummaryLines } from '../../sync/publish-new-output.js';
 import { unifiedDiff } from '../../sync/diff.js';
 import { buildMergeInstructions, defaultMergedPath, threeWayMerge } from '../../sync/merge.js';
 import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull.js';
@@ -47,6 +49,20 @@ type PushCommandOptions = BaseCommandOptions & {
   markdownEngine?: string;
 };
 
+type PublishNewCommandOptions = BaseCommandOptions & {
+  title?: string;
+  wikiSpaceId?: string;
+  wikiParent?: string;
+  folderToken?: string;
+  appOwned?: boolean;
+  write?: boolean;
+  yes?: boolean;
+  allowDuplicateTitle?: boolean;
+  publishProfile?: string;
+  markdownEngine?: string;
+  format?: string;
+};
+
 type PullCommandOptions = BaseCommandOptions & {
   output?: string;
   markdownEngine?: string;
@@ -70,6 +86,12 @@ type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOpt
 type NormalizedPushCommandOptions = PushCommandOptions & Required<BaseCommandOptions> & {
   format: string;
   strategy: PushStrategy;
+  publishTransform?: PublishTransformOptions;
+  markdownEngine: MarkdownEngineName;
+};
+
+type NormalizedPublishNewCommandOptions = PublishNewCommandOptions & Required<BaseCommandOptions> & {
+  format: string;
   publishTransform?: PublishTransformOptions;
   markdownEngine: MarkdownEngineName;
 };
@@ -138,6 +160,29 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .action(async (markdownFile: string, feishuDoc: string, opts: PushCommandOptions) => {
       await runPushCommand(context, markdownFile, feishuDoc, normalizePushOptions(program, opts));
+    });
+
+  program
+    .command('publish-new')
+    .description('publish a local Markdown file to a new Feishu document')
+    .argument('<markdown-file>', 'local Markdown file')
+    .option('--title <title>', 'Feishu document title; defaults to first H1 or file basename')
+    .option('--wiki-space-id <space-id>', 'Feishu wiki space ID for final placement')
+    .option('--wiki-parent <node-token-or-url>', 'Feishu wiki parent node token or URL for final placement')
+    .option('--folder-token <folder-token>', 'Feishu Drive folder token; required as staging folder for wiki publish')
+    .option('--app-owned', 'create an app-owned docx without a Drive folder token')
+    .option('--write', 'create the Feishu document; omitted means dry-run')
+    .option('-y, --yes', 'skip write confirmation')
+    .option('--allow-duplicate-title', 'create even when same-title candidates already exist')
+    .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'local')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--env-file <file>', 'load credentials from an explicit dotenv file')
+    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+    .addHelpText('after', publishNewHelpAfter())
+    .action(async (markdownFile: string, opts: PublishNewCommandOptions) => {
+      await runPublishNewCommand(context, markdownFile, normalizePublishNewOptions(program, opts));
     });
 
   program
@@ -313,6 +358,27 @@ function normalizePushOptions(program: Command, opts: PushCommandOptions): Norma
   };
 }
 
+function normalizePublishNewOptions(program: Command, opts: PublishNewCommandOptions): NormalizedPublishNewCommandOptions {
+  const globals = program.opts<PublishNewCommandOptions>();
+  const base = normalizeBaseOptions(program, opts);
+  const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile') ?? globals.publishProfile;
+  return {
+    ...base,
+    title: optionFromArgv('--title') ?? commandOptionValue<string>(opts, 'title') ?? globals.title,
+    wikiSpaceId: optionFromArgv('--wiki-space-id') ?? commandOptionValue<string>(opts, 'wikiSpaceId') ?? globals.wikiSpaceId,
+    wikiParent: optionFromArgv('--wiki-parent') ?? commandOptionValue<string>(opts, 'wikiParent') ?? globals.wikiParent,
+    folderToken: optionFromArgv('--folder-token') ?? commandOptionValue<string>(opts, 'folderToken') ?? globals.folderToken,
+    appOwned: flagFromArgv('--app-owned') ?? commandOptionValue<boolean>(opts, 'appOwned') ?? globals.appOwned,
+    write: flagFromArgv('--write') ?? commandOptionValue<boolean>(opts, 'write') ?? globals.write,
+    yes: flagFromArgv('--yes') ?? flagFromArgv('-y') ?? commandOptionValue<boolean>(opts, 'yes') ?? globals.yes,
+    allowDuplicateTitle: flagFromArgv('--allow-duplicate-title') ?? commandOptionValue<boolean>(opts, 'allowDuplicateTitle') ?? globals.allowDuplicateTitle,
+    format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
+    publishProfile,
+    publishTransform: parsePublishTransform(publishProfile),
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'local')
+  };
+}
+
 function normalizeStatusOptions(
   program: Command,
   opts: StatusCommandOptions
@@ -468,6 +534,47 @@ async function runPushCommand(context: CliContext, markdownFile: string, feishuD
     confirm
   });
   printPushResult(buildPushPlan(writeResult), writeResult, opts.format);
+}
+
+async function runPublishNewCommand(context: CliContext, markdownFile: string, opts: NormalizedPublishNewCommandOptions): Promise<void> {
+  const client = context.createFeishuClient({ host: opts.host, timeoutMs: opts.timeoutMs });
+  const markdownEngine = createCliMarkdownEngine(client, opts.markdownEngine);
+  const confirm = async (question: string): Promise<boolean> => {
+    const rl = readline.createInterface({ input, output: stdout });
+    const answer = await rl.question(`${question} [y/N] `);
+    rl.close();
+    return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
+  };
+
+  const result = await runPublishNew(client, {
+    sourcePath: markdownFile,
+    options: {
+      title: opts.title,
+      wikiSpaceId: opts.wikiSpaceId,
+      wikiParent: opts.wikiParent,
+      folderToken: opts.folderToken,
+      appOwned: opts.appOwned,
+      allowDuplicateTitle: opts.allowDuplicateTitle
+    },
+    env: process.env,
+    write: opts.write,
+    yes: opts.yes,
+    publishTransform: opts.publishTransform,
+    markdownEngine,
+    confirm
+  });
+
+  if (opts.format === 'json') {
+    console.log(publishNewJson(result));
+    return;
+  }
+
+  for (const line of publishNewSummaryLines(result)) {
+    console.log(line);
+  }
+  for (const warning of result.markdownEngineWarnings) {
+    console.warn(`warning: ${warning}`);
+  }
 }
 
 async function resolveDocumentId(client: FeishuClient, feishuDoc: string): Promise<string> {

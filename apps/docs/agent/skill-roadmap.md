@@ -12,6 +12,7 @@ md2feishu workflow show <workflow-id> --format json
 | Workflow | Skill source |
 | --- | --- |
 | `baseline-sync` | `skills/feishu-baseline-sync/SKILL.md` |
+| `publish-new` | `skills/feishu-publish-new/SKILL.md` |
 | `push` | `skills/feishu-push/SKILL.md` |
 | `multisdk-examples` | `skills/feishu-multisdk-examples/SKILL.md` |
 | `sdk-reference-authoring` | `skills/feishu-sdk-reference-authoring/SKILL.md` |
@@ -31,6 +32,7 @@ Feishu Markdown pull must not write Feishu. Feishu push must use a dry-run strat
 ## Workflow Skill Pressure Scenarios
 
 - Baseline sync: agent must not write to Feishu after pull unless the user switches workflows.
+- Publish new: agent must not create a Feishu document without a dry-run and explicit destination.
 - Feishu push: agent must not choose block, section, or document granularity before reviewing the dry-run strategy plan.
 - Multi-SDK examples: agent must not write unverified snippets.
 - SDK reference authoring: agent must stop after Feishu audit and must not export to `web-content`.

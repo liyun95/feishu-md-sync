@@ -38,9 +38,22 @@ describe('harness tools registry', () => {
 
   it('parses supported workflows and rejects unsupported workflows', () => {
     expect(parseHarnessWorkflow('push')).toBe('push');
+    expect(parseHarnessWorkflow('publish-new')).toBe('publish-new');
     expect(parseHarnessWorkflow('multisdk')).toBe('multisdk');
     expect(() => parseHarnessWorkflow('release')).toThrow(/Unsupported harness workflow release/);
     expect(() => parseHarnessWorkflow('')).toThrow(/Unsupported harness workflow/);
+  });
+
+  it('lists publish-new as the first-publication tool surface', () => {
+    const registry = getHarnessTools('publish-new');
+
+    expect(registry.workflow).toBe('publish-new');
+    expect(registry.tools.find((tool) => tool.name === 'publish-new')).toEqual(expect.objectContaining({
+      mode: 'dry-run-or-write',
+      writesFeishu: true,
+      requires: ['markdownFile', 'destination'],
+      writeRequires: ['--write', 'approved dry-run', 'explicit or configured destination', 'duplicate-title review']
+    }));
   });
 
   it('lists push as the Markdown write tool surface', () => {

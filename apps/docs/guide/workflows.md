@@ -10,6 +10,7 @@ md2feishu workflow show <workflow-id>
 | User task | Skill | Workflow ID | Writes to | Human approval point |
 | --- | --- | --- | --- | --- |
 | Pull or refresh a remote Feishu doc into local Markdown | `feishu-baseline-sync` | `baseline-sync` | Local Markdown only | Before any later Feishu write |
+| Publish local Markdown that has no Feishu document yet | `feishu-publish-new` | `publish-new` | New Feishu docx and receipt | Before `--write`; after duplicate-title review |
 | Push local Markdown changes back to Feishu | `feishu-push` | `push` | Feishu document content | Before `--write`; before `--replace-all` for full replacement |
 | Complete multi-language SDK examples | `feishu-multisdk-examples` | `multisdk-examples` | Feishu code blocks | Before applying validated snippets |
 | Write and audit SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | `sdk-reference-authoring` | Feishu docs and Bitable artifacts | Before Feishu apply |
@@ -22,6 +23,10 @@ Use the task name and the target document or task directory:
 
 ```text
 Use feishu-baseline-sync on this Feishu document and write a local remote-copy Markdown file for review.
+```
+
+```text
+Use feishu-publish-new to publish this local Markdown file as a new Feishu document.
 ```
 
 ```text
@@ -46,6 +51,7 @@ The CLI recipe is still available when you need exact commands:
 
 ```bash
 md2feishu workflow show baseline-sync
+md2feishu workflow show publish-new
 md2feishu workflow show push
 md2feishu workflow show multisdk-examples
 md2feishu workflow show sdk-reference-authoring

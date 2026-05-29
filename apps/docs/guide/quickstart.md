@@ -26,6 +26,7 @@ This installs the workflow skills used by Codex:
 | Skill | What it is for |
 | --- | --- |
 | [`feishu-baseline-sync`](/agent/skills/feishu-baseline-sync) | Pull a remote Feishu document into local Markdown before editing. |
+| [`feishu-publish-new`](/agent/skills/feishu-publish-new) | Publish local Markdown that has no Feishu URL yet. |
 | [`feishu-push`](/agent/skills/feishu-push) | Push local Markdown changes back to Feishu after a dry-run strategy review. |
 | [`feishu-multisdk-examples`](/agent/skills/feishu-multisdk-examples) | Complete and validate Java, JavaScript, Go, or REST examples from a source example. |
 | [`feishu-sdk-reference-authoring`](/agent/skills/feishu-sdk-reference-authoring) | Write and audit SDK reference changes in Feishu. |
@@ -61,6 +62,7 @@ The Feishu app also needs API permissions and access to the target document. See
 | When you need to... | Use this skill | What the workflow does |
 | --- | --- | --- |
 | Pull a remote Feishu document into local Markdown before making edits | `feishu-baseline-sync` | Exports the current Feishu content to a local baseline file. It does not write back to Feishu. |
+| Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` | Dry-runs title, destination, duplicate-title checks, then creates a new Feishu docx only after approval. |
 | Push local Markdown changes back to the remote Feishu document | `feishu-push` | Dry-runs the push, chooses block-patch, section-replace, or document-replace, then writes only after approval. |
 | Complete missing SDK examples across languages | `feishu-multisdk-examples` | Generates, validates, and applies language-scoped code-block updates for selected SDKs. |
 | Write SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | Plans, writes, and audits Feishu reference content. It stops after the Feishu audit. |

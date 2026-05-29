@@ -208,6 +208,32 @@ const PUSH_TOOLS: HarnessTool[] = [
   }
 ];
 
+const PUBLISH_NEW_TOOLS: HarnessTool[] = [
+  readTool('doctor auth', 'Report auth env loading without printing secrets.'),
+  {
+    name: 'publish-new',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['markdownFile', 'destination'],
+    writeRequires: ['--write', 'approved dry-run', 'explicit or configured destination', 'duplicate-title review'],
+    artifacts: ['new Feishu URL', '.sync/feishu receipt after verification'],
+    description: 'Dry-run or create a new Feishu docx from local Markdown.'
+  },
+  {
+    name: 'push',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['markdownFile', 'newFeishuUrl'],
+    writeRequires: ['successful publish-new receipt', '--write for later updates'],
+    artifacts: ['push dry-run/write output', 'readback verification'],
+    description: 'Use the returned publish-new URL for subsequent local Markdown updates.'
+  }
+];
+
 const REFERENCE_AUTHORING_TOOLS: HarnessTool[] = [
   readTool('reference preflight', 'Check SDK source freshness before planning reference changes.', ['--sdk', '--repo', '--version-line']),
   localTool('reference plan', ['--impact', '--out'], ['reference manifest'], 'Convert an approved impact matrix into a publish manifest.'),
@@ -261,6 +287,7 @@ const RELEASE_NOTES_TOOLS: HarnessTool[] = [
 
 const SUPPORTED_WORKFLOWS: HarnessWorkflow[] = [
   'baseline-sync',
+  'publish-new',
   'push',
   'multisdk-examples',
   'multisdk',
@@ -286,6 +313,7 @@ export function getHarnessTools(workflow: HarnessWorkflow): HarnessToolsRegistry
 function toolsForWorkflow(workflow: HarnessWorkflow): HarnessTool[] {
   if (workflow === 'multisdk' || workflow === 'multisdk-examples') return MULTISDK_TOOLS;
   if (workflow === 'baseline-sync') return BASELINE_SYNC_TOOLS;
+  if (workflow === 'publish-new') return PUBLISH_NEW_TOOLS;
   if (workflow === 'push') return PUSH_TOOLS;
   if (workflow === 'sdk-reference-authoring') return REFERENCE_AUTHORING_TOOLS;
   if (workflow === 'sdk-reference-web-content-release') return REFERENCE_RELEASE_TOOLS;

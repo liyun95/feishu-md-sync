@@ -5,12 +5,26 @@ describe('workflow registry', () => {
   it('lists user-story oriented workflows', () => {
     expect(listWorkflowRecipes().map((recipe) => recipe.id)).toEqual([
       'baseline-sync',
+      'publish-new',
       'push',
       'multisdk-examples',
       'sdk-reference-authoring',
       'sdk-reference-web-content-release',
       'release-notes'
     ]);
+  });
+
+  it('describes publish-new as the first-publication workflow', () => {
+    const recipe = getWorkflowRecipe('publish-new');
+    expect(recipe.title).toBe('Publish a new Feishu document');
+    expect(recipe.steps.map((step) => step.id)).toEqual([
+      'dry-run',
+      'write',
+      'next-push',
+      'visual-verify'
+    ]);
+    expect(recipe.steps[0].command).toBe('md2feishu publish-new <doc.md>');
+    expect(recipe.steps[1].command).toContain('--write -y');
   });
 
   it('describes push as the local-to-Feishu write workflow', () => {

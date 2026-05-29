@@ -19,6 +19,7 @@ scripts/install-codex-skills.sh
 This installs the workflow skills:
 
 - `feishu-baseline-sync`
+- `feishu-publish-new`
 - `feishu-push`
 - `feishu-multisdk-examples`
 - `feishu-sdk-reference-authoring`
@@ -32,6 +33,7 @@ After installation, ask Codex to use the matching skill instead of memorizing co
 | Task | Skill | Workflow recipe |
 | --- | --- | --- |
 | Pull Feishu into Markdown before editing | `feishu-baseline-sync` | `md2feishu workflow show baseline-sync` |
+| Publish local Markdown as a new Feishu doc | `feishu-publish-new` | `md2feishu workflow show publish-new` |
 | Push local Markdown changes to Feishu | `feishu-push` | `md2feishu workflow show push` |
 | Complete multi-SDK examples | `feishu-multisdk-examples` | `md2feishu workflow show multisdk-examples` |
 | Author SDK reference changes on Feishu | `feishu-sdk-reference-authoring` | `md2feishu workflow show sdk-reference-authoring` |

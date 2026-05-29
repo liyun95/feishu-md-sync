@@ -1,5 +1,6 @@
 export type HarnessWorkflow =
   | 'baseline-sync'
+  | 'publish-new'
   | 'push'
   | 'multisdk-examples'
   | 'multisdk'

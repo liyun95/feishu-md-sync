@@ -16,9 +16,10 @@ Fill in the Feishu app credentials:
 APP_ID=cli_xxx
 APP_SECRET=xxx
 FEISHU_HOST=https://open.feishu.cn
+FEISHU_WEB_BASE_URL=https://example.feishu.cn
 ```
 
-`APP_ID` and `APP_SECRET` are required. `FEISHU_HOST` is optional and defaults to `https://open.feishu.cn`.
+`APP_ID` and `APP_SECRET` are required. `FEISHU_HOST` is optional and defaults to `https://open.feishu.cn`. `FEISHU_WEB_BASE_URL` is optional and lets app-owned document creation print browser URLs when the Feishu create API returns only a document id.
 
 `.env` is ignored by git. Do not commit real credentials.
 
@@ -57,6 +58,8 @@ Workflow-specific features may need additional permissions:
 | --- | --- |
 | Read or write SDK reference Bitable audit records | `查看、评论、编辑和管理多维表格` |
 | List docs in a Drive folder | `获取云空间文件夹下的云文档清单` |
+| Publish a new docx into a Drive folder | `创建及编辑新版文档`, plus folder edit access |
+| Move a newly created docx into wiki | Wiki node management permission for moving cloud docs into wiki |
 | Create folders for SDK reference outputs | `创建云空间文件夹` |
 | Copy reference documents | `复制云文档` |
 | Move reference documents or folders | `移动云空间文件夹和云文档` |
@@ -66,4 +69,6 @@ API permissions are not enough by themselves. The app also needs resource access
 - For a docx target, add the app as a collaborator on the document. Use read access for pull-only workflows and edit access for write workflows.
 - For a wiki target, the app needs node read access to resolve the wiki node, plus edit access to the underlying docx document when writing.
 - For Drive folder operations, the app needs access to the folder. Creating, copying, or moving files requires edit access to the target folder.
+- For first publication, configure `FEISHU_PUBLISH_FOLDER_TOKEN` for Drive publication or staging. For wiki publication, also configure `FEISHU_PUBLISH_SPACE_ID` and `FEISHU_PUBLISH_PARENT_NODE_TOKEN`.
+- To create app-owned docx documents without a folder destination, set `FEISHU_PUBLISH_APP_OWNED=true` or pass `--app-owned`.
 - After changing app API permissions, publish or reinstall the app as required by the Feishu developer console so the new permissions take effect.

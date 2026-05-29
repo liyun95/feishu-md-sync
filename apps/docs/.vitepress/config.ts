@@ -28,6 +28,7 @@ export default defineConfig({
         items: [
           { text: 'Choose a Workflow', link: '/guide/workflows' },
           { text: 'Baseline Sync', link: '/guide/baseline-sync' },
+          { text: 'Publish New', link: '/guide/publish-new' },
           { text: 'Feishu Push', link: '/guide/push' },
           { text: 'Multi-SDK Examples', link: '/guide/multisdk-workflow' },
           { text: 'SDK Reference Authoring', link: '/guide/sdk-reference-workflow' },

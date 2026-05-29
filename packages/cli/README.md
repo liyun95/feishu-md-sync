@@ -11,6 +11,7 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 | Need | Recommended entry |
 | --- | --- |
 | Pull a Feishu document into local Markdown before editing | `feishu-baseline-sync` skill or `md2feishu pull` |
+| Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` skill or `md2feishu publish-new` |
 | Push local Markdown changes back to Feishu | `feishu-push` skill or `md2feishu push` |
 | Inspect a planned write before applying it | `md2feishu push` without `--write` |
 | Resolve local/remote drift | `md2feishu status`, `md2feishu diff`, and `md2feishu merge` |
@@ -30,6 +31,7 @@ Show the workflow recipe before running lower-level commands:
 
 ```bash
 npm exec -- md2feishu workflow show baseline-sync
+npm exec -- md2feishu workflow show publish-new
 npm exec -- md2feishu workflow show push
 ```
 
@@ -69,6 +71,14 @@ Dry-run a push. The CLI chooses block-patch, section-replace, or document-replac
 
 ```bash
 npm exec -- md2feishu push ./doc.md DocToken
+```
+
+For the full dry-run review workflow, strategy meanings, and scoped receipt caveats, see the [Feishu Push guide](https://liyun95.github.io/feishu-md-sync/guide/push).
+
+Dry-run first publication for a file with no Feishu URL yet:
+
+```bash
+npm exec -- md2feishu publish-new ./doc.md --folder-token <folder-token>
 ```
 
 Write only after reviewing the dry-run:

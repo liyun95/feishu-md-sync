@@ -30,6 +30,7 @@ features:
 | I want to... | Start with |
 | --- | --- |
 | Pull a Feishu doc into local Markdown before editing | [Baseline Sync](/guide/baseline-sync) |
+| Publish local Markdown that has no Feishu URL yet | [Publish New](/guide/publish-new) |
 | Push local Markdown changes back to Feishu | [Feishu Push](/guide/push) |
 | Complete Java, JavaScript, Go, or REST examples from a Python source example | [Multi-SDK Examples](/guide/multisdk-workflow) |
 | Write and audit SDK reference changes in Feishu | [SDK Reference Authoring](/guide/sdk-reference-workflow) |
