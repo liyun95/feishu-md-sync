@@ -5,7 +5,8 @@ describe('workflow registry', () => {
   it('lists user-story oriented workflows', () => {
     expect(listWorkflowRecipes().map((recipe) => recipe.id)).toEqual([
       'baseline-sync',
-      'reviewed-section-sync',
+      'publish-new',
+      'push',
       'multisdk-examples',
       'sdk-reference-authoring',
       'sdk-reference-web-content-release',
@@ -13,11 +14,44 @@ describe('workflow registry', () => {
     ]);
   });
 
-  it('gives concrete next commands for a baseline sync', () => {
+  it('describes publish-new as the first-publication workflow', () => {
+    const recipe = getWorkflowRecipe('publish-new');
+    expect(recipe.title).toBe('Publish a new Feishu document');
+    expect(recipe.steps.map((step) => step.id)).toEqual([
+      'dry-run',
+      'write',
+      'next-push',
+      'visual-verify'
+    ]);
+    expect(recipe.steps[0].command).toBe('md2feishu publish-new <doc.md>');
+    expect(recipe.steps[1].command).toContain('--write -y');
+  });
+
+  it('describes push as the local-to-Feishu write workflow', () => {
+    const recipe = getWorkflowRecipe('push');
+    expect(recipe.title).toBe('Push local Markdown changes to Feishu');
+    expect(recipe.steps.map((step) => step.id)).toEqual([
+      'dry-run',
+      'write',
+      'replace-all',
+      'visual-verify'
+    ]);
+    expect(recipe.steps[0].command).toBe('md2feishu push <doc.md> <feishu-doc>');
+    expect(recipe.steps[2].command).toContain('--replace-all');
+  });
+
+  it('gives safe next commands for a baseline sync', () => {
     const recipe = getWorkflowRecipe('baseline-sync');
     expect(recipe.title).toBe('Pull Feishu to local Markdown baseline');
-    expect(recipe.steps[0].command).toBe('md2feishu doctor auth');
-    expect(recipe.steps.some((step) => step.command.includes('md2feishu pull'))).toBe(true);
+    expect(recipe.steps.map((step) => step.id)).toEqual([
+      'auth',
+      'preview-pull',
+      'review-diff',
+      'replace-local',
+      'status'
+    ]);
+    expect(recipe.steps[3].command).toContain('--overwrite');
+    expect(recipe.steps[3].command).toContain('--write-receipt');
   });
 
   it('keeps SDK reference authoring separate from web-content release', () => {

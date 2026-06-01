@@ -3,43 +3,55 @@ layout: home
 
 hero:
   name: md2feishu
-  text: Safe Markdown to Feishu sync
-  tagline: Sync local Markdown to Feishu without overwriting remote edits by accident.
+  text: Feishu docs workflows for Codex and CLI
+  tagline: Pull, edit, review, and publish Feishu documentation with workflow skills first and safe CLI commands underneath.
   actions:
     - theme: brand
       text: Start with Quickstart
       link: /guide/quickstart
     - theme: alt
-      text: Agent Guide
-      link: /agent/install
+      text: Choose a Workflow
+      link: /guide/workflows
     - theme: alt
       text: Command Reference
       link: /reference/commands
 
 features:
-  - title: Dry-run first
-    details: The CLI defaults to planning changes. Feishu writes require explicit write flags.
-  - title: Receipt-backed safety
-    details: Successful writes store local and Feishu snapshots so later syncs can detect remote edits.
-  - title: Conflict-aware workflow
-    details: Use status, diff, pull, and merge to inspect remote changes before writing.
-  - title: Agent-ready commands
-    details: Non-interactive command patterns and safety rules are documented for agents and automation.
+  - title: Skill-first workflow
+    details: Install Codex workflow skills and ask the agent to run the task by name.
+  - title: Safe by default
+    details: Write operations use dry-runs, receipts, explicit approvals, and readback checks.
+  - title: Human release boundary
+    details: SDK reference authoring ends in Feishu; publishing to web-content starts only after a human release request.
 ---
 
-## How It Works
+## Choose by task
 
-1. Configure Feishu credentials.
-2. Run a dry-run against a document token or URL.
-3. Create a baseline receipt with an explicit write.
-4. Use `status`, `diff`, or `merge` when Feishu changed.
-5. Publish clean merges or resolved `.merged.md` files.
+| I want to... | Start with |
+| --- | --- |
+| Pull a Feishu doc into local Markdown before editing | [Baseline Sync](/guide/baseline-sync) |
+| Publish local Markdown that has no Feishu URL yet | [Publish New](/guide/publish-new) |
+| Push local Markdown changes back to Feishu | [Feishu Push](/guide/push) |
+| Complete Java, JavaScript, Go, or REST examples from a Python source example | [Multi-SDK Examples](/guide/multisdk-workflow) |
+| Write and audit SDK reference changes in Feishu | [SDK Reference Authoring](/guide/sdk-reference-workflow) |
+| Release audited SDK reference content into `web-content` | [SDK Reference Release](/guide/sdk-reference-release-workflow) |
+| Audit and apply release-note updates | [Release Notes](/guide/release-workflow) |
 
-## Current Capabilities
+## Recommended path
 
-- Sync one local Markdown file to one existing Feishu docx document.
-- Resolve docx tokens, docx URLs, and wiki URLs.
-- Refuse writes by default when Feishu changed since the last receipt.
-- Export Feishu content as best-effort Markdown.
-- Generate a `.merged.md` file for local + Feishu edits.
-- Let agents use deterministic non-interactive commands with clear stop conditions.
+Install the workflow skills, then ask Codex to use the skill that matches the task:
+
+```bash
+npm install
+npm run build
+scripts/install-codex-skills.sh
+```
+
+The skills load workflow recipes from the CLI. You can still use the CLI directly when you need exact command control or automation.
+
+## Safety model
+
+- Commands plan before writing unless a workflow explicitly reaches an approved write step.
+- Feishu writes require `--write` and confirmation or `--yes`.
+- Receipts and readback checks protect against accidental remote overwrites.
+- Release workflows that touch external docs repositories require explicit human release intent.

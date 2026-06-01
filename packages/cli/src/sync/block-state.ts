@@ -64,6 +64,10 @@ function resolveChildContainer(block: FeishuBlock, byId: Map<string, FeishuBlock
 }
 
 function comparableBlock(block: FeishuBlock, byId: Map<string, FeishuBlock>): FeishuBlock {
+  if (block.block_type === 49 && Array.isArray(block.children)) {
+    return resolveChildContainer(block, byId);
+  }
+
   if (block.block_type !== 31 || !isTableBlock(block)) {
     return block;
   }

@@ -193,18 +193,44 @@ const BASELINE_SYNC_TOOLS: HarnessTool[] = [
   localTool('merge', ['markdownFile', 'feishuDoc'], ['merged Markdown file'], 'Merge local Markdown with current Feishu content into a .merged.md file.')
 ];
 
-const REVIEWED_SECTION_SYNC_TOOLS: HarnessTool[] = [
+const PUSH_TOOLS: HarnessTool[] = [
   readTool('diff', 'Inspect local versus remote changes.', ['markdownFile', 'feishuDoc']),
   {
-    name: 'sync --section',
+    name: 'push',
     mode: 'dry-run-or-write',
     writesFeishu: true,
     writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['markdownFile', 'feishuDoc', '--section'],
-    writeRequires: ['--write', 'unique local and remote section heading', 'reviewed dry-run plan'],
+    requires: ['markdownFile', 'feishuDoc'],
+    writeRequires: ['--write', 'approved dry-run strategy plan', '--replace-all when selected strategy is document-replace'],
     artifacts: ['dry-run/write output', 'readback verification'],
-    description: 'Dry-run or write one named section while preserving content outside the section.'
+    description: 'Dry-run or write local Markdown changes using the selected block, section, or document push strategy.'
+  }
+];
+
+const PUBLISH_NEW_TOOLS: HarnessTool[] = [
+  readTool('doctor auth', 'Report auth env loading without printing secrets.'),
+  {
+    name: 'publish-new',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['markdownFile', 'destination'],
+    writeRequires: ['--write', 'approved dry-run', 'explicit or configured destination', 'duplicate-title review'],
+    artifacts: ['new Feishu URL', '.sync/feishu receipt after verification'],
+    description: 'Dry-run or create a new Feishu docx from local Markdown.'
+  },
+  {
+    name: 'push',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['markdownFile', 'newFeishuUrl'],
+    writeRequires: ['successful publish-new receipt', '--write for later updates'],
+    artifacts: ['push dry-run/write output', 'readback verification'],
+    description: 'Use the returned publish-new URL for subsequent local Markdown updates.'
   }
 ];
 
@@ -261,7 +287,8 @@ const RELEASE_NOTES_TOOLS: HarnessTool[] = [
 
 const SUPPORTED_WORKFLOWS: HarnessWorkflow[] = [
   'baseline-sync',
-  'reviewed-section-sync',
+  'publish-new',
+  'push',
   'multisdk-examples',
   'multisdk',
   'sdk-reference-authoring',
@@ -286,7 +313,8 @@ export function getHarnessTools(workflow: HarnessWorkflow): HarnessToolsRegistry
 function toolsForWorkflow(workflow: HarnessWorkflow): HarnessTool[] {
   if (workflow === 'multisdk' || workflow === 'multisdk-examples') return MULTISDK_TOOLS;
   if (workflow === 'baseline-sync') return BASELINE_SYNC_TOOLS;
-  if (workflow === 'reviewed-section-sync') return REVIEWED_SECTION_SYNC_TOOLS;
+  if (workflow === 'publish-new') return PUBLISH_NEW_TOOLS;
+  if (workflow === 'push') return PUSH_TOOLS;
   if (workflow === 'sdk-reference-authoring') return REFERENCE_AUTHORING_TOOLS;
   if (workflow === 'sdk-reference-web-content-release') return REFERENCE_RELEASE_TOOLS;
   return RELEASE_NOTES_TOOLS;

@@ -1,19 +1,62 @@
-# Workflows
+# Choose a Workflow
 
-Use workflows instead of memorizing command combinations.
+Use workflow skills instead of memorizing command combinations. Each skill loads the matching CLI workflow recipe and follows the safety gates for that task.
 
 ```bash
 md2feishu workflow list
 md2feishu workflow show <workflow-id>
 ```
 
-| Workflow | Use when | Starts with |
-| --- | --- | --- |
-| `baseline-sync` | Pull current Feishu content into local Markdown before editing. | `md2feishu workflow show baseline-sync` |
-| `reviewed-section-sync` | Replace one reviewed Feishu section from local Markdown. | `md2feishu workflow show reviewed-section-sync` |
-| `multisdk-examples` | Complete and validate Java, JavaScript, Go, or REST examples from Python examples. | `md2feishu workflow show multisdk-examples` |
-| `sdk-reference-authoring` | Plan, write, and audit SDK reference changes on Feishu. | `md2feishu workflow show sdk-reference-authoring` |
-| `sdk-reference-web-content-release` | Release audited SDK reference docs to `web-content` after human approval. | `md2feishu workflow show sdk-reference-web-content-release` |
-| `release-notes` | Audit and apply Milvus release-note changes. | `md2feishu workflow show release-notes` |
+| User task | Skill | Workflow ID | Writes to | Human approval point |
+| --- | --- | --- | --- | --- |
+| Pull or refresh a remote Feishu doc into local Markdown | `feishu-baseline-sync` | `baseline-sync` | Local Markdown only | Before any later Feishu write |
+| Publish local Markdown that has no Feishu document yet | `feishu-publish-new` | `publish-new` | New Feishu docx and receipt | Before `--write`; after duplicate-title review |
+| Push local Markdown changes back to Feishu | `feishu-push` | `push` | Feishu document content | Before `--write`; before `--replace-all` for full replacement |
+| Complete multi-language SDK examples | `feishu-multisdk-examples` | `multisdk-examples` | Feishu code blocks | Before applying validated snippets |
+| Write and audit SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | `sdk-reference-authoring` | Feishu docs and Bitable artifacts | Before Feishu apply |
+| Release audited SDK reference docs to `web-content` | `feishu-sdk-reference-release` | `sdk-reference-web-content-release` | External `web-content` checkout | At workflow start; this is a separate human-triggered release |
+| Audit and apply release-note changes | `feishu-release-notes` | `release-notes` | Local docs checkout | Before applying an approved report hash |
+
+## How to ask Codex
+
+Use the task name and the target document or task directory:
+
+```text
+Use feishu-baseline-sync on this Feishu document and write a local remote-copy Markdown file for review.
+```
+
+```text
+Use feishu-publish-new to publish this local Markdown file as a new Feishu document.
+```
+
+```text
+Use feishu-push to push my local Markdown changes to this Feishu document.
+```
+
+```text
+Use feishu-push with heading scope "Index type overview" so only that section is considered.
+```
+
+```text
+Use feishu-sdk-reference-authoring for this SDK reference change. Stop after the Feishu audit.
+```
+
+```text
+Use feishu-sdk-reference-release for the audited reference manifest. This is a human-approved release to web-content.
+```
+
+## Direct CLI usage
+
+The CLI recipe is still available when you need exact commands:
+
+```bash
+md2feishu workflow show baseline-sync
+md2feishu workflow show publish-new
+md2feishu workflow show push
+md2feishu workflow show multisdk-examples
+md2feishu workflow show sdk-reference-authoring
+md2feishu workflow show sdk-reference-web-content-release
+md2feishu workflow show release-notes
+```
 
 Workflow details are generated from the CLI registry. If this page and CLI output disagree, update this page or the registry in the same change.

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashBlocks } from '../src/core/hash.js';
 import type { FeishuBlock, FeishuDocClient } from '../src/feishu/types.js';
 import { markdownToFeishuBlocks } from '../src/markdown/blocks.js';
+import { createMarkdownEngine } from '../src/markdown/engine.js';
 import { receiptPath, writeReceipt, type SyncReceipt } from '../src/receipts/receipt.js';
 import { runSync } from '../src/sync/run-sync.js';
 import { createInitialMultisdkTask, saveMultisdkTask } from '../src/multisdk/task.js';
@@ -127,9 +128,12 @@ Remote-only content
       title: 'Target',
       remoteStartIndex: 2,
       remoteEndIndex: 4,
-      localStartIndex: 2,
-      localEndIndex: 4
+      localStartIndex: 0,
+      localEndIndex: 2
     });
+    expect(result.blockLevelSectionPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'update', remoteIndex: 3, desiredIndex: 1 })
+    ]);
     expect(result.receipt.blockCounts.source).toBe(2);
     expect(client.createChildren).not.toHaveBeenCalled();
     expect(client.deleteChildren).not.toHaveBeenCalled();
@@ -178,17 +182,20 @@ Remote-only content
       section: 'Target'
     });
 
-    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', local.slice(2, 4), { index: 4 });
-    expect(client.deleteChildren).toHaveBeenCalledWith('doc1234567890123', 'page', 2, 4);
-    expect(client.createChildren.mock.invocationCallOrder[0]).toBeLessThan(client.deleteChildren.mock.invocationCallOrder[0]);
+    expect(client.batchUpdateBlocks).toHaveBeenCalledWith('doc1234567890123', [
+      expect.objectContaining({ block_id: 'child-3' })
+    ]);
+    expect(client.createChildren).not.toHaveBeenCalled();
+    expect(client.deleteChildren).not.toHaveBeenCalled();
     await expect(readFile(result.receiptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(result.receiptWritten).toBe(false);
     expect(result.warnings).toEqual(expect.arrayContaining([
-      'Scoped sync does not update the whole-document receipt.'
+      'Scoped push used Feishu block-level patching.',
+      'Scoped push does not update the whole-document receipt.'
     ]));
   });
 
-  it('preflights only the selected section during section sync', async () => {
+  it('preflights only the selected section during scoped push', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, `## Target
 
@@ -215,10 +222,86 @@ Safe body
       section: 'Target'
     });
 
-    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', local.slice(0, 2), { index: 2 });
+    expect(client.batchUpdateBlocks).toHaveBeenCalledWith('doc1234567890123', [
+      expect.objectContaining({ block_id: 'child-1' })
+    ]);
+    expect(client.createChildren).not.toHaveBeenCalled();
+    expect(client.deleteChildren).not.toHaveBeenCalled();
   });
 
-  it('section sync uses current remote content even when the whole-document receipt is stale', async () => {
+  it('creates only an inserted block during scoped push', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `## FAQ
+
+Inserted answer
+
+Old answer
+
+## Other
+
+Local ignored
+`);
+    const remote = markdownToFeishuBlocks('## FAQ\n\nOld answer\n\n## Other\n\nKeep\n');
+    const expected = markdownToFeishuBlocks('## FAQ\n\nInserted answer\n\nOld answer\n\n## Other\n\nKeep\n');
+    const client = fakeClient(expected, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      section: 'FAQ'
+    });
+
+    expect(result.blockLevelSectionPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'create', index: 1, desiredStartIndex: 1, desiredEndIndex: 2 })
+    ]);
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', [
+      expect.objectContaining({ block_type: 2 })
+    ], { index: 1 });
+    expect(client.deleteChildren).not.toHaveBeenCalled();
+    expect(client.batchUpdateBlocks).not.toHaveBeenCalled();
+  });
+
+  it('uses local section rendering for auto-mode block-level planning', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, '## FAQ\n\nInserted answer\n\nOld answer\n\n## Other\n\nLocal ignored\n');
+    const remote = markdownToFeishuBlocks('## FAQ\n\nOld answer\n\n## Other\n\nKeep\n');
+    const expected = markdownToFeishuBlocks('## FAQ\n\nInserted answer\n\nOld answer\n\n## Other\n\nKeep\n');
+    const officialImport = vi.fn(async () => [
+      markdownToFeishuBlocks('## FAQ\n\nOld answer\n')[0],
+      markdownToFeishuBlocks('## FAQ\n\nOld answer\n')[1],
+      markdownToFeishuBlocks('Inserted answer\n')[0]
+    ]);
+    const client = fakeClient(expected, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      section: 'FAQ',
+      markdownEngine: createMarkdownEngine({
+        mode: 'auto',
+        official: {
+          getMarkdownContent: vi.fn(),
+          markdownToBlocks: officialImport
+        }
+      })
+    });
+
+    expect(officialImport).not.toHaveBeenCalled();
+    expect(result.blockLevelSectionPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'create', index: 1 })
+    ]);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('Scoped push used the local Markdown renderer')
+    ]));
+  });
+
+  it('scoped push uses current remote content even when the whole-document receipt is stale', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, '## Target\n\nNew body\n\n## Other\n\nLocal other\n');
     const baseBlocks = markdownToFeishuBlocks('## Target\n\nOld body\n\n## Other\n\nBase other\n');
@@ -253,9 +336,13 @@ Safe body
     });
 
     expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining('Feishu changed since the last receipt; section sync will replace only section "Target"')
+      expect.stringContaining('Feishu changed since the last receipt; scoped push will write only section "Target"')
     ]));
-    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', localBlocks.slice(0, 2), { index: 2 });
+    expect(client.batchUpdateBlocks).toHaveBeenCalledWith('doc1234567890123', [
+      expect.objectContaining({ block_id: 'child-1' })
+    ]);
+    expect(client.createChildren).not.toHaveBeenCalled();
+    expect(client.deleteChildren).not.toHaveBeenCalled();
   });
 
   it('writes, verifies readback, and stores a receipt', async () => {
@@ -803,7 +890,7 @@ Remote arithmetic
     expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', local, { index: 2 });
     expect(client.deleteChildren).not.toHaveBeenCalled();
     expect(result.warnings).toEqual(expect.arrayContaining([
-      'Scoped sync does not update the whole-document receipt.'
+      'Scoped push does not update the whole-document receipt.'
     ]));
   });
 
@@ -849,6 +936,7 @@ Remote how
 function fakeClient(readbackChildren: FeishuBlock[], initialChildren: FeishuBlock[] = []): FeishuDocClient & {
   deleteChildren: ReturnType<typeof vi.fn>;
   createChildren: ReturnType<typeof vi.fn>;
+  batchUpdateBlocks: ReturnType<typeof vi.fn>;
 } {
   let callCount = 0;
   const blockList = (children: FeishuBlock[]): FeishuBlock[] => [
@@ -862,6 +950,7 @@ function fakeClient(readbackChildren: FeishuBlock[], initialChildren: FeishuBloc
       return callCount === 1 ? blockList(initialChildren) : blockList(readbackChildren);
     }),
     deleteChildren: vi.fn(async () => undefined),
-    createChildren: vi.fn(async (_documentId: string, _parentBlockId: string, blocks: FeishuBlock[]) => blocks)
+    createChildren: vi.fn(async (_documentId: string, _parentBlockId: string, blocks: FeishuBlock[]) => blocks),
+    batchUpdateBlocks: vi.fn(async () => [])
   };
 }

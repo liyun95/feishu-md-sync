@@ -19,6 +19,7 @@ export type SyncReceipt = {
     mode: 'dry-run' | 'write';
     deleted: number;
     created: number;
+    updated?: number;
     skipped: boolean;
   };
   verificationResult: {
@@ -27,6 +28,7 @@ export type SyncReceipt = {
     actualHash: string;
   };
   runContext?: SyncReceiptRunContext;
+  publish?: PublishReceiptMetadata;
 };
 
 export type SyncReceiptRunContext = {
@@ -35,6 +37,16 @@ export type SyncReceiptRunContext = {
   explicitEnvFile?: string;
   feishuHost: string;
   activeTransforms: string[];
+};
+
+export type PublishReceiptMetadata = {
+  workflow: 'publish-new';
+  title: string;
+  documentUrl?: string;
+  wikiUrl?: string;
+  wikiNodeToken?: string;
+  destination: unknown;
+  creationStrategy: 'block-pipeline';
 };
 
 export function receiptPath(rootDir: string, sourcePath: string, docId: string): string {

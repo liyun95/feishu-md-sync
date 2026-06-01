@@ -128,6 +128,29 @@ describe('FeishuClient', () => {
     });
   });
 
+  it('strips server-owned block metadata before creating children', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0,
+      data: { children: [{ block_id: 'created', block_type: 4 }] }
+    }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await client.createChildren('doc', 'page', [{
+      block_id: 'official-convert-block',
+      block_type: 4,
+      heading2: { elements: [], style: { align: 1 } },
+      parent_id: 'official-convert-parent'
+    }]);
+
+    expect(JSON.parse(fetchImpl.mock.calls[0][1]?.body as string)).toEqual({
+      children: [{
+        block_type: 4,
+        heading2: { elements: [], style: { align: 1 } }
+      }]
+    });
+  });
+
   it('adds generated block context to child creation API errors', async () => {
     const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ code: 999, msg: 'schema mismatch' }, { status: 400 }));
@@ -273,6 +296,77 @@ describe('FeishuClient', () => {
       document_id: 'doc-created',
       revision_id: 1
     });
+  });
+
+  it('creates app-owned docx documents without folder_token', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0,
+      data: { document: { document_id: 'doc-created', revision_id: 1 } }
+    }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await expect(client.createDocxDocument('Doc')).resolves.toEqual({
+      document_id: 'doc-created',
+      revision_id: 1
+    });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1]?.body as string)).toEqual({ title: 'Doc' });
+  });
+
+  it('moves docx files into wiki destinations', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0,
+      data: {
+        node: {
+          node_token: 'wiki-node',
+          url: 'https://example.feishu.cn/wiki/wiki-node'
+        }
+      }
+    }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await expect(client.moveDocxToWiki({
+      documentId: 'doc-created',
+      spaceId: 'space-id',
+      parentNodeToken: 'parent-node'
+    })).resolves.toEqual({
+      nodeToken: 'wiki-node',
+      url: 'https://example.feishu.cn/wiki/wiki-node'
+    });
+
+    expect(fetchImpl.mock.calls[0][0]).toContain('/open-apis/wiki/v2/spaces/space-id/nodes/move_docs_to_wiki');
+    expect(JSON.parse(fetchImpl.mock.calls[0][1]?.body as string)).toEqual({
+      obj_token: 'doc-created',
+      obj_type: 'docx',
+      parent_wiki_token: 'parent-node'
+    });
+  });
+
+  it('lists wiki children for duplicate-title checks', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: {
+          items: [{ title: 'Doc', node_token: 'wiki-node', url: 'https://example.feishu.cn/wiki/wiki-node' }],
+          has_more: true,
+          page_token: 'next'
+        }
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        data: {
+          items: [{ title: 'Other', node_token: 'wiki-other' }],
+          has_more: false
+        }
+      }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await expect(client.listWikiChildren('space-id', 'parent-node')).resolves.toHaveLength(2);
+    expect(fetchImpl.mock.calls[0][0]).toContain('/open-apis/wiki/v2/spaces/space-id/nodes?');
+    expect(fetchImpl.mock.calls[0][0]).toContain('parent_node_token=parent-node');
+    expect(fetchImpl.mock.calls[1][0]).toContain('page_token=next');
   });
 
   it('wraps Bitable table, field, and record helper APIs', async () => {

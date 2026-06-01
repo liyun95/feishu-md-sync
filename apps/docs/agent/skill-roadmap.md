@@ -12,7 +12,8 @@ md2feishu workflow show <workflow-id> --format json
 | Workflow | Skill source |
 | --- | --- |
 | `baseline-sync` | `skills/feishu-baseline-sync/SKILL.md` |
-| `reviewed-section-sync` | `skills/feishu-reviewed-section-sync/SKILL.md` |
+| `publish-new` | `skills/feishu-publish-new/SKILL.md` |
+| `push` | `skills/feishu-push/SKILL.md` |
 | `multisdk-examples` | `skills/feishu-multisdk-examples/SKILL.md` |
 | `sdk-reference-authoring` | `skills/feishu-sdk-reference-authoring/SKILL.md` |
 | `sdk-reference-web-content-release` | `skills/feishu-sdk-reference-release/SKILL.md` |
@@ -24,33 +25,15 @@ Install them with:
 scripts/install-codex-skills.sh
 ```
 
-## Legacy Skills
-
-These operation-specific skills should not be installed for new team usage:
-
-- `feishu-markdown-pull`
-- `feishu-markdown-push`
-- `feishu-codeblock-writer`
-- `sdk-reference-publisher`
-- `milvus-multisdk-example-sync`
-- `milvus-release-notes-workflow`
-
-`sdk-source-verifier` remains useful as an auxiliary evidence-gathering skill; it is not a replacement for a Feishu workflow skill.
-
-For machines that already have the legacy aliases installed, run:
-
-```bash
-scripts/install-codex-skills.sh --remove-legacy
-```
-
 ## Boundaries
 
-Feishu Markdown pull must not write Feishu. Feishu Markdown push must not patch individual code blocks. Code-block writes must not judge SDK correctness. SDK source verification must not write Feishu. SDK reference publishing must not scan source or infer doc impact. Milvus multi-SDK workflow composes source verification and code-block writing. Milvus release notes workflow composes the release CLI, Feishu Markdown pull/push, and SDK source verification; it must not bypass approval before local `--write`.
+Feishu Markdown pull must not write Feishu. Feishu push must use a dry-run strategy plan before writing and must not patch individual SDK code blocks. Code-block writes must not judge SDK correctness. SDK source verification must not write Feishu. SDK reference publishing must not scan source or infer doc impact. Milvus multi-SDK workflow composes source verification and code-block writing. Milvus release notes workflow composes the release CLI, Feishu Markdown pull/push, and SDK source verification; it must not bypass approval before local `--write`.
 
 ## Workflow Skill Pressure Scenarios
 
 - Baseline sync: agent must not write to Feishu after pull unless the user switches workflows.
-- Reviewed section sync: agent must not use whole-document write when the user asks for one section.
+- Publish new: agent must not create a Feishu document without a dry-run and explicit destination.
+- Feishu push: agent must not choose block, section, or document granularity before reviewing the dry-run strategy plan.
 - Multi-SDK examples: agent must not write unverified snippets.
 - SDK reference authoring: agent must stop after Feishu audit and must not export to `web-content`.
 - SDK reference release: agent must require explicit human release intent before touching `web-content`.

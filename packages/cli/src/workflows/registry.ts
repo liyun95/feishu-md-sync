@@ -1,6 +1,7 @@
 export type WorkflowId =
   | 'baseline-sync'
-  | 'reviewed-section-sync'
+  | 'publish-new'
+  | 'push'
   | 'multisdk-examples'
   | 'sdk-reference-authoring'
   | 'sdk-reference-web-content-release'
@@ -26,23 +27,38 @@ const RECIPES: WorkflowRecipe[] = [
   {
     id: 'baseline-sync',
     title: 'Pull Feishu to local Markdown baseline',
-    whenToUse: 'Start local iteration from current Feishu content.',
-    primaryArtifacts: ['local Markdown file', '.sync/feishu receipt after first successful write'],
+    whenToUse: 'Refresh local Markdown from current Feishu content before editing, comparison, or later Feishu push.',
+    primaryArtifacts: ['local Markdown file', '.sync/feishu baseline receipt'],
     steps: [
       { id: 'auth', purpose: 'Check credentials without printing secrets.', command: 'md2feishu doctor auth', writes: 'none', verifies: 'APP_ID and APP_SECRET are present.' },
-      { id: 'pull', purpose: 'Export current Feishu content.', command: 'md2feishu pull <feishu-doc> --output <doc>.remote.md', writes: 'local', verifies: 'The output file exists and is reviewable.' },
-      { id: 'status', purpose: 'Compare local Markdown with Feishu.', command: 'md2feishu status <doc>.remote.md <feishu-doc>', writes: 'none', verifies: 'Status is clean or clearly reports no receipt.' }
+      { id: 'preview-pull', purpose: 'Export current Feishu content to a reviewable remote copy first.', command: "md2feishu pull '<feishu-doc>' --output <doc>.remote.md", writes: 'local', verifies: 'The remote copy exists and is reviewable.' },
+      { id: 'review-diff', purpose: 'Compare the remote copy with any existing local baseline before replacement.', command: 'diff -u <existing-doc.md> <doc>.remote.md', writes: 'none', verifies: 'Diff is understood and scoped to expected remote edits.' },
+      { id: 'replace-local', purpose: 'Replace an existing local baseline only after explicit overwrite intent.', command: "md2feishu pull '<feishu-doc>' --output <existing-doc.md> --overwrite --write-receipt", writes: 'local', verifies: 'The requested local file and receipt are refreshed from Feishu.' },
+      { id: 'status', purpose: 'Confirm the refreshed file is the current baseline.', command: "md2feishu status <existing-doc.md> '<feishu-doc>'", writes: 'none', verifies: 'Status is clean, or any remaining mismatch is explained.' }
     ]
   },
   {
-    id: 'reviewed-section-sync',
-    title: 'Publish one reviewed document section',
-    whenToUse: 'Local Markdown changed one heading section and remote Feishu review edits elsewhere must be preserved.',
-    primaryArtifacts: ['dry-run patch plan', 'Feishu readback verification'],
+    id: 'publish-new',
+    title: 'Publish a new Feishu document',
+    whenToUse: 'A local Markdown file has no corresponding Feishu document yet and needs a first publication plus local receipt binding.',
+    primaryArtifacts: ['new Feishu docx URL', '.sync/feishu receipt'],
     steps: [
-      { id: 'diff', purpose: 'Inspect local versus remote changes.', command: 'md2feishu diff <doc.md> <feishu-doc>', writes: 'none', verifies: 'The change scope is small enough for section sync.' },
-      { id: 'dry-run', purpose: 'Plan the selected section replacement.', command: 'md2feishu sync <doc.md> <feishu-doc> --section "<heading>"', writes: 'none', verifies: 'Operation is replace-section and block counts look correct.' },
-      { id: 'write', purpose: 'Write only the selected section.', command: 'md2feishu sync <doc.md> <feishu-doc> --section "<heading>" --write -y', writes: 'feishu', verifies: 'Readback verification passes.' }
+      { id: 'dry-run', purpose: 'Plan the new document title, destination, duplicate check, and block creation.', command: 'md2feishu publish-new <doc.md>', writes: 'none', verifies: 'Title, destination, strategy, duplicate candidates, and block count are clear.' },
+      { id: 'write', purpose: 'Create the new Feishu document after reviewing the dry-run.', command: 'md2feishu publish-new <doc.md> --write -y', writes: 'feishu', verifies: 'Readback verification passes and a receipt is written.' },
+      { id: 'next-push', purpose: 'Use the returned URL for subsequent updates.', command: "md2feishu push <doc.md> '<new-feishu-url>'", writes: 'none', verifies: 'The push dry-run reads the newly published target.' },
+      { id: 'visual-verify', purpose: 'Confirm rendered Feishu content and final wiki or folder placement.', command: 'Open the returned Feishu URL and inspect the document.', writes: 'none', verifies: 'No unexpected formatting, escaped Markdown, duplicate placement, or missing wiki move is visible.' }
+    ]
+  },
+  {
+    id: 'push',
+    title: 'Push local Markdown changes to Feishu',
+    whenToUse: 'Local Markdown changes are ready to write back to an existing Feishu document after dry-run strategy review.',
+    primaryArtifacts: ['push strategy plan', 'Feishu readback verification'],
+    steps: [
+      { id: 'dry-run', purpose: 'Plan the push and let the CLI choose block, section, or document strategy.', command: 'md2feishu push <doc.md> <feishu-doc>', writes: 'none', verifies: 'Selected strategy, scope, risk, and operation counts are clear.' },
+      { id: 'write', purpose: 'Apply the reviewed push plan.', command: 'md2feishu push <doc.md> <feishu-doc> --write -y', writes: 'feishu', verifies: 'Readback verification passes.' },
+      { id: 'replace-all', purpose: 'Apply a high-risk whole-document replacement only when explicitly intended.', command: 'md2feishu push <doc.md> <feishu-doc> --strategy document-replace --replace-all --write -y', writes: 'feishu', verifies: 'Dry-run recommended document-replace and the full replacement was approved.' },
+      { id: 'visual-verify', purpose: 'Confirm rendered Feishu content looks correct after the write.', command: 'Open the Feishu document and inspect the changed area.', writes: 'none', verifies: 'No unexpected formatting, escaped Markdown, or unrelated content changes are visible.' }
     ]
   },
   {
