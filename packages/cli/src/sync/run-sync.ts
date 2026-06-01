@@ -1,18 +1,29 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBlocks, hashSource } from '../core/hash.js';
-import type { FeishuBlock, FeishuDocClient } from '../feishu/types.js';
+import type { FeishuBlock, FeishuDocClient, WriteResult } from '../feishu/types.js';
 import { createMarkdownEngine, type MarkdownEngine } from '../markdown/engine.js';
 import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
 import { findActiveMultisdkTasks, formatActiveMultisdkTaskWarning } from '../multisdk/guard.js';
-import { readReceipt, receiptPath, type SyncReceipt, writeReceipt } from '../receipts/receipt.js';
+import { readReceipt, receiptPath, type SyncReceipt, type SyncReceiptRunContext, writeReceipt } from '../receipts/receipt.js';
 import { buildMarkdownPreflightReport, type MarkdownPreflightReport } from '../services/markdown/preflight.js';
 import { comparableDirectChildBlocks, findPageBlock } from './block-state.js';
 import { detectConflict } from './conflict.js';
 import { defaultMergedPath, threeWayMerge } from './merge.js';
 import { applyPatch, planSmartPatch, type PatchPlan } from './patch.js';
 import { assertFeishuBlocksWritable } from './preflight.js';
-import { planSectionPatch } from './section.js';
+import {
+  planBeforeHeadingPatch,
+  planInsertSectionPatch,
+  planSectionPatch,
+  type InsertSectionOptions
+} from './section.js';
+
+export type SyncInsertSectionOptions = {
+  heading: string;
+  relative: InsertSectionOptions['relative'];
+  targetHeading: string;
+};
 
 export type SyncOptions = {
   sourcePath: string;
@@ -25,8 +36,11 @@ export type SyncOptions = {
   forceWholeDocumentSync?: boolean;
   publishTransform?: PublishTransformOptions;
   section?: string;
+  insertSection?: SyncInsertSectionOptions;
+  beforeHeading?: string;
   markdownEngine?: MarkdownEngine;
   confirm?: (question: string) => Promise<boolean>;
+  runContext?: SyncReceiptRunContext;
 };
 
 export type SyncStrategy = 'fail' | 'local-wins' | 'merge';
@@ -86,7 +100,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   if (activeMultisdkTasks.length > 0) {
     const warning = formatActiveMultisdkTaskWarning(activeMultisdkTasks);
     warnings.push(warning);
-    if (mode === 'write' && !options.forceWholeDocumentSync && !options.section) {
+    if (mode === 'write' && !options.forceWholeDocumentSync && !isScopedSync(options)) {
       throw new Error(
         `Refusing whole-document sync because this document has an active multisdk task. ` +
         `${warning} Pass --force-whole-document-sync only if a whole-document write is intentional.`
@@ -94,9 +108,11 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     }
   }
 
-  if (options.section && !conflict.ok) {
+  if (isScopedSync(options) && !conflict.ok) {
     warnings.push(
-      `Feishu changed since the last receipt; section sync will replace only section "${options.section}" in the current remote document.`
+      options.section
+        ? `Feishu changed since the last receipt; section sync will replace only section "${options.section}" in the current remote document.`
+        : 'Feishu changed since the last receipt; scoped sync will update only the selected range in the current remote document.'
     );
   } else if (!conflict.ok && strategy === 'merge') {
     if (!previousReceipt?.sourceSnapshot) {
@@ -143,12 +159,18 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   warnings.push(...desiredImport.warnings);
   const desiredBlocks = desiredImport.blocks;
   const sourceHash = hashSource(effectiveSourceContent);
-  const sectionPatch = options.section ? planSectionPatch(currentChildren, desiredBlocks, options.section) : null;
-  const patchPlan = sectionPatch?.patchPlan ?? planSmartPatch(currentChildren, desiredBlocks);
-  const patchBlocks = sectionPatch?.replacementBlocks ?? replacementBlocksForPlan(patchPlan, desiredBlocks);
+  const scopedPatch = scopedPatchPlan({
+    currentChildren,
+    desiredBlocks,
+    section: options.section,
+    insertSection: options.insertSection,
+    beforeHeading: options.beforeHeading
+  });
+  const patchPlan = scopedPatch?.patchPlan ?? planSmartPatch(currentChildren, desiredBlocks);
+  const patchBlocks = scopedPatch?.replacementBlocks ?? replacementBlocksForPlan(patchPlan, desiredBlocks);
   assertFeishuBlocksWritable(patchBlocks);
 
-  if (conflict.reason === 'no-receipt' && mode === 'write' && currentChildren.length > 0 && !options.forceInitialOverwrite && !options.section) {
+  if (conflict.reason === 'no-receipt' && mode === 'write' && currentChildren.length > 0 && !options.forceInitialOverwrite && !isScopedSync(options)) {
     throw new Error(
       `Initial write would replace existing Feishu content (${currentChildren.length} blocks). ` +
       `Run without --write to inspect the plan, or pass --force-initial-overwrite if this is intentional.`
@@ -174,7 +196,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   let afterHash = currentHash;
 
   if (mode === 'write') {
-    writeResult = await applyPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
+    writeResult = await applyRunSyncPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
     const readbackBlocks = await client.getDocumentBlocks(options.documentId);
     const readbackPage = findPageBlock(readbackBlocks, options.documentId);
     afterChildren = comparableDirectChildBlocks(readbackBlocks, readbackPage);
@@ -189,8 +211,8 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
       await writeFile(resolvedMergeOriginalPath, effectiveSourceContent, 'utf8');
       warnings.push(`Updated original source file from resolved merge output: ${resolvedMergeOriginalPath}.`);
     }
-    if (options.section) {
-      warnings.push('Section sync does not update the whole-document receipt.');
+    if (isScopedSync(options)) {
+      warnings.push('Scoped sync does not update the whole-document receipt.');
     }
   }
 
@@ -206,7 +228,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     })).markdown,
     timestamp: new Date().toISOString(),
     blockCounts: {
-      source: options.section ? patchPlan.createCount : desiredBlocks.length,
+      source: isScopedSync(options) ? patchPlan.createCount : desiredBlocks.length,
       feishuBefore: currentChildren.length,
       feishuAfter: mode === 'write' ? afterChildren.length : currentChildren.length - patchPlan.deleteCount + patchPlan.createCount
     },
@@ -219,10 +241,11 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
       ok: mode === 'dry-run' ? true : afterHash === patchPlan.desiredHash,
       expectedHash: patchPlan.desiredHash,
       actualHash: mode === 'write' ? afterHash : patchPlan.currentHash
-    }
+    },
+    ...(options.runContext ? { runContext: options.runContext } : {})
   };
 
-  const receiptWritten = mode === 'write' && !options.section;
+  const receiptWritten = mode === 'write' && !isScopedSync(options);
   if (receiptWritten) {
     await writeReceipt(statePath, receipt);
   }
@@ -236,6 +259,60 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     receiptWritten,
     preflight
   };
+}
+
+function scopedPatchPlan(input: {
+  currentChildren: FeishuBlock[];
+  desiredBlocks: FeishuBlock[];
+  section?: string;
+  insertSection?: SyncInsertSectionOptions;
+  beforeHeading?: string;
+}) {
+  if (input.section) {
+    return planSectionPatch(input.currentChildren, input.desiredBlocks, input.section);
+  }
+  if (input.insertSection) {
+    return planInsertSectionPatch(input.currentChildren, input.desiredBlocks, {
+      insertSection: input.insertSection.heading,
+      relative: input.insertSection.relative,
+      targetHeading: input.insertSection.targetHeading
+    });
+  }
+  if (input.beforeHeading) {
+    return planBeforeHeadingPatch(input.currentChildren, input.desiredBlocks, input.beforeHeading);
+  }
+  return null;
+}
+
+function isScopedSync(options: Pick<SyncOptions, 'section' | 'insertSection' | 'beforeHeading'>): boolean {
+  return Boolean(options.section || options.insertSection || options.beforeHeading);
+}
+
+async function applyRunSyncPatch(
+  client: FeishuDocClient,
+  documentId: string,
+  pageBlockId: string,
+  plan: PatchPlan,
+  desiredChildren: FeishuBlock[]
+): Promise<WriteResult> {
+  if (plan.operation === 'replace-section' && plan.deleteCount === 0) {
+    if (!plan.section) {
+      throw new Error('Section patch plan is missing section range metadata.');
+    }
+    const created = desiredChildren.length > 0
+      ? await client.createChildren(documentId, pageBlockId, desiredChildren, {
+        index: plan.section.remoteEndIndex
+      })
+      : [];
+    if (created.length !== desiredChildren.length) {
+      throw new Error(
+        `Feishu created ${created.length} of ${desiredChildren.length} replacement blocks; refusing to delete existing content.`
+      );
+    }
+    return { deleted: 0, created: created.length, skipped: false };
+  }
+
+  return applyPatch(client, documentId, pageBlockId, plan, desiredChildren);
 }
 
 function originalPathForMergedFile(filePath: string): string | null {

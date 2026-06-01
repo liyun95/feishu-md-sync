@@ -26,6 +26,15 @@ export type SyncReceipt = {
     expectedHash: string;
     actualHash: string;
   };
+  runContext?: SyncReceiptRunContext;
+};
+
+export type SyncReceiptRunContext = {
+  appIdPreview?: string;
+  loadedEnvFiles: string[];
+  explicitEnvFile?: string;
+  feishuHost: string;
+  activeTransforms: string[];
 };
 
 export function receiptPath(rootDir: string, sourcePath: string, docId: string): string {

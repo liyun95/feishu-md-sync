@@ -15,6 +15,13 @@ import { pullRemoteMarkdown } from '../../sync/pull.js';
 import { runSync, type SyncStrategy } from '../../sync/run-sync.js';
 import { getSyncStatus, type SyncStatusResult } from '../../sync/status.js';
 import type { CliContext } from '../context.js';
+import { buildAuthDoctorReport } from '../env.js';
+import {
+  buildSyncOutputContext,
+  formatSyncResultPretty,
+  syncReceiptRunContext,
+  type SyncOutputContext
+} from '../sync-output.js';
 
 type BaseCommandOptions = {
   host?: string;
@@ -30,6 +37,10 @@ type SyncCommandOptions = BaseCommandOptions & {
   forceWholeDocumentSync?: boolean;
   publishProfile?: string;
   section?: string;
+  insertSection?: string;
+  beforeSection?: string;
+  afterSection?: string;
+  beforeHeading?: string;
   markdownEngine?: string;
 };
 
@@ -44,10 +55,16 @@ type StatusCommandOptions = BaseCommandOptions & {
   markdownEngine?: string;
 };
 
-type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOptions> & {
+type NormalizedSyncCommandOptions = Omit<SyncCommandOptions, 'insertSection' | 'beforeSection' | 'afterSection' | 'beforeHeading'> & Required<BaseCommandOptions> & {
   format: string;
   strategy: string;
   publishTransform?: PublishTransformOptions;
+  insertSection?: {
+    heading: string;
+    relative: 'before' | 'after';
+    targetHeading: string;
+  };
+  beforeHeading?: string;
   markdownEngine: MarkdownEngineName;
 };
 
@@ -64,6 +81,10 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--force-whole-document-sync', 'allow whole-document sync when an active multisdk task exists')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
     .option('--section <heading>', 'replace only the named heading section instead of the whole document')
+    .option('--insert-section <heading>', 'insert the named local heading section into the remote document')
+    .option('--before-section <heading>', 'insert --insert-section before this existing remote heading')
+    .option('--after-section <heading>', 'insert --insert-section after this existing remote heading section')
+    .option('--before-heading <heading>', 'replace only content before this existing heading')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
@@ -89,6 +110,10 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--force-whole-document-sync', 'allow whole-document sync when an active multisdk task exists')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
     .option('--section <heading>', 'replace only the named heading section instead of the whole document')
+    .option('--insert-section <heading>', 'insert the named local heading section into the remote document')
+    .option('--before-section <heading>', 'insert --insert-section before this existing remote heading')
+    .option('--after-section <heading>', 'insert --insert-section after this existing remote heading section')
+    .option('--before-heading <heading>', 'replace only content before this existing heading')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
@@ -216,6 +241,13 @@ function normalizeSyncOptions(program: Command, opts: SyncCommandOptions): Norma
   const base = normalizeBaseOptions(program, opts);
   const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile') ?? globals.publishProfile;
   const strategy = optionFromArgv('--strategy') ?? commandOptionValue<string>(opts, 'strategy') ?? globals.strategy ?? 'fail';
+  const section = optionFromArgv('--section') ?? commandOptionValue<string>(opts, 'section') ?? globals.section;
+  const rawInsertSection = optionFromArgv('--insert-section') ?? commandOptionValue<string>(opts, 'insertSection') ?? globals.insertSection;
+  const rawBeforeSection = optionFromArgv('--before-section') ?? commandOptionValue<string>(opts, 'beforeSection') ?? globals.beforeSection;
+  const rawAfterSection = optionFromArgv('--after-section') ?? commandOptionValue<string>(opts, 'afterSection') ?? globals.afterSection;
+  const beforeHeading = optionFromArgv('--before-heading') ?? commandOptionValue<string>(opts, 'beforeHeading') ?? globals.beforeHeading;
+  const insertSection = parseInsertSectionOptions(rawInsertSection, rawBeforeSection, rawAfterSection);
+  validateScopedOptions({ section, insertSection, beforeHeading });
   return {
     ...base,
     format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
@@ -226,7 +258,9 @@ function normalizeSyncOptions(program: Command, opts: SyncCommandOptions): Norma
     forceWholeDocumentSync: flagFromArgv('--force-whole-document-sync') ?? commandOptionValue<boolean>(opts, 'forceWholeDocumentSync') ?? globals.forceWholeDocumentSync,
     publishProfile,
     publishTransform: parsePublishTransform(publishProfile),
-    section: optionFromArgv('--section') ?? commandOptionValue<string>(opts, 'section') ?? globals.section,
+    section,
+    insertSection,
+    beforeHeading,
     markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto')
   };
 }
@@ -300,6 +334,13 @@ async function runSyncCommand(context: CliContext, markdownFile: string, feishuD
   const strategy = parseStrategy(opts.strategy);
   const client = context.createFeishuClient({ host: opts.host, timeoutMs: opts.timeoutMs });
   const documentId = await resolveDocumentId(client, feishuDoc);
+  const outputContext = buildSyncOutputContext({
+    auth: {
+      ...buildAuthDoctorReport(context.envLoadReport),
+      feishuHost: opts.host
+    },
+    publishTransform: opts.publishTransform
+  });
   const confirm = async (question: string): Promise<boolean> => {
     const rl = readline.createInterface({ input, output: stdout });
     const answer = await rl.question(`${question} [y/N] `);
@@ -317,11 +358,14 @@ async function runSyncCommand(context: CliContext, markdownFile: string, feishuD
     forceWholeDocumentSync: opts.forceWholeDocumentSync,
     publishTransform: opts.publishTransform,
     section: opts.section,
+    insertSection: opts.insertSection,
+    beforeHeading: opts.beforeHeading,
     markdownEngine: createCliMarkdownEngine(client, opts.markdownEngine),
-    confirm
+    confirm,
+    runContext: syncReceiptRunContext(outputContext)
   });
 
-  printResult(result, opts.format);
+  printResult(result, opts.format, outputContext);
 }
 
 async function resolveDocumentId(client: FeishuClient, feishuDoc: string): Promise<string> {
@@ -349,6 +393,43 @@ function parseMarkdownEngine(value: string): MarkdownEngineName {
   throw new Error(`Invalid --markdown-engine ${value}. Expected auto, official, or local.`);
 }
 
+function parseInsertSectionOptions(
+  heading: string | undefined,
+  beforeSection: string | undefined,
+  afterSection: string | undefined
+): NormalizedSyncCommandOptions['insertSection'] | undefined {
+  if (!heading && !beforeSection && !afterSection) return undefined;
+  if (!heading) {
+    throw new Error('--before-section and --after-section require --insert-section.');
+  }
+  if (beforeSection && afterSection) {
+    throw new Error('--insert-section requires only one of --before-section or --after-section.');
+  }
+  if (!beforeSection && !afterSection) {
+    throw new Error('--insert-section requires --before-section or --after-section.');
+  }
+  return {
+    heading,
+    relative: beforeSection ? 'before' : 'after',
+    targetHeading: beforeSection ?? afterSection ?? ''
+  };
+}
+
+function validateScopedOptions(input: {
+  section?: string;
+  insertSection?: NormalizedSyncCommandOptions['insertSection'];
+  beforeHeading?: string;
+}): void {
+  const selected = [
+    input.section ? '--section' : '',
+    input.insertSection ? '--insert-section' : '',
+    input.beforeHeading ? '--before-heading' : ''
+  ].filter(Boolean);
+  if (selected.length > 1) {
+    throw new Error(`Scoped sync options are mutually exclusive: ${selected.join(', ')}.`);
+  }
+}
+
 function createCliMarkdownEngine(client: FeishuClient, mode: MarkdownEngineName): MarkdownEngine {
   const request = client.request.bind(client);
   const docsContent = new FeishuDocsContentClient(request);
@@ -362,32 +443,12 @@ function createCliMarkdownEngine(client: FeishuClient, mode: MarkdownEngineName)
   });
 }
 
-function printResult(result: Awaited<ReturnType<typeof runSync>>, format = 'pretty'): void {
+function printResult(result: Awaited<ReturnType<typeof runSync>>, format = 'pretty', context?: SyncOutputContext): void {
   if (format === 'json') {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(context ? { ...result, context } : result, null, 2));
     return;
   }
-  console.log(`${result.mode}: ${result.patchPlan.operation}`);
-  console.log(`source blocks: ${result.receipt.blockCounts.source}`);
-  console.log(`feishu blocks: ${result.receipt.blockCounts.feishuBefore} -> ${result.receipt.blockCounts.feishuAfter}`);
-  console.log(`desired hash: ${result.patchPlan.desiredHash}`);
-  if (result.patchPlan.section) {
-    const section = result.patchPlan.section;
-    console.log(`section: ${section.title}`);
-    console.log(`section range: remote ${section.remoteStartIndex}-${section.remoteEndIndex}, local ${section.localStartIndex}-${section.localEndIndex}`);
-  }
-  if (result.patchPlan.operation === 'replace-contiguous-blocks') {
-    console.log(`remote range: ${result.patchPlan.remoteStartIndex}..${result.patchPlan.remoteEndIndex}`);
-    console.log(`local range: ${result.patchPlan.localStartIndex}..${result.patchPlan.localEndIndex}`);
-  }
-  if (result.patchPlan.operation !== 'noop') {
-    console.log(`will delete: ${result.patchPlan.deleteCount}`);
-    console.log(`will create: ${result.patchPlan.createCount}`);
-  }
-
-  if (result.mode === 'write' && result.receiptWritten) {
-    console.log(`receipt: ${result.receiptPath}`);
-  }
+  console.log(formatSyncResultPretty(result, context));
 
   for (const warning of result.warnings) {
     console.warn(`warning: ${warning}`);
