@@ -18,6 +18,12 @@ export type SectionPatchPlan = {
   remoteRange: SectionRange;
 };
 
+export type InsertSectionOptions = {
+  insertSection: string;
+  relative: 'before' | 'after';
+  targetHeading: string;
+};
+
 export function planSectionPatch(
   currentChildren: FeishuBlock[],
   desiredChildren: FeishuBlock[],
@@ -54,6 +60,103 @@ export function planSectionPatch(
     expectedChildren,
     localRange,
     remoteRange
+  };
+}
+
+export function planInsertSectionPatch(
+  currentChildren: FeishuBlock[],
+  desiredChildren: FeishuBlock[],
+  options: InsertSectionOptions
+): SectionPatchPlan {
+  const localRange = findUniqueSectionRange(desiredChildren, options.insertSection, 'local');
+  const targetRange = findUniqueSectionRange(currentChildren, options.targetHeading, 'remote');
+  const insertionIndex = options.relative === 'before' ? targetRange.startIndex : targetRange.endIndex;
+  const expectedChildren = [
+    ...currentChildren.slice(0, insertionIndex),
+    ...localRange.blocks,
+    ...currentChildren.slice(insertionIndex)
+  ];
+  const currentHash = hashBlocks(currentChildren);
+  const desiredHash = hashBlocks(expectedChildren);
+  const basePlan = {
+    deleteCount: 0,
+    createCount: localRange.blocks.length,
+    currentHash,
+    desiredHash,
+    section: {
+      title: localRange.title,
+      remoteStartIndex: insertionIndex,
+      remoteEndIndex: insertionIndex,
+      localStartIndex: localRange.startIndex,
+      localEndIndex: localRange.endIndex
+    }
+  };
+
+  return {
+    patchPlan: currentHash === desiredHash
+      ? { ...basePlan, operation: 'noop' }
+      : { ...basePlan, operation: 'replace-section' },
+    replacementBlocks: localRange.blocks,
+    expectedChildren,
+    localRange,
+    remoteRange: {
+      title: localRange.title,
+      level: localRange.level,
+      startIndex: insertionIndex,
+      endIndex: insertionIndex,
+      blocks: []
+    }
+  };
+}
+
+export function planBeforeHeadingPatch(
+  currentChildren: FeishuBlock[],
+  desiredChildren: FeishuBlock[],
+  headingTitle: string
+): SectionPatchPlan {
+  const remoteTarget = findUniqueSectionRange(currentChildren, headingTitle, 'remote');
+  const localTarget = findUniqueSectionRange(desiredChildren, headingTitle, 'local');
+  const replacementBlocks = desiredChildren.slice(0, localTarget.startIndex);
+  const expectedChildren = [
+    ...replacementBlocks,
+    ...currentChildren.slice(remoteTarget.startIndex)
+  ];
+  const currentHash = hashBlocks(currentChildren);
+  const desiredHash = hashBlocks(expectedChildren);
+  const basePlan = {
+    deleteCount: remoteTarget.startIndex,
+    createCount: replacementBlocks.length,
+    currentHash,
+    desiredHash,
+    section: {
+      title: `before heading: ${remoteTarget.title}`,
+      remoteStartIndex: 0,
+      remoteEndIndex: remoteTarget.startIndex,
+      localStartIndex: 0,
+      localEndIndex: localTarget.startIndex
+    }
+  };
+
+  return {
+    patchPlan: currentHash === desiredHash
+      ? { ...basePlan, operation: 'noop' }
+      : { ...basePlan, operation: 'replace-section' },
+    replacementBlocks,
+    expectedChildren,
+    localRange: {
+      title: `before heading: ${localTarget.title}`,
+      level: localTarget.level,
+      startIndex: 0,
+      endIndex: localTarget.startIndex,
+      blocks: replacementBlocks
+    },
+    remoteRange: {
+      title: `before heading: ${remoteTarget.title}`,
+      level: remoteTarget.level,
+      startIndex: 0,
+      endIndex: remoteTarget.startIndex,
+      blocks: currentChildren.slice(0, remoteTarget.startIndex)
+    }
   };
 }
 
