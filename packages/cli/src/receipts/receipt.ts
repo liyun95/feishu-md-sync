@@ -27,7 +27,16 @@ export type SyncReceipt = {
     expectedHash: string;
     actualHash: string;
   };
+  runContext?: SyncReceiptRunContext;
   publish?: PublishReceiptMetadata;
+};
+
+export type SyncReceiptRunContext = {
+  appIdPreview?: string;
+  loadedEnvFiles: string[];
+  explicitEnvFile?: string;
+  feishuHost: string;
+  activeTransforms: string[];
 };
 
 export type PublishReceiptMetadata = {
