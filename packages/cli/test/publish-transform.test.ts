@@ -33,4 +33,26 @@ print("Milvus")
 
     expect(applyPublishTransform(source)).toBe(source);
   });
+
+  it('rewrites relative Markdown links with a configured base URL', () => {
+    const source = [
+      'See [NGRAM](ngram.md), [schema](../schema.md), [anchor](#local), [site](https://milvus.io/docs/), and [email](mailto:docs@example.com).',
+      '',
+      '`[code](local.md)` remains literal.',
+      '',
+      '```markdown',
+      '[code block](local.md)',
+      '```'
+    ].join('\n');
+
+    expect(applyPublishTransform(source, { linkBaseUrl: 'https://milvus.io/docs/' })).toBe([
+      'See [NGRAM](https://milvus.io/docs/ngram.md), [schema](https://milvus.io/schema.md), [anchor](#local), [site](https://milvus.io/docs/), and [email](mailto:docs@example.com).',
+      '',
+      '`[code](local.md)` remains literal.',
+      '',
+      '```markdown',
+      '[code block](local.md)',
+      '```'
+    ].join('\n'));
+  });
 });

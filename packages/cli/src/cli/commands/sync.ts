@@ -10,7 +10,8 @@ import { createMarkdownEngine, type MarkdownEngine, type MarkdownEngineName } fr
 import { applyPublishTransform, type PublishTransformOptions, type PublishTransformProfile } from '../../markdown/publish-transform.js';
 import { FeishuBlockConvertClient } from '../../services/feishu/block-convert-client.js';
 import { FeishuDocsContentClient } from '../../services/feishu/docs-content-client.js';
-import { readReceipt, receiptPath, writeReceipt, type SyncReceipt } from '../../receipts/receipt.js';
+import { readReceipt, receiptPathFor, writeReceipt, type SyncReceipt } from '../../receipts/receipt.js';
+import { buildAuthDoctorReport } from '../env.js';
 import { runPublishNew } from '../../sync/publish-new.js';
 import { publishNewHelpAfter, publishNewJson, publishNewSummaryLines } from '../../sync/publish-new-output.js';
 import { unifiedDiff } from '../../sync/diff.js';
@@ -19,6 +20,8 @@ import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull
 import { runSync, type SyncStrategy } from '../../sync/run-sync.js';
 import { assertRequestedPushStrategy, buildPushPlan, type PushPlan, type PushStrategy } from '../../sync/push-plan.js';
 import { getSyncStatus, type SyncStatusResult } from '../../sync/status.js';
+import { renderRiskSummaryLines } from '../../sync/render-risk.js';
+import { reviewDraftCheckSummaryLines } from '../../sync/review-draft-checks.js';
 import type { CliContext } from '../context.js';
 
 type BaseCommandOptions = {
@@ -34,7 +37,10 @@ type SyncCommandOptions = BaseCommandOptions & {
   forceInitialOverwrite?: boolean;
   forceWholeDocumentSync?: boolean;
   publishProfile?: string;
+  reviewProfile?: string;
+  linkBaseUrl?: string;
   markdownEngine?: string;
+  receiptDir?: string;
 };
 
 type PushCommandOptions = BaseCommandOptions & {
@@ -45,8 +51,11 @@ type PushCommandOptions = BaseCommandOptions & {
   replaceAll?: boolean;
   forceWholeDocumentSync?: boolean;
   publishProfile?: string;
+  reviewProfile?: string;
+  linkBaseUrl?: string;
   scope?: string;
   markdownEngine?: string;
+  receiptDir?: string;
 };
 
 type PublishNewCommandOptions = BaseCommandOptions & {
@@ -59,8 +68,11 @@ type PublishNewCommandOptions = BaseCommandOptions & {
   yes?: boolean;
   allowDuplicateTitle?: boolean;
   publishProfile?: string;
+  reviewProfile?: string;
+  linkBaseUrl?: string;
   markdownEngine?: string;
   format?: string;
+  receiptDir?: string;
 };
 
 type PullCommandOptions = BaseCommandOptions & {
@@ -68,12 +80,17 @@ type PullCommandOptions = BaseCommandOptions & {
   markdownEngine?: string;
   overwrite?: boolean;
   writeReceipt?: boolean;
+  receiptDir?: string;
 };
 
 type StatusCommandOptions = BaseCommandOptions & {
   format?: string;
   publishProfile?: string;
+  reviewProfile?: string;
+  linkBaseUrl?: string;
   markdownEngine?: string;
+  receiptDir?: string;
+  verbose?: boolean;
 };
 
 type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOptions> & {
@@ -81,6 +98,7 @@ type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOpt
   strategy: string;
   publishTransform?: PublishTransformOptions;
   markdownEngine: MarkdownEngineName;
+  receiptDir?: string;
 };
 
 type NormalizedPushCommandOptions = PushCommandOptions & Required<BaseCommandOptions> & {
@@ -88,13 +106,22 @@ type NormalizedPushCommandOptions = PushCommandOptions & Required<BaseCommandOpt
   strategy: PushStrategy;
   publishTransform?: PublishTransformOptions;
   markdownEngine: MarkdownEngineName;
+  receiptDir?: string;
 };
 
 type NormalizedPublishNewCommandOptions = PublishNewCommandOptions & Required<BaseCommandOptions> & {
   format: string;
   publishTransform?: PublishTransformOptions;
   markdownEngine: MarkdownEngineName;
+  receiptDir?: string;
 };
+
+type PushCliDiagnostics = {
+  appIdentity: string;
+  envSource: string;
+};
+
+const DEFAULT_REVIEW_DRAFT_LINK_BASE_URL = 'https://milvus.io/docs/';
 
 export function registerSyncCommands(program: Command, context: CliContext): void {
   program
@@ -108,7 +135,11 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--force-initial-overwrite', 'allow first write to replace an existing non-empty Feishu doc')
     .option('--force-whole-document-sync', 'allow whole-document sync when an active multisdk task exists')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
+    .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
+    .option('--verbose', 'show status hash roles and raw hash values')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
@@ -132,7 +163,10 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--force-initial-overwrite', 'allow first write to replace an existing non-empty Feishu doc')
     .option('--force-whole-document-sync', 'allow whole-document sync when an active multisdk task exists')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
+    .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
@@ -153,13 +187,38 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--replace-all', 'allow document-replace writes to replace the existing Feishu document')
     .option('--force-whole-document-sync', 'allow whole-document push when an active multisdk task exists')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
+    .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .action(async (markdownFile: string, feishuDoc: string, opts: PushCommandOptions) => {
       await runPushCommand(context, markdownFile, feishuDoc, normalizePushOptions(program, opts));
+    });
+
+  program
+    .command('review-draft')
+    .description('push a Milvus review draft to an existing Feishu document')
+    .argument('<markdown-file>', 'local Markdown file')
+    .argument('<feishu-doc>', 'Feishu docx ID or URL')
+    .option('--write', 'write to Feishu; omitted means dry-run')
+    .option('-y, --yes', 'skip write confirmation')
+    .option('--scope <scope>', 'optional scope guard, for example heading:"FAQ"')
+    .option('--strategy <strategy>', 'push strategy: auto | block-patch | section-replace | document-replace', 'auto')
+    .option('--replace-all', 'allow document-replace writes to replace the existing Feishu document')
+    .option('--force-whole-document-sync', 'allow whole-document push when an active multisdk task exists')
+    .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL', DEFAULT_REVIEW_DRAFT_LINK_BASE_URL)
+    .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'local')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--env-file <file>', 'load credentials from an explicit dotenv file')
+    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
+    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
+    .action(async (markdownFile: string, feishuDoc: string, opts: PushCommandOptions) => {
+      await runPushCommand(context, markdownFile, feishuDoc, normalizePushOptions(program, reviewDraftDefaultsForCommand(opts)));
     });
 
   program
@@ -175,7 +234,10 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('-y, --yes', 'skip write confirmation')
     .option('--allow-duplicate-title', 'create even when same-title candidates already exist')
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
+    .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'local')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
@@ -193,7 +255,10 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
+    .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .action(async (markdownFile: string, feishuDoc: string, opts: StatusCommandOptions) => {
       const normalized = normalizeStatusOptions(program, opts);
@@ -203,9 +268,10 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
         sourcePath: markdownFile,
         documentId,
         publishTransform: normalized.publishTransform,
-        markdownEngine: createCliMarkdownEngine(client, normalized.markdownEngine)
+        markdownEngine: createCliMarkdownEngine(client, normalized.markdownEngine),
+        receiptDir: normalized.receiptDir
       });
-      printStatus(status, normalized.format);
+      printStatus(status, normalized.format, normalized.verbose);
     });
 
   program
@@ -218,6 +284,7 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .action(async (feishuDoc: string, opts: PullCommandOptions) => {
       const normalized = normalizePullOptions(program, opts);
       if (normalized.writeReceipt && !normalized.output) {
@@ -233,7 +300,7 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
         await writeFile(normalized.output, pulled.markdown, 'utf8');
         console.log(`wrote: ${normalized.output}`);
         if (normalized.writeReceipt) {
-          const statePath = receiptPath(process.cwd(), normalized.output, documentId);
+          const statePath = receiptPathFor(process.cwd(), normalized.receiptDir, normalized.output, documentId);
           const receipt = await buildPullBaselineReceipt({
             sourcePath: normalized.output,
             sourceMarkdown: pulled.markdown,
@@ -259,7 +326,10 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
+    .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
+    .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .action(async (markdownFile: string, feishuDoc: string, opts: StatusCommandOptions) => {
       const normalized = normalizeStatusOptions(program, opts);
       const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
@@ -278,13 +348,14 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .action(async (markdownFile: string, feishuDoc: string, opts: PullCommandOptions) => {
       const normalized = normalizePullOptions(program, opts);
       const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
       const documentId = await resolveDocumentId(client, feishuDoc);
       const local = await readFile(markdownFile, 'utf8');
       const remote = await pullRemoteMarkdown(client, documentId, createCliMarkdownEngine(client, normalized.markdownEngine));
-      const statePath = receiptPath(process.cwd(), markdownFile, documentId);
+      const statePath = receiptPathFor(process.cwd(), normalized.receiptDir, markdownFile, documentId);
       const receipt = await readReceipt(statePath);
 
       if (!receipt?.sourceSnapshot) {
@@ -324,6 +395,9 @@ function normalizeSyncOptions(program: Command, opts: SyncCommandOptions): Norma
   const globals = program.opts<SyncCommandOptions>();
   const base = normalizeBaseOptions(program, opts);
   const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile') ?? globals.publishProfile;
+  const reviewProfile = optionFromArgv('--review-profile') ?? commandOptionValue<string>(opts, 'reviewProfile') ?? globals.reviewProfile;
+  const linkBaseUrl = optionFromArgv('--link-base-url') ?? commandOptionValue<string>(opts, 'linkBaseUrl') ?? globals.linkBaseUrl;
+  const publish = resolvePublishTransformOptions({ publishProfile, reviewProfile, linkBaseUrl });
   const strategy = optionFromArgv('--strategy') ?? commandOptionValue<string>(opts, 'strategy') ?? globals.strategy ?? 'fail';
   return {
     ...base,
@@ -333,9 +407,12 @@ function normalizeSyncOptions(program: Command, opts: SyncCommandOptions): Norma
     strategy,
     forceInitialOverwrite: flagFromArgv('--force-initial-overwrite') ?? commandOptionValue<boolean>(opts, 'forceInitialOverwrite') ?? globals.forceInitialOverwrite,
     forceWholeDocumentSync: flagFromArgv('--force-whole-document-sync') ?? commandOptionValue<boolean>(opts, 'forceWholeDocumentSync') ?? globals.forceWholeDocumentSync,
-    publishProfile,
-    publishTransform: parsePublishTransform(publishProfile),
-    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto')
+    publishProfile: publish.publishProfile,
+    reviewProfile,
+    linkBaseUrl,
+    publishTransform: publish.publishTransform,
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto'),
+    receiptDir: optionFromArgv('--receipt-dir') ?? commandOptionValue<string>(opts, 'receiptDir') ?? globals.receiptDir
   };
 }
 
@@ -343,6 +420,9 @@ function normalizePushOptions(program: Command, opts: PushCommandOptions): Norma
   const globals = program.opts<PushCommandOptions>();
   const base = normalizeBaseOptions(program, opts);
   const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile') ?? globals.publishProfile;
+  const reviewProfile = optionFromArgv('--review-profile') ?? commandOptionValue<string>(opts, 'reviewProfile') ?? globals.reviewProfile;
+  const linkBaseUrl = optionFromArgv('--link-base-url') ?? commandOptionValue<string>(opts, 'linkBaseUrl') ?? globals.linkBaseUrl;
+  const publish = resolvePublishTransformOptions({ publishProfile, reviewProfile, linkBaseUrl });
   return {
     ...base,
     format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
@@ -351,10 +431,22 @@ function normalizePushOptions(program: Command, opts: PushCommandOptions): Norma
     strategy: parsePushStrategy(optionFromArgv('--strategy') ?? commandOptionValue<string>(opts, 'strategy') ?? globals.strategy ?? 'auto'),
     replaceAll: flagFromArgv('--replace-all') ?? commandOptionValue<boolean>(opts, 'replaceAll') ?? globals.replaceAll,
     forceWholeDocumentSync: flagFromArgv('--force-whole-document-sync') ?? commandOptionValue<boolean>(opts, 'forceWholeDocumentSync') ?? globals.forceWholeDocumentSync,
-    publishProfile,
-    publishTransform: parsePublishTransform(publishProfile),
+    publishProfile: publish.publishProfile,
+    reviewProfile,
+    linkBaseUrl,
+    publishTransform: publish.publishTransform,
     scope: optionFromArgv('--scope') ?? commandOptionValue<string>(opts, 'scope') ?? globals.scope,
-    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto')
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto'),
+    receiptDir: optionFromArgv('--receipt-dir') ?? commandOptionValue<string>(opts, 'receiptDir') ?? globals.receiptDir
+  };
+}
+
+export function reviewDraftDefaultsForCommand(opts: PushCommandOptions): PushCommandOptions {
+  return {
+    ...opts,
+    reviewProfile: 'milvus',
+    linkBaseUrl: opts.linkBaseUrl ?? DEFAULT_REVIEW_DRAFT_LINK_BASE_URL,
+    markdownEngine: opts.markdownEngine ?? 'local'
   };
 }
 
@@ -362,6 +454,9 @@ function normalizePublishNewOptions(program: Command, opts: PublishNewCommandOpt
   const globals = program.opts<PublishNewCommandOptions>();
   const base = normalizeBaseOptions(program, opts);
   const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile') ?? globals.publishProfile;
+  const reviewProfile = optionFromArgv('--review-profile') ?? commandOptionValue<string>(opts, 'reviewProfile') ?? globals.reviewProfile;
+  const linkBaseUrl = optionFromArgv('--link-base-url') ?? commandOptionValue<string>(opts, 'linkBaseUrl') ?? globals.linkBaseUrl;
+  const publish = resolvePublishTransformOptions({ publishProfile, reviewProfile, linkBaseUrl });
   return {
     ...base,
     title: optionFromArgv('--title') ?? commandOptionValue<string>(opts, 'title') ?? globals.title,
@@ -373,35 +468,46 @@ function normalizePublishNewOptions(program: Command, opts: PublishNewCommandOpt
     yes: flagFromArgv('--yes') ?? flagFromArgv('-y') ?? commandOptionValue<boolean>(opts, 'yes') ?? globals.yes,
     allowDuplicateTitle: flagFromArgv('--allow-duplicate-title') ?? commandOptionValue<boolean>(opts, 'allowDuplicateTitle') ?? globals.allowDuplicateTitle,
     format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
-    publishProfile,
-    publishTransform: parsePublishTransform(publishProfile),
-    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'local')
+    publishProfile: publish.publishProfile,
+    reviewProfile,
+    linkBaseUrl,
+    publishTransform: publish.publishTransform,
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'local'),
+    receiptDir: optionFromArgv('--receipt-dir') ?? commandOptionValue<string>(opts, 'receiptDir') ?? globals.receiptDir
   };
 }
 
 function normalizeStatusOptions(
   program: Command,
   opts: StatusCommandOptions
-): StatusCommandOptions & Required<BaseCommandOptions> & { format: string; publishTransform?: PublishTransformOptions; markdownEngine: MarkdownEngineName } {
+): StatusCommandOptions & Required<BaseCommandOptions> & { format: string; publishTransform?: PublishTransformOptions; markdownEngine: MarkdownEngineName; receiptDir?: string; verbose?: boolean } {
   const base = normalizeBaseOptions(program, opts);
   const publishProfile = optionFromArgv('--publish-profile') ?? commandOptionValue<string>(opts, 'publishProfile');
+  const reviewProfile = optionFromArgv('--review-profile') ?? commandOptionValue<string>(opts, 'reviewProfile');
+  const linkBaseUrl = optionFromArgv('--link-base-url') ?? commandOptionValue<string>(opts, 'linkBaseUrl');
+  const publish = resolvePublishTransformOptions({ publishProfile, reviewProfile, linkBaseUrl });
   return {
     ...base,
     format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? 'pretty',
-    publishProfile,
-    publishTransform: parsePublishTransform(publishProfile),
-    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? 'auto')
+    publishProfile: publish.publishProfile,
+    reviewProfile,
+    linkBaseUrl,
+    publishTransform: publish.publishTransform,
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? 'auto'),
+    receiptDir: optionFromArgv('--receipt-dir') ?? commandOptionValue<string>(opts, 'receiptDir'),
+    verbose: flagFromArgv('--verbose') ?? commandOptionValue<boolean>(opts, 'verbose')
   };
 }
 
-function normalizePullOptions(program: Command, opts: PullCommandOptions): PullCommandOptions & Required<BaseCommandOptions> & { markdownEngine: MarkdownEngineName } {
+function normalizePullOptions(program: Command, opts: PullCommandOptions): PullCommandOptions & Required<BaseCommandOptions> & { markdownEngine: MarkdownEngineName; receiptDir?: string } {
   const base = normalizeBaseOptions(program, opts);
   return {
     ...base,
     output: optionFromArgv('--output') ?? optionFromArgv('-o') ?? commandOptionValue<string>(opts, 'output'),
     overwrite: flagFromArgv('--overwrite') ?? commandOptionValue<boolean>(opts, 'overwrite'),
     writeReceipt: flagFromArgv('--write-receipt') ?? commandOptionValue<boolean>(opts, 'writeReceipt'),
-    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? 'auto')
+    markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? 'auto'),
+    receiptDir: optionFromArgv('--receipt-dir') ?? commandOptionValue<string>(opts, 'receiptDir')
   };
 }
 
@@ -467,6 +573,7 @@ async function runSyncCommand(context: CliContext, markdownFile: string, feishuD
     forceWholeDocumentSync: opts.forceWholeDocumentSync,
     publishTransform: opts.publishTransform,
     markdownEngine: createCliMarkdownEngine(client, opts.markdownEngine),
+    receiptDir: opts.receiptDir,
     confirm
   });
 
@@ -496,18 +603,19 @@ async function runPushCommand(context: CliContext, markdownFile: string, feishuD
     publishTransform: opts.publishTransform,
     section: scope.section,
     sectionPatchMode: opts.strategy === 'section-replace' ? 'section-replace' : 'auto',
-    markdownEngine
+    markdownEngine,
+    receiptDir: opts.receiptDir
   });
   const plan = buildPushPlan(planResult);
   assertRequestedPushStrategy(plan, opts.strategy);
 
   if (!opts.write) {
-    printPushResult(plan, planResult, opts.format);
+    printPushResult(plan, planResult, opts.format, pushCliDiagnostics(context));
     return;
   }
 
   if (plan.selectedStrategy === 'document-replace' && !opts.replaceAll) {
-    printPushResult(plan, planResult, opts.format);
+    printPushResult(plan, planResult, opts.format, pushCliDiagnostics(context));
     throw new Error('Refusing document-replace write without --replace-all.');
   }
 
@@ -531,9 +639,10 @@ async function runPushCommand(context: CliContext, markdownFile: string, feishuD
     section: scope.section,
     sectionPatchMode: plan.selectedStrategy === 'section-replace' ? 'section-replace' : 'auto',
     markdownEngine,
+    receiptDir: opts.receiptDir,
     confirm
   });
-  printPushResult(buildPushPlan(writeResult), writeResult, opts.format);
+  printPushResult(buildPushPlan(writeResult), writeResult, opts.format, pushCliDiagnostics(context));
 }
 
 async function runPublishNewCommand(context: CliContext, markdownFile: string, opts: NormalizedPublishNewCommandOptions): Promise<void> {
@@ -561,6 +670,7 @@ async function runPublishNewCommand(context: CliContext, markdownFile: string, o
     yes: opts.yes,
     publishTransform: opts.publishTransform,
     markdownEngine,
+    receiptDir: opts.receiptDir,
     confirm
   });
 
@@ -617,6 +727,34 @@ function stripMatchingQuotes(value: string): string {
   return value;
 }
 
+export function resolvePublishTransformOptions(input: {
+  publishProfile?: string;
+  reviewProfile?: string;
+  linkBaseUrl?: string;
+}): { publishProfile?: string; publishTransform?: PublishTransformOptions } {
+  if (input.publishProfile && input.reviewProfile && input.publishProfile !== input.reviewProfile) {
+    throw new Error(`--publish-profile ${input.publishProfile} conflicts with --review-profile ${input.reviewProfile}.`);
+  }
+
+  if (input.reviewProfile && input.reviewProfile !== 'milvus') {
+    throw new Error(`Invalid --review-profile ${input.reviewProfile}. Expected milvus.`);
+  }
+
+  const publishProfile = input.publishProfile ?? input.reviewProfile;
+  const profileTransform = parsePublishTransform(publishProfile);
+  if (!profileTransform && !input.linkBaseUrl) {
+    return { publishProfile, publishTransform: undefined };
+  }
+
+  return {
+    publishProfile,
+    publishTransform: {
+      ...profileTransform,
+      ...(input.linkBaseUrl ? { linkBaseUrl: input.linkBaseUrl } : {})
+    }
+  };
+}
+
 function parsePublishTransform(value: string | undefined): PublishTransformOptions | undefined {
   if (!value) return undefined;
   if (value === 'milvus') {
@@ -657,13 +795,18 @@ function printResult(result: Awaited<ReturnType<typeof runSync>>, format = 'pret
   }
 }
 
-function printPushResult(plan: PushPlan, result: Awaited<ReturnType<typeof runSync>>, format = 'pretty'): void {
+function printPushResult(
+  plan: PushPlan,
+  result: Awaited<ReturnType<typeof runSync>>,
+  format = 'pretty',
+  diagnostics?: PushCliDiagnostics
+): void {
   if (format === 'json') {
-    console.log(JSON.stringify({ pushPlan: plan, syncResult: result }, null, 2));
+    console.log(JSON.stringify({ pushPlan: plan, syncResult: result, cliDiagnostics: diagnostics }, null, 2));
     return;
   }
 
-  for (const line of pushResultSummaryLines(plan, result)) {
+  for (const line of pushResultSummaryLines(plan, result, diagnostics)) {
     console.log(line);
   }
 
@@ -672,7 +815,11 @@ function printPushResult(plan: PushPlan, result: Awaited<ReturnType<typeof runSy
   }
 }
 
-export function pushResultSummaryLines(plan: PushPlan, result: Awaited<ReturnType<typeof runSync>>): string[] {
+export function pushResultSummaryLines(
+  plan: PushPlan,
+  result: Awaited<ReturnType<typeof runSync>>,
+  diagnostics?: PushCliDiagnostics
+): string[] {
   const changeLabel = result.mode === 'write' ? 'Applied Feishu changes:' : 'Planned Feishu changes:';
   const lines = [
     'Intent: push local Markdown to Feishu',
@@ -690,6 +837,27 @@ export function pushResultSummaryLines(plan: PushPlan, result: Awaited<ReturnTyp
     lines.push('', `Why: block-level patch is unsafe because ${plan.fallbackReason}.`);
   }
 
+  const hasDryRunDiagnostics = result.markdownEngine || diagnostics || result.renderRisk || result.publishTransforms || result.reviewDraftChecks;
+  if (result.mode === 'dry-run' && hasDryRunDiagnostics) {
+    lines.push('');
+    if (result.markdownEngine) {
+      lines.push(`Markdown engine: ${result.markdownEngine.requested} -> ${result.markdownEngine.import}`);
+    }
+    if (diagnostics) {
+      lines.push(`App identity: ${diagnostics.appIdentity}`);
+      lines.push(`Env source: ${diagnostics.envSource}`);
+    }
+    if (result.publishTransforms) {
+      lines.push(`Transforms: ${result.publishTransforms.length > 0 ? result.publishTransforms.join(', ') : 'none'}`);
+    }
+    if (result.renderRisk) {
+      lines.push(...renderRiskSummaryLines(result.renderRisk));
+    }
+    if (result.reviewDraftChecks) {
+      lines.push(...reviewDraftCheckSummaryLines(result.reviewDraftChecks));
+    }
+  }
+
   if (result.mode === 'dry-run') {
     lines.push('', plan.approvalMessage);
   }
@@ -702,6 +870,14 @@ export function pushResultSummaryLines(plan: PushPlan, result: Awaited<ReturnTyp
   }
 
   return lines;
+}
+
+function pushCliDiagnostics(context: CliContext): PushCliDiagnostics {
+  const auth = buildAuthDoctorReport(context.envLoadReport);
+  return {
+    appIdentity: auth.appId.preview ? `APP_ID ${auth.appId.preview}` : 'APP_ID not set',
+    envSource: context.envLoadReport.loadedFiles.length > 0 ? context.envLoadReport.loadedFiles.join(', ') : 'process env only'
+  };
 }
 
 export function syncResultSummaryLines(result: Awaited<ReturnType<typeof runSync>>): string[] {
@@ -717,16 +893,17 @@ export function syncResultSummaryLines(result: Awaited<ReturnType<typeof runSync
     lines.push(`section: ${section.title}`);
     lines.push(`section range: remote ${section.remoteStartIndex}-${section.remoteEndIndex}, local ${section.localStartIndex}-${section.localEndIndex}`);
   }
-  if (result.blockLevelSectionPatch) {
-    const operations = result.blockLevelSectionPatch.operations;
+  const blockLevelPatch = result.blockLevelDocumentPatch ?? result.blockLevelSectionPatch;
+  if (blockLevelPatch) {
+    const operations = blockLevelPatch.operations;
     lines.push('patch mode: block-level');
     lines.push(`block updates: ${operations.filter((operation) => operation.kind === 'update').length}`);
     lines.push(`block creates: ${operations.filter((operation) => operation.kind === 'create').length}`);
     lines.push(`block deletes: ${operations.filter((operation) => operation.kind === 'delete').length}`);
-    if (result.blockLevelSectionPatch.fallbackReason) {
-      lines.push(`block fallback: ${result.blockLevelSectionPatch.fallbackReason}`);
+    if (blockLevelPatch.fallbackReason) {
+      lines.push(`block fallback: ${blockLevelPatch.fallbackReason}`);
     }
-    if (result.blockLevelSectionPatch.unsafeForWrite) {
+    if (blockLevelPatch.unsafeForWrite) {
       lines.push('block fallback write: unsafe');
     }
   }
@@ -734,7 +911,8 @@ export function syncResultSummaryLines(result: Awaited<ReturnType<typeof runSync
     lines.push(`remote range: ${result.patchPlan.remoteStartIndex}..${result.patchPlan.remoteEndIndex}`);
     lines.push(`local range: ${result.patchPlan.localStartIndex}..${result.patchPlan.localEndIndex}`);
   }
-  if (result.patchPlan.operation !== 'noop') {
+  const usesSafeBlockLevelPatch = Boolean(blockLevelPatch && blockLevelPatch.unsafeForWrite !== true);
+  if (result.patchPlan.operation !== 'noop' && !usesSafeBlockLevelPatch) {
     lines.push(`will delete: ${result.patchPlan.deleteCount}`);
     lines.push(`will create: ${result.patchPlan.createCount}`);
   }
@@ -746,18 +924,35 @@ export function syncResultSummaryLines(result: Awaited<ReturnType<typeof runSync
   return lines;
 }
 
-function printStatus(status: SyncStatusResult, format = 'pretty'): void {
+function printStatus(status: SyncStatusResult, format = 'pretty', verbose = false): void {
   if (format === 'json') {
     console.log(JSON.stringify(status, null, 2));
     return;
   }
-  console.log(`state: ${status.state}`);
-  console.log(`local changed: ${status.localChanged}`);
-  console.log(`remote changed: ${status.remoteChanged}`);
-  console.log(`receipt: ${status.receiptPath}`);
-  console.log(`source hash: ${status.sourceHash}`);
-  console.log(`desired hash: ${status.desiredHash}`);
-  console.log(`remote hash: ${status.currentRemoteHash}`);
+  for (const line of statusSummaryLines(status, { verbose })) {
+    console.log(line);
+  }
+}
+
+export function statusSummaryLines(status: SyncStatusResult, options: { verbose?: boolean } = {}): string[] {
+  const lines = [
+    `state: ${status.state}`,
+    `local changed: ${status.localChanged}`,
+    `remote changed: ${status.remoteChanged}`,
+    `receipt: ${status.receiptPath}`
+  ];
+
+  if (options.verbose) {
+    lines.push(
+      `source hash: ${status.sourceHash} (transformed Markdown source)`,
+      `desired hash: ${status.desiredHash} (Feishu blocks generated from source)`,
+      `remote hash: ${status.currentRemoteHash} (current Feishu blocks)`
+    );
+  } else {
+    lines.push('hashes: hidden (use --verbose to show source, desired, and remote hashes)');
+  }
+
+  return lines;
 }
 
 export async function assertPullOutputWritable(outputPath: string, overwrite: boolean): Promise<void> {

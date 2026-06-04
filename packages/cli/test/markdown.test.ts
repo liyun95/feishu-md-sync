@@ -29,6 +29,43 @@ const x = 1;
     });
   });
 
+  it('does not split table cells on inline code pipes or escaped pipes', () => {
+    const blocks = markdownToFeishuBlocks(`| Case | Pattern |
+| ---- | ------- |
+| inline code | \`error|failed\` |
+| escaped pipe | ok\\|done |
+`);
+
+    const table = blocks[0].table as { property: { row_size: number; column_size: number }; cells: Array<{ text: { elements: Array<{ text_run: { content: string } }> } }> };
+    expect(table.property).toMatchObject({
+      row_size: 3,
+      column_size: 2
+    });
+    expect(table.cells[3].text.elements[0].text_run.content).toBe('error|failed');
+    expect(table.cells[5].text.elements[0].text_run.content).toBe('ok|done');
+  });
+
+  it('bolds Markdown table header cells by default', () => {
+    const blocks = markdownToFeishuBlocks(`| Name | **Status** |
+| ---- | ---------- |
+| item | pass |
+`);
+
+    const table = blocks[0].table as { cells: Array<{ text: { elements: Array<{ text_run: { content: string; text_element_style: { bold: boolean } } }> } }> };
+    expect(table.cells[0].text.elements[0].text_run).toMatchObject({
+      content: 'Name',
+      text_element_style: { bold: true }
+    });
+    expect(table.cells[1].text.elements[0].text_run).toMatchObject({
+      content: 'Status',
+      text_element_style: { bold: true }
+    });
+    expect(table.cells[2].text.elements[0].text_run).toMatchObject({
+      content: 'item',
+      text_element_style: { bold: false }
+    });
+  });
+
   it('marks highlight spans with background color', () => {
     const elements = parseInlineText('Use ==review marker== here.');
     expect(elements[1].text_run).toMatchObject({

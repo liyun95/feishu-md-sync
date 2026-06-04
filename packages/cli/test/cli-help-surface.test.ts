@@ -11,7 +11,7 @@ describe('CLI help surface', () => {
       env: { ...process.env, APP_ID: '', APP_SECRET: '' }
     });
 
-    for (const command of ['sync', 'push', 'publish-new', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
+    for (const command of ['sync', 'push', 'review-draft', 'publish-new', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
       expect(stdout).toContain(command);
     }
   });
@@ -43,6 +43,19 @@ describe('CLI help surface', () => {
     });
 
     expect(stdout).not.toContain('--section');
+  });
+
+  it('documents review-draft as the Milvus review push command', async () => {
+    const { stdout } = await execFileAsync('npx', ['tsx', 'src/cli/index.ts', 'review-draft', '--help'], {
+      cwd: new URL('..', import.meta.url),
+      env: { ...process.env, APP_ID: '', APP_SECRET: '' }
+    });
+
+    expect(stdout).toContain('push a Milvus review draft to an existing Feishu document');
+    expect(stdout).toContain('--link-base-url <url>');
+    expect(stdout).toContain('--markdown-engine <engine>');
+    expect(stdout).toContain('(default: "local")');
+    expect(stdout).toContain('--replace-all');
   });
 
   it('honors sync subcommand options before doing IO', async () => {

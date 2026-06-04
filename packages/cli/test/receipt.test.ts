@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readReceipt, receiptPath, writeReceipt, type SyncReceipt } from '../src/receipts/receipt.js';
+import { readReceipt, receiptPath, receiptPathInDir, writeReceipt, type SyncReceipt } from '../src/receipts/receipt.js';
 
 let dir: string;
 
@@ -35,6 +35,12 @@ describe('receipts', () => {
 
     await writeReceipt(file, receipt);
     expect(await readReceipt(file)).toEqual(receipt);
+  });
+
+  it('builds explicit receipt paths directly inside a receipt directory', () => {
+    expect(receiptPathInDir(path.join(dir, 'receipts'), '/docs/My Doc.md', 'doc1234567890123')).toBe(
+      path.join(dir, 'receipts', 'My_Doc.md.doc1234567890123.json')
+    );
   });
 
   it('reads receipts with optional markdown snapshots for future merge support', async () => {

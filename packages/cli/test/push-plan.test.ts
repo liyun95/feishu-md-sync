@@ -30,6 +30,35 @@ describe('push plan', () => {
     });
   });
 
+  it('selects block-patch for a safe whole-document block-level update', () => {
+    const plan = buildPushPlan(syncResult({
+      patchPlan: {
+        operation: 'replace-document',
+        deleteCount: 51,
+        createCount: 51,
+        currentHash: 'current',
+        desiredHash: 'desired'
+      },
+      blockLevelDocumentPatch: {
+        kind: 'block-level-document-patch',
+        operations: [
+          { kind: 'update', remoteBlockId: 'blk1', remoteIndex: 10, desiredIndex: 10, blockType: 2 },
+          { kind: 'update', remoteBlockId: 'blk2', remoteIndex: 35, desiredIndex: 35, blockType: 2 }
+        ]
+      }
+    }));
+
+    expect(plan).toMatchObject({
+      selectedStrategy: 'block-patch',
+      scope: 'entire document',
+      risk: 'low',
+      updates: 2,
+      creates: 0,
+      deletes: 0,
+      approvalRequired: 'normal-write'
+    });
+  });
+
   it('selects section-replace when block-level section patch is unsafe', () => {
     const plan = buildPushPlan(syncResult({
       patchPlan: sectionPatchPlan({ deleteCount: 19, createCount: 20 }),
@@ -111,12 +140,14 @@ function sectionPatchPlan(overrides?: { deleteCount?: number; createCount?: numb
 function syncResult(input: {
   patchPlan: SyncRunResult['patchPlan'];
   blockLevelSectionPatch?: SyncRunResult['blockLevelSectionPatch'];
+  blockLevelDocumentPatch?: SyncRunResult['blockLevelDocumentPatch'];
 }): SyncRunResult {
   return {
     mode: 'dry-run',
     receiptPath: '/tmp/receipt.json',
     patchPlan: input.patchPlan,
     blockLevelSectionPatch: input.blockLevelSectionPatch ?? null,
+    blockLevelDocumentPatch: input.blockLevelDocumentPatch ?? null,
     receipt: {
       sourcePath: '/tmp/doc.md',
       sourceHash: 'source',

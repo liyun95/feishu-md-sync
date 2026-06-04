@@ -33,6 +33,20 @@ export function validateFeishuBlocksForWrite(blocks: FeishuBlock[]): FeishuPrefl
 
 export function assertMarkdownSourceSafeForLocalRenderer(markdown: string): void {
   const withoutCode = markdown.replace(/```[\s\S]*?```/g, '');
+  if (/<\s*table\b/i.test(withoutCode)) {
+    throw new Error(
+      'Refusing to render raw HTML table Markdown with the local renderer. ' +
+      'Use canonical Markdown table source, or use --markdown-engine official after dry-run safety checks pass.'
+    );
+  }
+
+  if (/<\s*(?:div|section|article|aside|details|summary)\b/i.test(withoutCode)) {
+    throw new Error(
+      'Refusing to render raw HTML block Markdown with the local renderer. ' +
+      'Convert site-specific HTML blocks to supported Markdown or use --markdown-engine official after dry-run safety checks pass.'
+    );
+  }
+
   const escapedEntityCount = (withoutCode.match(/\\&(?:lt|gt|amp|quot|#34|#39);/g) ?? []).length;
   const escapedPunctuationCount = (withoutCode.match(/\\[._\-()[\]{}]/g) ?? []).length;
 

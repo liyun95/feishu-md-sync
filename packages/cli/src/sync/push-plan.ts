@@ -24,6 +24,22 @@ export function buildPushPlan(result: SyncRunResult): PushPlan {
   const sectionTitle = result.patchPlan.section?.title;
   const scope = sectionTitle ? `${sectionTitle} section` : 'entire document';
 
+  if (result.blockLevelDocumentPatch && result.blockLevelDocumentPatch.unsafeForWrite !== true) {
+    const counts = blockPatchCounts(result);
+    return {
+      intent: 'push local Markdown to Feishu',
+      selectedStrategy: 'block-patch',
+      scope,
+      risk: 'low',
+      updates: counts.updates,
+      creates: counts.creates,
+      deletes: counts.deletes,
+      fallbackReason: result.blockLevelDocumentPatch.fallbackReason,
+      approvalRequired: 'normal-write',
+      approvalMessage: result.blockLevelDocumentPatch.operations.length === 0 ? 'No Feishu write is needed.' : 'Run with --write to apply this plan.'
+    };
+  }
+
   if (result.patchPlan.operation === 'replace-document') {
     return {
       intent: 'push local Markdown to Feishu',
@@ -84,7 +100,7 @@ function shouldUseSectionReplace(result: SyncRunResult): boolean {
 }
 
 function blockPatchCounts(result: SyncRunResult): { updates: number; creates: number; deletes: number } {
-  const blockPatch = result.blockLevelSectionPatch;
+  const blockPatch = result.blockLevelDocumentPatch ?? result.blockLevelSectionPatch;
   if (blockPatch) {
     return blockPatch.operations.reduce((counts, operation) => addOperationCounts(counts, operation), {
       updates: 0,

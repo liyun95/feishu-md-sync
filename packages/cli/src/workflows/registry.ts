@@ -2,6 +2,7 @@ export type WorkflowId =
   | 'baseline-sync'
   | 'publish-new'
   | 'push'
+  | 'review-draft'
   | 'multisdk-examples'
   | 'sdk-reference-authoring'
   | 'sdk-reference-web-content-release'
@@ -59,6 +60,18 @@ const RECIPES: WorkflowRecipe[] = [
       { id: 'write', purpose: 'Apply the reviewed push plan.', command: 'md2feishu push <doc.md> <feishu-doc> --write -y', writes: 'feishu', verifies: 'Readback verification passes.' },
       { id: 'replace-all', purpose: 'Apply a high-risk whole-document replacement only when explicitly intended.', command: 'md2feishu push <doc.md> <feishu-doc> --strategy document-replace --replace-all --write -y', writes: 'feishu', verifies: 'Dry-run recommended document-replace and the full replacement was approved.' },
       { id: 'visual-verify', purpose: 'Confirm rendered Feishu content looks correct after the write.', command: 'Open the Feishu document and inspect the changed area.', writes: 'none', verifies: 'No unexpected formatting, escaped Markdown, or unrelated content changes are visible.' }
+    ]
+  },
+  {
+    id: 'review-draft',
+    title: 'Push a Milvus review draft to Feishu',
+    whenToUse: 'A Milvus docs Markdown draft is ready for Feishu review and needs Milvus publish transforms, public docs links, review checks, and a refreshed post-write baseline.',
+    primaryArtifacts: ['remote baseline Markdown', 'review draft dry-run', 'review draft checks', '.sync/feishu receipt'],
+    steps: [
+      { id: 'pull-baseline', purpose: 'Snapshot the current Feishu document before preparing the review draft write.', command: "md2feishu pull '<feishu-doc>' --output <doc>.remote.md --write-receipt --receipt-dir <project>/.sync/feishu", writes: 'local', verifies: 'The remote baseline and receipt exist before any Feishu write.' },
+      { id: 'dry-run', purpose: 'Plan the Milvus review draft push with public link rewriting and review checks.', command: 'md2feishu review-draft <doc.md> <feishu-doc> --link-base-url https://milvus.io/docs/', writes: 'none', verifies: 'Selected strategy, operation counts, transforms, render risks, and review draft checks are clear.' },
+      { id: 'write', purpose: 'Apply the reviewed Milvus draft after the dry-run is approved.', command: 'md2feishu review-draft <doc.md> <feishu-doc> --link-base-url https://milvus.io/docs/ --write -y', writes: 'feishu', verifies: 'Review draft checks pass and readback verification passes.' },
+      { id: 'post-write-baseline', purpose: 'Pull the written Feishu document back into a local baseline receipt.', command: "md2feishu pull '<feishu-doc>' --output <doc>.remote.md --overwrite --write-receipt --receipt-dir <project>/.sync/feishu", writes: 'local', verifies: 'The post-write remote baseline matches the Feishu document used for later status, diff, and merge.' }
     ]
   },
   {
