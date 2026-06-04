@@ -403,6 +403,38 @@ Local ignored
     await expect(readFile(result.receiptPath, 'utf8')).resolves.toContain('"feishuDocId": "doc1234567890123"');
   });
 
+  it('stores non-sensitive auth context in write receipts when provided', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, '# Title\n');
+    const desired = markdownToFeishuBlocks('# Title\n');
+    const client = fakeClient(desired);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      runContext: {
+        appIdPreview: 'cli_...cdef',
+        loadedEnvFiles: ['/repo/lark.env'],
+        explicitEnvFile: '/repo/lark.env',
+        feishuHost: 'https://open.feishu.test',
+        activeTransforms: ['publish-profile:milvus']
+      }
+    });
+
+    const receipt = JSON.parse(await readFile(result.receiptPath, 'utf8')) as SyncReceipt;
+    expect(receipt.runContext).toEqual({
+      appIdPreview: 'cli_...cdef',
+      loadedEnvFiles: ['/repo/lark.env'],
+      explicitEnvFile: '/repo/lark.env',
+      feishuHost: 'https://open.feishu.test',
+      activeTransforms: ['publish-profile:milvus']
+    });
+    expect(JSON.stringify(receipt)).not.toContain('secret');
+  });
+
   it('applies a publish transform before planning Feishu blocks', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, `---
@@ -890,6 +922,126 @@ Milvus 3.0 keeps existing behavior.
     expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', desired, { index: 1 });
     expect(client.deleteChildren).toHaveBeenCalledWith('doc1234567890123', 'page', 0, 1);
     expect(client.createChildren.mock.invocationCallOrder[0]).toBeLessThan(client.deleteChildren.mock.invocationCallOrder[0]);
+  });
+
+  it('dry-runs inserting a local section before an existing remote heading', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `## Pattern matching operators
+
+New regex content
+`);
+    const remote = markdownToFeishuBlocks(`## Intro
+
+Remote intro
+
+## Arithmetic Operators
+
+Remote arithmetic
+`);
+    const client = fakeClient(remote, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      insertSection: {
+        heading: 'Pattern matching operators',
+        relative: 'before',
+        targetHeading: 'Arithmetic Operators'
+      }
+    });
+
+    expect(result.patchPlan.operation).toBe('replace-section');
+    expect(result.patchPlan.deleteCount).toBe(0);
+    expect(result.patchPlan.createCount).toBe(2);
+    expect(result.patchPlan.section).toMatchObject({
+      title: 'Pattern matching operators',
+      remoteStartIndex: 2,
+      remoteEndIndex: 2
+    });
+    expect(client.createChildren).not.toHaveBeenCalled();
+    expect(client.deleteChildren).not.toHaveBeenCalled();
+  });
+
+  it('writes an inserted section before deleting nothing from the remote document', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `## Pattern matching operators
+
+New regex content
+`);
+    const remote = markdownToFeishuBlocks(`## Intro
+
+Remote intro
+
+## Arithmetic Operators
+
+Remote arithmetic
+`);
+    const local = markdownToFeishuBlocks(await readFile(sourcePath, 'utf8'));
+    const expected = [
+      ...remote.slice(0, 2),
+      ...local,
+      ...remote.slice(2)
+    ];
+    const client = fakeClient(expected, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      insertSection: {
+        heading: 'Pattern matching operators',
+        relative: 'before',
+        targetHeading: 'Arithmetic Operators'
+      }
+    });
+
+    expect(result.receiptWritten).toBe(false);
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', local, { index: 2 });
+    expect(client.deleteChildren).not.toHaveBeenCalled();
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      'Scoped push does not update the whole-document receipt.'
+    ]));
+  });
+
+  it('writes only the prefix before a heading', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `Local intro
+
+Local note
+
+## How it works
+
+Local how should not sync
+`);
+    const remote = markdownToFeishuBlocks(`Remote intro
+
+Remote note
+
+## How it works
+
+Remote how
+`);
+    const local = markdownToFeishuBlocks(await readFile(sourcePath, 'utf8'));
+    const expected = [
+      ...local.slice(0, 2),
+      ...remote.slice(2)
+    ];
+    const client = fakeClient(expected, remote);
+
+    await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      beforeHeading: 'How it works'
+    });
+
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', local.slice(0, 2), { index: 2 });
+    expect(client.deleteChildren).toHaveBeenCalledWith('doc1234567890123', 'page', 0, 2);
   });
 });
 
