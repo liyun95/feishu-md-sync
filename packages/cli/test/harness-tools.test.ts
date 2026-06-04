@@ -38,6 +38,7 @@ describe('harness tools registry', () => {
 
   it('parses supported workflows and rejects unsupported workflows', () => {
     expect(parseHarnessWorkflow('push')).toBe('push');
+    expect(parseHarnessWorkflow('review-draft')).toBe('review-draft');
     expect(parseHarnessWorkflow('publish-new')).toBe('publish-new');
     expect(parseHarnessWorkflow('multisdk')).toBe('multisdk');
     expect(() => parseHarnessWorkflow('release')).toThrow(/Unsupported harness workflow release/);
@@ -65,6 +66,19 @@ describe('harness tools registry', () => {
       writesFeishu: true,
       requires: ['markdownFile', 'feishuDoc'],
       writeRequires: ['--write', 'approved dry-run strategy plan', '--replace-all when selected strategy is document-replace']
+    }));
+  });
+
+  it('lists review-draft as the Milvus review write tool surface', () => {
+    const registry = getHarnessTools('review-draft');
+
+    expect(registry.workflow).toBe('review-draft');
+    expect(registry.tools.map((tool) => tool.name)).toEqual(['pull', 'review-draft']);
+    expect(registry.tools.find((tool) => tool.name === 'review-draft')).toEqual(expect.objectContaining({
+      mode: 'dry-run-or-write',
+      writesFeishu: true,
+      requires: ['markdownFile', 'feishuDoc'],
+      writeRequires: ['--write', 'approved dry-run strategy plan', 'passing review draft checks', '--replace-all when selected strategy is document-replace']
     }));
   });
 });

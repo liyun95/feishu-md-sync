@@ -2,6 +2,7 @@ export type PublishTransformProfile = 'milvus';
 
 export type PublishTransformOptions = {
   profile?: PublishTransformProfile;
+  linkBaseUrl?: string;
 };
 
 type Frontmatter = {
@@ -12,11 +13,19 @@ type Frontmatter = {
 const MILVUS_SHARED_NAME = '<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include>';
 
 export function applyPublishTransform(markdown: string, options: PublishTransformOptions = {}): string {
-  if (options.profile !== 'milvus') return markdown;
+  let transformed = markdown;
 
-  const frontmatter = stripFrontmatter(markdown);
-  const withoutDuplicateTitle = dropDuplicateTitleHeading(frontmatter.body, frontmatter.title);
-  return transformProductNames(withoutDuplicateTitle);
+  if (options.profile === 'milvus') {
+    const frontmatter = stripFrontmatter(transformed);
+    const withoutDuplicateTitle = dropDuplicateTitleHeading(frontmatter.body, frontmatter.title);
+    transformed = transformProductNames(withoutDuplicateTitle);
+  }
+
+  if (options.linkBaseUrl) {
+    transformed = rewriteRelativeLinks(transformed, options.linkBaseUrl);
+  }
+
+  return transformed;
 }
 
 function stripFrontmatter(markdown: string): Frontmatter {
@@ -100,4 +109,46 @@ function replaceOutsideProtectedSpans(line: string): string {
   });
 
   return transformed.replace(/\u0000(\d+)\u0000/g, (_, index: string) => protectedSpans[Number(index)] ?? '');
+}
+
+function rewriteRelativeLinks(markdown: string, baseUrl: string): string {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  let inCodeFence = false;
+
+  return lines.map((line) => {
+    if (/^```/.test(line.trim())) {
+      inCodeFence = !inCodeFence;
+      return line;
+    }
+    if (inCodeFence) return line;
+    return rewriteRelativeLinksInLine(line, baseUrl);
+  }).join('\n');
+}
+
+function rewriteRelativeLinksInLine(line: string, baseUrl: string): string {
+  const protectedSpans: string[] = [];
+  const protect = (value: string): string => {
+    const token = `\u0000${protectedSpans.length}\u0000`;
+    protectedSpans.push(value);
+    return token;
+  };
+
+  const protectedLine = line
+    .replace(/<include\b[\s\S]*?<\/include>/g, protect)
+    .replace(/`[^`]*`/g, protect);
+
+  const rewritten = protectedLine.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label: string, url: string) => {
+    if (!shouldRewriteLink(url)) return match;
+    return `[${label}](${new URL(url, baseUrl).toString()})`;
+  });
+
+  return rewritten.replace(/\u0000(\d+)\u0000/g, (_, index: string) => protectedSpans[Number(index)] ?? '');
+}
+
+function shouldRewriteLink(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed !== '' &&
+    !trimmed.startsWith('#') &&
+    !/^[a-z][a-z0-9+.-]*:/i.test(trimmed) &&
+    !trimmed.startsWith('//');
 }

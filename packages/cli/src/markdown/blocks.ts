@@ -193,11 +193,23 @@ export function parseInlineText(text: string): TextElement[] {
   return elements.length > 0 ? elements : [textElement('')];
 }
 
-function textBlock(text: string): FeishuBlock {
+function textBlock(text: string, style: TextElementStyle = {}): FeishuBlock {
   return {
     block_type: BLOCK_TYPES.text,
     text: {
-      elements: parseInlineText(text),
+      elements: parseInlineText(text).map((element) => {
+        if (!element.text_run) return element;
+        return {
+          ...element,
+          text_run: {
+            ...element.text_run,
+            text_element_style: {
+              ...element.text_run.text_element_style,
+              ...style
+            }
+          }
+        };
+      }),
       style: { align: 1 }
     }
   };
@@ -265,7 +277,7 @@ function tableBlock(lines: string[]): FeishuBlock {
   const rowSize = dataRows.length;
   const columnSize = Math.max(...dataRows.map((row) => row.length));
   const cells = dataRows.flatMap((row) => {
-    return Array.from({ length: columnSize }, (_, index) => textBlock(row[index] ?? ''));
+    return Array.from({ length: columnSize }, (_, index) => textBlock(row[index] ?? '', row === dataRows[0] ? { bold: true } : {}));
   });
 
   return {
@@ -282,10 +294,51 @@ function tableBlock(lines: string[]): FeishuBlock {
 }
 
 function parseTableRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((cell) => cell.trim());
+  const trimmed = line.trim();
+  const content = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
+  const withoutTrailingPipe = hasUnescapedTrailingPipe(content) ? content.slice(0, -1) : content;
+  const cells: string[] = [];
+  let current = '';
+  let inCode = false;
+  let escaping = false;
+
+  for (const char of withoutTrailingPipe) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (char === '`') {
+      inCode = !inCode;
+      current += char;
+      continue;
+    }
+
+    if (char === '|' && !inCode) {
+      cells.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (escaping) current += '\\';
+  cells.push(current.trim());
+  return cells;
+}
+
+function hasUnescapedTrailingPipe(value: string): boolean {
+  if (!value.endsWith('|')) return false;
+  let backslashCount = 0;
+  for (let index = value.length - 2; index >= 0 && value[index] === '\\'; index -= 1) {
+    backslashCount += 1;
+  }
+  return backslashCount % 2 === 0;
 }

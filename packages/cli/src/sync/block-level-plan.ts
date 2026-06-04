@@ -41,6 +41,13 @@ export type BlockLevelSectionPatch = {
   unsafeForWrite?: boolean;
 };
 
+export type BlockLevelDocumentPatch = {
+  kind: 'block-level-document-patch';
+  operations: BlockLevelOperation[];
+  fallbackReason?: string;
+  unsafeForWrite?: boolean;
+};
+
 export function planBlockLevelSectionPatch(input: {
   remoteSectionBlocks: FeishuBlock[];
   desiredSectionBlocks: FeishuBlock[];
@@ -109,6 +116,38 @@ export function planBlockLevelSectionPatch(input: {
   }
 
   return replaceRange(input, prefixLength, remoteMiddleEnd, desiredMiddleEnd, 'block order or count changed');
+}
+
+export function planBlockLevelDocumentPatch(input: {
+  remoteBlocks: FeishuBlock[];
+  desiredBlocks: FeishuBlock[];
+}): BlockLevelDocumentPatch | null {
+  if (blocksEquivalent(input.remoteBlocks, input.desiredBlocks)) {
+    return { kind: 'block-level-document-patch', operations: [] };
+  }
+
+  if (input.remoteBlocks.length !== input.desiredBlocks.length) {
+    return null;
+  }
+
+  const operations: BlockLevelOperation[] = [];
+  for (let index = 0; index < input.remoteBlocks.length; index += 1) {
+    const remote = input.remoteBlocks[index];
+    const desired = input.desiredBlocks[index];
+    if (blocksEquivalent([remote], [desired])) continue;
+    if (!isTextLikeBlockPairUpdateable(remote, desired)) {
+      return null;
+    }
+    operations.push({
+      kind: 'update',
+      remoteBlockId: remote.block_id as string,
+      remoteIndex: index,
+      desiredIndex: index,
+      blockType: remote.block_type
+    });
+  }
+
+  return { kind: 'block-level-document-patch', operations };
 }
 
 function commonPrefixLength(remote: FeishuBlock[], desired: FeishuBlock[]): number {

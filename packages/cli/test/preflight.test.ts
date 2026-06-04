@@ -107,6 +107,41 @@ describe('Markdown source preflight', () => {
     expect(() => assertMarkdownSourceSafeForLocalRenderer(markdown)).toThrow(/escaped Feishu Markdown/);
   });
 
+  it('rejects raw table HTML before local rendering', () => {
+    const markdown = [
+      '# Review Tracker',
+      '',
+      '<table><tr><td>Area</td><td>Status</td></tr></table>'
+    ].join('\n');
+
+    expect(() => assertMarkdownSourceSafeForLocalRenderer(markdown)).toThrow(/raw HTML table/);
+  });
+
+  it('rejects raw HTML blocks before local rendering', () => {
+    const markdown = [
+      '# Pattern Matching',
+      '',
+      '<div class="alert note">',
+      'Use this syntax carefully.',
+      '</div>'
+    ].join('\n');
+
+    expect(() => assertMarkdownSourceSafeForLocalRenderer(markdown)).toThrow(/raw HTML block/);
+  });
+
+  it('allows include tags and raw HTML inside code fences', () => {
+    const markdown = [
+      '<include target="milvus">Milvus</include>',
+      '',
+      '```html',
+      '<div class="alert note">',
+      '</div>',
+      '```'
+    ].join('\n');
+
+    expect(() => assertMarkdownSourceSafeForLocalRenderer(markdown)).not.toThrow();
+  });
+
   it('allows ordinary Markdown with a small number of intentional escapes', () => {
     expect(() => assertMarkdownSourceSafeForLocalRenderer('Use \\*literal stars\\* here.\n')).not.toThrow();
   });

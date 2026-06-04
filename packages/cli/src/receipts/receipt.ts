@@ -50,8 +50,16 @@ export type PublishReceiptMetadata = {
 };
 
 export function receiptPath(rootDir: string, sourcePath: string, docId: string): string {
+  return receiptPathInDir(path.join(rootDir, '.sync', 'feishu'), sourcePath, docId);
+}
+
+export function receiptPathInDir(receiptDir: string, sourcePath: string, docId: string): string {
   const basename = path.basename(sourcePath).replace(/[^A-Za-z0-9._-]/g, '_');
-  return path.join(rootDir, '.sync', 'feishu', `${basename}.${docId}.json`);
+  return path.join(receiptDir, `${basename}.${docId}.json`);
+}
+
+export function receiptPathFor(rootDir: string, receiptDir: string | undefined, sourcePath: string, docId: string): string {
+  return receiptDir ? receiptPathInDir(path.resolve(receiptDir), sourcePath, docId) : receiptPath(rootDir, sourcePath, docId);
 }
 
 export async function readReceipt(filePath: string): Promise<SyncReceipt | null> {

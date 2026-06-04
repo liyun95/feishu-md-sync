@@ -208,6 +208,21 @@ const PUSH_TOOLS: HarnessTool[] = [
   }
 ];
 
+const REVIEW_DRAFT_TOOLS: HarnessTool[] = [
+  localTool('pull', ['feishuDoc', '--output', '--write-receipt'], ['remote baseline markdown', '.sync/feishu receipt'], 'Snapshot the current Feishu document before a Milvus review draft write.'),
+  {
+    name: 'review-draft',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['markdownFile', 'feishuDoc'],
+    writeRequires: ['--write', 'approved dry-run strategy plan', 'passing review draft checks', '--replace-all when selected strategy is document-replace'],
+    artifacts: ['dry-run/write output', 'review draft checks', 'readback verification'],
+    description: 'Dry-run or write a Milvus review draft with Milvus transforms and public docs link rewriting.'
+  }
+];
+
 const PUBLISH_NEW_TOOLS: HarnessTool[] = [
   readTool('doctor auth', 'Report auth env loading without printing secrets.'),
   {
@@ -289,6 +304,7 @@ const SUPPORTED_WORKFLOWS: HarnessWorkflow[] = [
   'baseline-sync',
   'publish-new',
   'push',
+  'review-draft',
   'multisdk-examples',
   'multisdk',
   'sdk-reference-authoring',
@@ -315,6 +331,7 @@ function toolsForWorkflow(workflow: HarnessWorkflow): HarnessTool[] {
   if (workflow === 'baseline-sync') return BASELINE_SYNC_TOOLS;
   if (workflow === 'publish-new') return PUBLISH_NEW_TOOLS;
   if (workflow === 'push') return PUSH_TOOLS;
+  if (workflow === 'review-draft') return REVIEW_DRAFT_TOOLS;
   if (workflow === 'sdk-reference-authoring') return REFERENCE_AUTHORING_TOOLS;
   if (workflow === 'sdk-reference-web-content-release') return REFERENCE_RELEASE_TOOLS;
   return RELEASE_NOTES_TOOLS;

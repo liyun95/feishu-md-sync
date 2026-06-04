@@ -9,7 +9,7 @@ type CliResult = {
 
 function runCli(args: string[]): Promise<CliResult> {
   return new Promise((resolve) => {
-    execFile('npx', ['tsx', 'src/cli/index.ts', ...args], {
+    execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
       cwd: new URL('..', import.meta.url),
       env: { ...process.env, APP_ID: '', APP_SECRET: '' }
     }, (error, stdout, stderr) => {
@@ -26,7 +26,7 @@ describe('CLI help surface', () => {
   it('keeps top-level workflow commands discoverable', async () => {
     const { stdout } = await runCli(['--help']);
 
-    for (const command of ['sync', 'push', 'publish-new', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
+    for (const command of ['sync', 'push', 'review-draft', 'publish-new', 'status', 'pull', 'diff', 'merge', 'code-blocks', 'multisdk', 'reference', 'release', 'harness', 'workflow']) {
       expect(stdout).toContain(command);
     }
   });
@@ -52,6 +52,16 @@ describe('CLI help surface', () => {
     const { stdout } = await runCli(['sync', '--help']);
 
     expect(stdout).not.toContain('--section');
+  });
+
+  it('documents review-draft as the Milvus review push command', async () => {
+    const { stdout } = await runCli(['review-draft', '--help']);
+
+    expect(stdout).toContain('push a Milvus review draft to an existing Feishu document');
+    expect(stdout).toContain('--link-base-url <url>');
+    expect(stdout).toContain('--markdown-engine <engine>');
+    expect(stdout).toContain('(default: "local")');
+    expect(stdout).toContain('--replace-all');
   });
 
   it('honors sync subcommand options before doing IO', async () => {

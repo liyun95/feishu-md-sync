@@ -5,7 +5,7 @@ import { hashBlocks, hashSource } from '../core/hash.js';
 import type { FeishuBlock, FeishuDocClient, FeishuDriveFile } from '../feishu/types.js';
 import { createMarkdownEngine, type MarkdownEngine } from '../markdown/engine.js';
 import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
-import { receiptPath, writeReceipt, type SyncReceipt } from '../receipts/receipt.js';
+import { receiptPathFor, writeReceipt, type SyncReceipt } from '../receipts/receipt.js';
 import { comparableDirectChildBlocks, findPageBlock } from './block-state.js';
 import { assertFeishuBlocksWritable } from './preflight.js';
 import {
@@ -46,6 +46,7 @@ export type PublishWikiMoveResult = {
 export type PublishNewOptions = {
   sourcePath: string;
   rootDir?: string;
+  receiptDir?: string;
   options: {
     title?: string;
     folderToken?: string;
@@ -143,7 +144,7 @@ export async function runPublishNew(client: PublishNewClient, input: PublishNewO
     options: publishOptions,
     env: input.env ?? process.env
   });
-  const dryRunReceiptPath = receiptPath(rootDir, absoluteSourcePath, '<new-doc-id>');
+  const dryRunReceiptPath = receiptPathFor(rootDir, input.receiptDir, absoluteSourcePath, '<new-doc-id>');
   const plan = buildPublishNewPlan({
     sourcePath: absoluteSourcePath,
     markdown: transformedSourceContent,
@@ -192,7 +193,7 @@ export async function runPublishNew(client: PublishNewClient, input: PublishNewO
     throw new Error('Feishu docx creation did not return a document id.');
   }
   const docxUrl = stringValue(createdDocument.url) ?? fallbackDocxUrl(documentId, input.env ?? process.env);
-  const writeReceiptPath = receiptPath(rootDir, absoluteSourcePath, documentId);
+  const writeReceiptPath = receiptPathFor(rootDir, input.receiptDir, absoluteSourcePath, documentId);
   const writePlan: PublishNewPlan = { ...plan, receiptPath: writeReceiptPath };
 
   let failedStep = 'write blocks';

@@ -2,11 +2,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBlocks, hashSource } from '../core/hash.js';
 import type { FeishuBlock, FeishuDocClient, WriteResult } from '../feishu/types.js';
-import { createMarkdownEngine, type MarkdownEngine } from '../markdown/engine.js';
+import { createMarkdownEngine, type MarkdownEngine, type MarkdownEngineName } from '../markdown/engine.js';
 import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
 import { extractUniqueMarkdownSection } from '../markdown/section-extract.js';
 import { findActiveMultisdkTasks, formatActiveMultisdkTaskWarning } from '../multisdk/guard.js';
-import { readReceipt, receiptPath, type SyncReceipt, type SyncReceiptRunContext, writeReceipt } from '../receipts/receipt.js';
+import { readReceipt, receiptPathFor, type SyncReceipt, type SyncReceiptRunContext, writeReceipt } from '../receipts/receipt.js';
 import { buildMarkdownPreflightReport, type MarkdownPreflightReport } from '../services/markdown/preflight.js';
 import { comparableDirectChildBlocks, findPageBlock } from './block-state.js';
 import { detectConflict } from './conflict.js';
@@ -20,7 +20,14 @@ import {
   type InsertSectionOptions
 } from './section.js';
 import { applyBlockLevelSectionPatch } from './block-level-apply.js';
-import { planBlockLevelSectionPatch, type BlockLevelSectionPatch } from './block-level-plan.js';
+import {
+  planBlockLevelDocumentPatch,
+  planBlockLevelSectionPatch,
+  type BlockLevelDocumentPatch,
+  type BlockLevelSectionPatch
+} from './block-level-plan.js';
+import { analyzeRenderRisks, type RenderRiskReport } from './render-risk.js';
+import { analyzeReviewDraftChecks, type ReviewDraftCheckReport } from './review-draft-checks.js';
 
 export type SyncInsertSectionOptions = {
   heading: string;
@@ -32,6 +39,7 @@ export type SyncOptions = {
   sourcePath: string;
   documentId: string;
   rootDir?: string;
+  receiptDir?: string;
   dryRun?: boolean;
   yes?: boolean;
   strategy?: SyncStrategy;
@@ -55,10 +63,18 @@ export type SyncRunResult = {
   receiptPath: string;
   patchPlan: PatchPlan;
   blockLevelSectionPatch?: BlockLevelSectionPatch | null;
+  blockLevelDocumentPatch?: BlockLevelDocumentPatch | null;
   receipt: SyncReceipt;
   warnings: string[];
   receiptWritten: boolean;
   preflight: MarkdownPreflightReport;
+  markdownEngine?: {
+    requested: MarkdownEngineName;
+    import: 'local' | 'official';
+  };
+  publishTransforms?: string[];
+  renderRisk?: RenderRiskReport;
+  reviewDraftChecks?: ReviewDraftCheckReport;
 };
 
 export async function runSync(client: FeishuDocClient, options: SyncOptions): Promise<SyncRunResult> {
@@ -71,7 +87,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   const pageBlock = findPageBlock(existingBlocks, options.documentId);
   const currentChildren = comparableDirectChildBlocks(existingBlocks, pageBlock);
   const currentHash = hashBlocks(currentChildren);
-  const initialStatePath = receiptPath(rootDir, absoluteSourcePath, options.documentId);
+  const initialStatePath = receiptPathFor(rootDir, options.receiptDir, absoluteSourcePath, options.documentId);
   let statePath = initialStatePath;
   let receiptSourcePath = absoluteSourcePath;
   let previousReceipt = await readReceipt(initialStatePath);
@@ -82,7 +98,7 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   if (!previousReceipt) {
     const originalPath = originalPathForMergedFile(absoluteSourcePath);
     if (originalPath) {
-      const originalStatePath = receiptPath(rootDir, originalPath, options.documentId);
+      const originalStatePath = receiptPathFor(rootDir, options.receiptDir, originalPath, options.documentId);
       const originalReceipt = await readReceipt(originalStatePath);
       if (originalReceipt) {
         statePath = originalStatePath;
@@ -200,13 +216,37 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
       remoteStartIndex: scopedPatch.remoteRange.startIndex
     })
     : null;
-  const expectedAfterChildren = blockLevelSectionPatch && scopedPatch
+  const plannedBlockLevelDocumentPatch = !isScopedSync(options) && !options.forceDocumentReplace && patchPlan.operation === 'replace-document'
+    ? planBlockLevelDocumentPatch({
+      remoteBlocks: currentChildren,
+      desiredBlocks
+    })
+    : null;
+  const blockLevelDocumentPatch = plannedBlockLevelDocumentPatch && plannedBlockLevelDocumentPatch.operations.length > 1
+    ? plannedBlockLevelDocumentPatch
+    : null;
+  const expectedAfterChildren = blockLevelDocumentPatch
+    ? expectedChildrenForBlockLevelPatch(currentChildren, desiredBlocks, blockLevelDocumentPatch.operations)
+    : blockLevelSectionPatch && scopedPatch
     ? expectedChildrenForBlockLevelPatch(currentChildren, scopedPatch.localRange.blocks, blockLevelSectionPatch.operations)
     : (scopedPatch?.expectedChildren ?? desiredBlocks);
   const expectedAfterHash = hashBlocks(expectedAfterChildren);
   assertFeishuBlocksWritable(patchBlocks);
+  let renderRisk = analyzeRenderRisks({
+    sourceMarkdown: effectiveMarkdownForImport,
+    desiredBlocks,
+    remoteBlocks: currentChildren
+  });
+  let reviewDraftChecks = reviewDraftChecksFor(options.publishTransform, effectiveMarkdownForImport);
 
-  if (conflict.reason === 'no-receipt' && mode === 'write' && currentChildren.length > 0 && !options.forceInitialOverwrite && !isScopedSync(options)) {
+  if (
+    conflict.reason === 'no-receipt' &&
+    mode === 'write' &&
+    currentChildren.length > 0 &&
+    !options.forceInitialOverwrite &&
+    !isScopedSync(options) &&
+    !blockLevelDocumentPatch
+  ) {
     throw new Error(
       `Initial write would replace existing Feishu content (${currentChildren.length} blocks). ` +
       `Run without --write to inspect the plan, or pass --force-initial-overwrite if this is intentional.`
@@ -232,7 +272,27 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   let afterHash = currentHash;
 
   if (mode === 'write') {
-    if (blockLevelSectionPatch && scopedPatch) {
+    if (blockLevelDocumentPatch) {
+      if (blockLevelDocumentPatch.unsafeForWrite) {
+        throw new Error(
+          `Refusing unsafe whole-document block-level write. ` +
+          `Fallback reason: ${blockLevelDocumentPatch.fallbackReason}. Run dry-run and narrow the edit before writing.`
+        );
+      }
+      const blockLevelResult = await applyBlockLevelSectionPatch(client, options.documentId, {
+        remoteSectionBlocks: currentChildren,
+        desiredSectionBlocks: desiredBlocks,
+        remoteStartIndex: 0,
+        operations: blockLevelDocumentPatch.operations
+      });
+      writeResult = {
+        deleted: blockLevelResult.deleted,
+        created: blockLevelResult.created,
+        updated: blockLevelResult.updated,
+        skipped: blockLevelResult.updated === 0 && blockLevelResult.created === 0 && blockLevelResult.deleted === 0
+      };
+      warnings.push('Whole-document push used Feishu block-level patching.');
+    } else if (blockLevelSectionPatch && scopedPatch) {
       if (blockLevelSectionPatch.unsafeForWrite) {
         throw new Error(
           `Refusing unsafe block-level fallback write for section "${options.section}". ` +
@@ -254,9 +314,11 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
       warnings.push(blockLevelSectionPatch.fallbackReason
         ? `Scoped push used bounded block-level fallback: ${blockLevelSectionPatch.fallbackReason}.`
         : 'Scoped push used Feishu block-level patching.');
-    } else if (options.section && scopedPatch && sectionPatchMode === 'section-replace') {
+    } else if (scopedPatch && sectionPatchMode === 'section-replace') {
       writeResult = await applyRunSyncPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
-      warnings.push(`Push used section replacement for "${options.section}".`);
+      warnings.push(options.section
+        ? `Push used section replacement for "${options.section}".`
+        : 'Push used scoped replacement.');
     } else {
       writeResult = await applyRunSyncPatch(client, options.documentId, pageBlock.block_id, patchPlan, patchBlocks);
     }
@@ -267,6 +329,11 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     if (afterHash !== expectedAfterHash) {
       throw new Error(`Verification mismatch after write. Expected ${expectedAfterHash}, got ${afterHash}.`);
     }
+    renderRisk = analyzeRenderRisks({
+      sourceMarkdown: effectiveMarkdownForImport,
+      desiredBlocks,
+      remoteBlocks: afterChildren
+    });
     if (shouldWriteMergedSource) {
       await writeFile(absoluteSourcePath, effectiveSourceContent, 'utf8');
     }
@@ -307,6 +374,9 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     },
     ...(options.runContext ? { runContext: options.runContext } : {})
   };
+  if (mode === 'write') {
+    reviewDraftChecks = reviewDraftChecksFor(options.publishTransform, receipt.feishuMarkdownSnapshot ?? effectiveSourceContent);
+  }
 
   const receiptWritten = mode === 'write' && !isScopedSync(options);
   if (receiptWritten) {
@@ -318,11 +388,27 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     receiptPath: statePath,
     patchPlan,
     blockLevelSectionPatch,
+    blockLevelDocumentPatch,
     receipt,
     warnings,
     receiptWritten,
-    preflight
+    preflight,
+    markdownEngine: {
+      requested: markdownEngine.name,
+      import: desiredImport.engine
+    },
+    publishTransforms: publishTransformNames(options.publishTransform),
+    renderRisk,
+    reviewDraftChecks
   };
+}
+
+function publishTransformNames(transform: PublishTransformOptions | undefined): string[] {
+  return transform?.profile ? [transform.profile] : [];
+}
+
+function reviewDraftChecksFor(transform: PublishTransformOptions | undefined, markdown: string): ReviewDraftCheckReport | undefined {
+  return transform?.profile === 'milvus' ? analyzeReviewDraftChecks(markdown) : undefined;
 }
 
 function scopedPatchPlan(input: {

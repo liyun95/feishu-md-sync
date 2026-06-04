@@ -52,6 +52,23 @@ describe('runSync', () => {
     expect(client.createChildren).not.toHaveBeenCalled();
   });
 
+  it('rewrites local Markdown links before Feishu write preflight when link base URL is configured', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, 'For details, see [NGRAM](ngram.md).\n');
+    const desired = markdownToFeishuBlocks('For details, see [NGRAM](https://milvus.io/docs/ngram.md).\n');
+    const client = fakeClient(desired);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      publishTransform: { linkBaseUrl: 'https://milvus.io/docs/' }
+    });
+
+    expect(result.preflight.passed).toBe(true);
+    expect(result.patchPlan.desiredHash).toBe(hashBlocks(desired));
+  });
+
   it('write rejects invalid Feishu links before deleting existing content', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, 'For details, see [JSON Shredding](./json-shredding).\n');
@@ -366,6 +383,26 @@ Local ignored
     expect(receipt.verificationResult.ok).toBe(true);
   });
 
+  it('writes receipts to an explicit receipt directory', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    const receiptDir = path.join(dir, 'custom-receipts');
+    await writeFile(sourcePath, '# Title\n');
+    const desired = markdownToFeishuBlocks('# Title\n');
+    const client = fakeClient(desired);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: path.join(dir, 'cwd-root'),
+      receiptDir,
+      dryRun: false,
+      yes: true
+    });
+
+    expect(result.receiptPath).toBe(path.join(receiptDir, 'doc.md.doc1234567890123.json'));
+    await expect(readFile(result.receiptPath, 'utf8')).resolves.toContain('"feishuDocId": "doc1234567890123"');
+  });
+
   it('stores non-sensitive auth context in write receipts when provided', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     await writeFile(sourcePath, '# Title\n');
@@ -422,6 +459,76 @@ Milvus 3.0 updates Milvus behavior.
 
     expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', desired);
     expect(result.receipt.blockCounts.source).toBe(1);
+    expect(result.reviewDraftChecks).toEqual({ passed: true, issues: [] });
+  });
+
+  it('updates aligned whole-document text blocks in place after a publish transform', async () => {
+    const sourcePath = path.join(dir, 'doc.md');
+    await writeFile(sourcePath, `---
+title: "Pattern Matching"
+---
+
+# Pattern Matching
+
+## Overview
+
+Milvus supports pattern matching.
+
+## Reference
+
+Milvus 3.0 keeps existing behavior.
+`);
+    const remote = markdownToFeishuBlocks(`## Overview
+
+Milvus supports pattern matching.
+
+## Reference
+
+Milvus 3.0 keeps existing behavior.
+`);
+    const desired = markdownToFeishuBlocks(`## Overview
+
+<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> supports pattern matching.
+
+## Reference
+
+<include target="milvus">Milvus 3.0</include> keeps existing behavior.
+`);
+    const statePath = receiptPath(dir, sourcePath, 'doc1234567890123');
+    await writeReceipt(statePath, {
+      sourcePath,
+      sourceHash: 'old-source',
+      sourceSnapshot: '## Overview\n\nMilvus supports pattern matching.\n\n## Reference\n\nMilvus 3.0 keeps existing behavior.\n',
+      feishuDocId: 'doc1234567890123',
+      feishuStateHash: hashBlocks(remote),
+      timestamp: '2026-06-03T00:00:00.000Z',
+      blockCounts: { source: remote.length, feishuBefore: remote.length, feishuAfter: remote.length },
+      warnings: [],
+      writeResult: { mode: 'write', deleted: 0, created: remote.length, skipped: false },
+      verificationResult: { ok: true, expectedHash: hashBlocks(remote), actualHash: hashBlocks(remote) }
+    });
+    const client = fakeClient(desired, remote);
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      publishTransform: { profile: 'milvus' }
+    });
+
+    expect(result.blockLevelDocumentPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'update', remoteIndex: 1, desiredIndex: 1 }),
+      expect.objectContaining({ kind: 'update', remoteIndex: 3, desiredIndex: 3 })
+    ]);
+    expect(client.batchUpdateBlocks).toHaveBeenCalledWith('doc1234567890123', [
+      expect.objectContaining({ block_id: 'child-1' }),
+      expect.objectContaining({ block_id: 'child-3' })
+    ]);
+    expect(client.createChildren).not.toHaveBeenCalled();
+    expect(client.deleteChildren).not.toHaveBeenCalled();
+    expect(result.receipt.writeResult).toMatchObject({ mode: 'write', updated: 2, created: 0, deleted: 0 });
   });
 
   it('fails when verification readback does not match desired blocks', async () => {
@@ -774,7 +881,12 @@ Milvus 3.0 updates Milvus behavior.
     });
 
     expect(result.receiptPath).toBe(originalStatePath);
-    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', mergedBlocks, { index: 3 });
+    expect(client.batchUpdateBlocks).toHaveBeenCalledWith('doc1234567890123', [
+      expect.objectContaining({ block_id: 'child-1' }),
+      expect.objectContaining({ block_id: 'child-2' })
+    ]);
+    expect(client.createChildren).not.toHaveBeenCalled();
+    expect(client.deleteChildren).not.toHaveBeenCalled();
     expect(await readFile(sourcePath, 'utf8')).toBe('A\n\nLOCAL\n\nREMOTE\n');
     expect(await readFile(mergedPath, 'utf8')).toBe('A\n\nLOCAL\n\nREMOTE\n');
   });

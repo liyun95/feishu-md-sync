@@ -7,6 +7,7 @@ describe('workflow registry', () => {
       'baseline-sync',
       'publish-new',
       'push',
+      'review-draft',
       'multisdk-examples',
       'sdk-reference-authoring',
       'sdk-reference-web-content-release',
@@ -38,6 +39,20 @@ describe('workflow registry', () => {
     ]);
     expect(recipe.steps[0].command).toBe('md2feishu push <doc.md> <feishu-doc>');
     expect(recipe.steps[2].command).toContain('--replace-all');
+  });
+
+  it('describes review-draft as the Milvus review workflow', () => {
+    const recipe = getWorkflowRecipe('review-draft');
+    expect(recipe.title).toBe('Push a Milvus review draft to Feishu');
+    expect(recipe.steps.map((step) => step.id)).toEqual([
+      'pull-baseline',
+      'dry-run',
+      'write',
+      'post-write-baseline'
+    ]);
+    expect(recipe.steps[1].command).toContain('md2feishu review-draft <doc.md> <feishu-doc>');
+    expect(recipe.steps[1].command).toContain('--link-base-url');
+    expect(recipe.steps[2].verifies).toContain('Review draft checks pass');
   });
 
   it('gives safe next commands for a baseline sync', () => {

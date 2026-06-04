@@ -4,7 +4,7 @@ import { hashBlocks, hashSource } from '../core/hash.js';
 import type { FeishuDocClient } from '../feishu/types.js';
 import { createMarkdownEngine, type MarkdownEngine } from '../markdown/engine.js';
 import { applyPublishTransform, type PublishTransformOptions } from '../markdown/publish-transform.js';
-import { readReceipt, receiptPath, type SyncReceipt } from '../receipts/receipt.js';
+import { readReceipt, receiptPathFor, type SyncReceipt } from '../receipts/receipt.js';
 import { buildMarkdownPreflightReport, type MarkdownPreflightReport } from '../services/markdown/preflight.js';
 import { comparableDirectChildBlocks, findPageBlock } from './block-state.js';
 import { assertFeishuBlocksWritable } from './preflight.js';
@@ -33,6 +33,7 @@ export type SyncStatusOptions = {
   sourcePath: string;
   documentId: string;
   rootDir?: string;
+  receiptDir?: string;
   publishTransform?: PublishTransformOptions;
   markdownEngine?: MarkdownEngine;
 };
@@ -84,7 +85,7 @@ export async function getSyncStatus(client: FeishuDocClient, options: SyncStatus
   const pageBlock = findPageBlock(existingBlocks, options.documentId);
   const currentChildren = comparableDirectChildBlocks(existingBlocks, pageBlock);
   const currentRemoteHash = hashBlocks(currentChildren);
-  const statePath = receiptPath(rootDir, absoluteSourcePath, options.documentId);
+  const statePath = receiptPathFor(rootDir, options.receiptDir, absoluteSourcePath, options.documentId);
   const receipt = await readReceipt(statePath);
 
   return {
