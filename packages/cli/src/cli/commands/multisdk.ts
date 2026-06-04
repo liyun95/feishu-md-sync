@@ -1,28 +1,28 @@
 import { execFile } from 'node:child_process';
-import readline from 'node:readline/promises';
-import { stdin as input, stdout } from 'node:process';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Command } from 'commander';
 import { parseFeishuTarget } from '../../core/doc-id.js';
 import { buildCodeBlockInventory } from '../../feishu/code-blocks.js';
 import type { FeishuClient } from '../../feishu/client.js';
 import { buildHarnessEnvironmentReport, writeHarnessEnvironment } from '../../harness/environment.js';
-import { assessPrBranchHygiene, buildCleanBranchPlan, suggestTopicBranch } from '../../multisdk/git-hygiene.js';
-import { landMultisdkDocs } from '../../multisdk/land-docs.js';
+import { parseMilvusTarget } from '../../multisdk/environment.js';
 import { parseMultisdkLanguage } from '../../multisdk/language.js';
-import { loadMultisdkTask, saveMultisdkTask, summarizeMultisdkTask } from '../../multisdk/task.js';
+import { runMantaValidation } from '../../multisdk/manta.js';
+import { loadMultisdkTask, summarizeMultisdkTask, type MultisdkValidationRunner } from '../../multisdk/task.js';
 import { defaultValidationProfile, getValidationProfile, listValidationProfiles } from '../../multisdk/validation-profile.js';
 import {
-  applyMultisdkLanguage,
+  applyMultisdkLocalReview,
+  authorMultisdkTask,
   auditMultisdkLanguage,
-  diffMultisdkLanguage,
-  exportMultisdkLanguage,
+  configureMultisdkEnvironment,
   finalizeMultisdkTask,
   initMultisdkTask,
-  recordMultisdkVerification
+  prepareMultisdkTask,
+  recordMultisdkPush,
+  validateMultisdkTask
 } from '../../multisdk/workflow.js';
-import { renderCodeBlockDiffReport } from '../../sync/code-block-diff.js';
-import { pullRemoteMarkdown } from '../../sync/pull.js';
 import type { CliContext } from '../context.js';
 import { printFormatted } from '../output.js';
 
@@ -39,10 +39,45 @@ type FormatCommandOptions = {
 
 type MultisdkInitCommandOptions = BaseCommandOptions & FormatCommandOptions & {
   out: string;
+  language?: string;
+};
+
+type MultisdkEnvironmentCommandOptions = FormatCommandOptions & {
+  milvusVersion?: string;
+  milvusSourceRepo?: string;
+  milvusSourceRef?: string;
+  runner?: string;
+};
+
+type MultisdkPrepareCommandOptions = FormatCommandOptions & {
+  remoteMarkdown: string;
+  snippet?: string[];
+};
+
+type MultisdkValidateCommandOptions = FormatCommandOptions & {
+  runner?: string;
+  command: string;
+  evidence?: string;
+  jobId?: string;
+};
+
+type MultisdkAuthorCommandOptions = FormatCommandOptions & {
+  snippet?: string[];
+};
+
+type MultisdkApplyLocalCommandOptions = FormatCommandOptions & {
+  remoteMarkdown: string;
+  snippet?: string[];
+};
+
+type MultisdkRecordPushCommandOptions = FormatCommandOptions & {
+  mode: string;
+  command: string;
+  result?: string;
 };
 
 type MultisdkLanguageCommandOptions = BaseCommandOptions & FormatCommandOptions & {
-  language: string;
+  language?: string;
 };
 
 type MultisdkProfileCommandOptions = FormatCommandOptions & {
@@ -50,47 +85,23 @@ type MultisdkProfileCommandOptions = FormatCommandOptions & {
   profile?: string;
 };
 
-type MultisdkVerifyCommandOptions = FormatCommandOptions & {
-  language: string;
-  evidence: string;
-  command: string;
-  profile?: string;
-  sdkVersion?: string;
-  sourceCommit?: string;
-  endpoint?: string;
-};
-
-type MultisdkApplyCommandOptions = BaseCommandOptions & FormatCommandOptions & {
-  language: string;
-  write?: boolean;
-  yes?: boolean;
-};
-
-type MultisdkLandDocsCommandOptions = BaseCommandOptions & FormatCommandOptions & {
-  language: string;
-  repo: string;
-  target: string;
-  base?: string;
-  branch?: string;
-  commitMessage?: string;
-  write?: boolean;
-};
-
 export function registerMultisdkCommands(program: Command, context: CliContext): void {
   const multisdk = program
     .command('multisdk')
-    .description('run a resumable multi-SDK code-block completion workflow');
+    .description('run a resumable multi-SDK local-first completion workflow');
 
   multisdk
     .command('init')
-    .description('initialize a multi-SDK task from a Feishu document')
+    .description('initialize a single-language multi-SDK task from a Feishu document')
     .argument('<feishu-doc>', 'Feishu docx ID or URL')
-    .requiredOption('--out <dir>', 'task directory, for example runs/<doc-token>')
+    .requiredOption('--out <dir>', 'task directory, for example runs/<doc-token>-java')
+    .option('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .action(async (feishuDoc: string, opts: MultisdkInitCommandOptions) => {
       const normalized = normalizeBaseOptions(program, opts);
+      const language = parseRequiredMultisdkLanguage(opts.language);
       const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
       const documentId = await resolveDocumentId(client, feishuDoc);
       const blocks = await client.getDocumentBlocks(documentId);
@@ -98,6 +109,7 @@ export function registerMultisdkCommands(program: Command, context: CliContext):
         document: feishuDoc,
         documentId,
         taskDir: opts.out,
+        language,
         inventory: buildCodeBlockInventory(documentId, blocks)
       });
       const environmentPath = await writeHarnessEnvironment(
@@ -122,29 +134,144 @@ export function registerMultisdkCommands(program: Command, context: CliContext):
     });
 
   multisdk
-    .command('export')
-    .description('refresh snippet files for one SDK language')
+    .command('environment')
+    .description('record the Milvus target and validation runner for a multi-SDK task')
     .argument('<task-dir>', 'multi-SDK task directory')
-    .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
+    .requiredOption('--milvus-version <version>', 'Milvus version the examples must validate against')
+    .option('--milvus-source-repo <repo>', 'Milvus source repository for unreleased validation builds')
+    .option('--milvus-source-ref <ref>', 'Milvus source branch, tag, or commit for unreleased validation builds')
+    .option('--runner <runner>', 'validation runner: manta | local', 'manta')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
-    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
-    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
-    .action(async (taskDir: string, opts: MultisdkLanguageCommandOptions) => {
-      const language = parseMultisdkLanguage(opts.language);
-      const task = await loadMultisdkTask(taskDir);
-      const normalized = normalizeBaseOptions(program, opts);
-      const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
-      const blocks = await client.getDocumentBlocks(task.documentId);
-      const result = await exportMultisdkLanguage({
-        document: task.document,
+    .action(async (taskDir: string, opts: MultisdkEnvironmentCommandOptions) => {
+      const runner = parseValidationRunner(opts.runner);
+      const task = await configureMultisdkEnvironment({
         taskDir,
-        language,
-        inventory: buildCodeBlockInventory(task.documentId, blocks)
+        runner,
+        milvusTarget: parseMilvusTarget(opts)
+      });
+      printFormatted(summarizeMultisdkTask(task), opts.format);
+    });
+
+  multisdk
+    .command('prepare')
+    .description('prepare verifier artifacts for the selected language')
+    .argument('<task-dir>', 'multi-SDK task directory')
+    .requiredOption('--remote-markdown <file>', 'pulled Feishu Markdown used as Python context')
+    .option('--snippet <file...>', 'snippet files to include in the verifier')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .action(async (taskDir: string, opts: MultisdkPrepareCommandOptions) => {
+      const result = await prepareMultisdkTask({
+        taskDir,
+        remoteMarkdownPath: opts.remoteMarkdown,
+        snippetPaths: opts.snippet ?? []
+      });
+      printFormatted({
+        task: summarizeMultisdkTask(result.task),
+        files: result.files,
+        command: result.command
+      }, opts.format);
+    });
+
+  multisdk
+    .command('author')
+    .description('record selected-language snippets authored from Python context')
+    .argument('<task-dir>', 'multi-SDK task directory')
+    .option('--snippet <file...>', 'authored snippet files to validate and copy into the verifier work area')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .action(async (taskDir: string, opts: MultisdkAuthorCommandOptions) => {
+      const result = await authorMultisdkTask({
+        taskDir,
+        snippetPaths: opts.snippet ?? []
       });
       printFormatted({
         task: summarizeMultisdkTask(result.task),
         files: result.files
       }, opts.format);
+    });
+
+  multisdk
+    .command('validate')
+    .description('record live Milvus validation evidence for the selected language')
+    .argument('<task-dir>', 'multi-SDK task directory')
+    .requiredOption('--command <command>', 'validation command run by the verifier')
+    .option('--runner <runner>', 'validation runner: manta | local', 'manta')
+    .option('--evidence <file>', 'existing validation evidence file')
+    .option('--job-id <job>', 'Manta job id when evidence was collected separately')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .action(async (taskDir: string, opts: MultisdkValidateCommandOptions) => {
+      const runner = parseValidationRunner(opts.runner);
+      let evidencePath = opts.evidence;
+      let jobId = opts.jobId;
+
+      if (runner === 'manta' && !evidencePath) {
+        const task = await loadMultisdkTask(taskDir);
+        if (!task.milvusTarget) throw new Error('multisdk validate requires a configured Milvus target.');
+        const result = await runMantaValidation({
+          taskDir,
+          language: task.language,
+          command: opts.command,
+          milvusTarget: task.milvusTarget,
+          exec: async (command, args) => {
+            const output = await execFileAsync(command, args, { maxBuffer: 10 * 1024 * 1024 });
+            return { stdout: output.stdout, stderr: output.stderr };
+          }
+        });
+        jobId = result.jobId;
+        await mkdir(join(taskDir, 'evidence'), { recursive: true });
+        evidencePath = join(taskDir, 'evidence', `manta-${result.jobId}.log`);
+        await writeFile(evidencePath, result.logs, 'utf8');
+      }
+
+      if (!evidencePath) {
+        throw new Error('multisdk validate requires --evidence for local validation, or --runner manta so evidence can be collected.');
+      }
+
+      const task = await validateMultisdkTask({
+        taskDir,
+        command: opts.command,
+        evidencePath,
+        runner,
+        jobId
+      });
+      printFormatted(summarizeMultisdkTask(task), opts.format);
+    });
+
+  multisdk
+    .command('apply-local')
+    .description('write reviewed examples into local Markdown without writing Feishu')
+    .argument('<task-dir>', 'multi-SDK task directory')
+    .requiredOption('--remote-markdown <file>', 'pulled Feishu Markdown to patch')
+    .option('--snippet <file...>', 'snippet files to insert after Python examples')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .action(async (taskDir: string, opts: MultisdkApplyLocalCommandOptions) => {
+      const result = await applyMultisdkLocalReview({
+        taskDir,
+        remoteMarkdownPath: opts.remoteMarkdown,
+        snippetPaths: opts.snippet ?? []
+      });
+      printFormatted({
+        task: summarizeMultisdkTask(result.task),
+        markdownPath: result.markdownPath,
+        diffPath: result.diffPath
+      }, opts.format);
+    });
+
+  multisdk
+    .command('record-push')
+    .description('record an approved push dry-run or write for a multi-SDK task')
+    .argument('<task-dir>', 'multi-SDK task directory')
+    .requiredOption('--mode <mode>', 'push mode: dry-run | write')
+    .requiredOption('--command <command>', 'push command that was reviewed or executed')
+    .option('--result <file>', 'push result artifact path')
+    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .action(async (taskDir: string, opts: MultisdkRecordPushCommandOptions) => {
+      const task = await recordMultisdkPush({
+        taskDir,
+        mode: parsePushMode(opts.mode),
+        command: opts.command,
+        resultPath: opts.result
+      });
+      printFormatted(summarizeMultisdkTask(task), opts.format);
     });
 
   multisdk
@@ -167,99 +294,16 @@ export function registerMultisdkCommands(program: Command, context: CliContext):
     });
 
   multisdk
-    .command('verify')
-    .description('record validation evidence for one SDK language')
-    .argument('<task-dir>', 'multi-SDK task directory')
-    .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
-    .requiredOption('--evidence <file>', 'validation evidence file')
-    .requiredOption('--command <command>', 'validation command that produced the evidence')
-    .option('--profile <profile>', 'validation profile id, for example manta-k8s-maven')
-    .option('--sdk-version <version>', 'SDK version proven by the validation evidence')
-    .option('--source-commit <sha>', 'SDK source commit proven by the validation evidence')
-    .option('--endpoint <endpoint>', 'validation endpoint or environment name')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
-    .action(async (taskDir: string, opts: MultisdkVerifyCommandOptions) => {
-      const language = parseMultisdkLanguage(opts.language);
-      const task = await recordMultisdkVerification({
-        taskDir,
-        language,
-        evidencePath: opts.evidence,
-        command: opts.command,
-        profile: opts.profile,
-        sdkVersion: opts.sdkVersion,
-        sourceCommit: opts.sourceCommit,
-        endpoint: opts.endpoint
-      });
-      printFormatted(summarizeMultisdkTask(task), opts.format);
-    });
-
-  multisdk
-    .command('diff')
-    .description('show a block-level diff for one SDK language before apply')
-    .argument('<task-dir>', 'multi-SDK task directory')
-    .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
-    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
-    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
-    .action(async (taskDir: string, opts: MultisdkLanguageCommandOptions) => {
-      const language = parseMultisdkLanguage(opts.language);
-      const task = await loadMultisdkTask(taskDir);
-      const normalized = normalizeBaseOptions(program, opts);
-      const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
-      const result = await diffMultisdkLanguage({ taskDir, language, client });
-      if (opts.format === 'json') {
-        printFormatted({
-          task: summarizeMultisdkTask(task),
-          report: result.report
-        }, opts.format);
-        return;
-      }
-      stdout.write(renderCodeBlockDiffReport(result.report));
-    });
-
-  multisdk
-    .command('apply')
-    .description('dry-run or write one SDK language from a multi-SDK task')
-    .argument('<task-dir>', 'multi-SDK task directory')
-    .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
-    .option('--write', 'write to Feishu; omitted means dry-run')
-    .option('-y, --yes', 'skip write confirmation')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
-    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
-    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
-    .action(async (taskDir: string, opts: MultisdkApplyCommandOptions) => {
-      const language = parseMultisdkLanguage(opts.language);
-      const write = normalizeBooleanOption(program, opts, 'write', '--write');
-      const yes = normalizeBooleanOption(program, opts, 'yes', '--yes') || optionFlagFromArgv('-y');
-      const task = await loadMultisdkTask(taskDir);
-      if (write && !yes) {
-        const rl = readline.createInterface({ input, output: stdout });
-        const answer = await rl.question(`Apply ${language} snippets in ${task.documentId}? [y/N] `);
-        rl.close();
-        if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-          throw new Error('Multi-SDK apply cancelled.');
-        }
-      }
-      const normalized = normalizeBaseOptions(program, opts);
-      const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
-      const result = await applyMultisdkLanguage({ taskDir, language, write, client });
-      printFormatted({
-        task: summarizeMultisdkTask(result.task),
-        report: result.report
-      }, opts.format);
-    });
-
-  multisdk
     .command('audit')
-    .description('read back and audit one SDK language')
+    .description('read back and audit the selected SDK language')
     .argument('<task-dir>', 'multi-SDK task directory')
-    .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
+    .option('--language <language>', 'target language override; must match task language')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .action(async (taskDir: string, opts: MultisdkLanguageCommandOptions) => {
-      const language = parseMultisdkLanguage(opts.language);
       const task = await loadMultisdkTask(taskDir);
+      const language = opts.language ? parseMultisdkLanguage(opts.language) : task.language;
       const normalized = normalizeBaseOptions(program, opts);
       const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
       const blocks = await client.getDocumentBlocks(task.documentId);
@@ -275,84 +319,8 @@ export function registerMultisdkCommands(program: Command, context: CliContext):
     });
 
   multisdk
-    .command('land-docs')
-    .description('patch reviewed Feishu code blocks into a local docs repo target file')
-    .argument('<task-dir>', 'multi-SDK task directory')
-    .requiredOption('--language <language>', 'target language: java | javascript | node | nodejs | js | go | restful')
-    .requiredOption('--repo <path>', 'local docs repository path')
-    .requiredOption('--target <file>', 'target Markdown file path relative to --repo')
-    .option('--base <ref>', 'upstream base ref used for branch hygiene, for example upstream/v3.0.x')
-    .option('--branch <branch>', 'intended clean topic branch name')
-    .option('--commit-message <message>', 'commit message for the clean-branch handoff')
-    .option('--write', 'write the patched docs file and reviewed baseline; omitted means dry-run')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
-    .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
-    .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
-    .action(async (taskDir: string, opts: MultisdkLandDocsCommandOptions) => {
-      const language = parseMultisdkLanguage(opts.language);
-      const task = await loadMultisdkTask(taskDir);
-      const state = task.languages[language];
-      if (!state.auditPassed) {
-        throw new Error(`${language} land-docs requires a passing multisdk audit. Run multisdk audit --language ${language} first.`);
-      }
-
-      const normalized = normalizeBaseOptions(program, opts);
-      const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
-      const reviewedMarkdown = await pullRemoteMarkdown(client, task.documentId);
-      const write = normalizeBooleanOption(program, opts, 'write', '--write');
-      const git = opts.base
-        ? await buildDocsLandingGitReport({
-          repo: opts.repo,
-          baseRef: opts.base,
-          branch: opts.branch,
-          target: opts.target,
-          language,
-          commitMessage: opts.commitMessage ?? defaultLandDocsCommitMessage(language, opts.target)
-        })
-        : undefined;
-
-      if (write && git && !git.hygiene.passed) {
-        throw new Error(`Refusing docs landing write because branch hygiene failed: ${git.hygiene.warnings.join('; ')}`);
-      }
-
-      const landing = await landMultisdkDocs({
-        taskDir,
-        language,
-        repo: opts.repo,
-        target: opts.target,
-        reviewedMarkdown,
-        write
-      });
-      const updatedTask = write
-        ? {
-          ...task,
-          docsLandings: [
-            ...(task.docsLandings ?? []),
-            {
-              language,
-              repo: opts.repo,
-              target: opts.target,
-              reviewedBaselinePath: landing.reviewedBaselinePath ?? '',
-              mode: 'write' as const,
-              baseRef: opts.base,
-              branch: git?.cleanBranchPlan.branch,
-              commitMessage: git?.cleanBranchPlan.commitMessage ?? opts.commitMessage,
-              recordedAt: new Date().toISOString()
-            }
-          ]
-        }
-        : task;
-      if (write) await saveMultisdkTask(updatedTask);
-      printFormatted({
-        task: summarizeMultisdkTask(updatedTask),
-        landing,
-        git
-      }, opts.format);
-    });
-
-  multisdk
     .command('finalize')
-    .description('run full multi-SDK audit and write handoff summary')
+    .description('run final selected-language audit and write handoff summary')
     .argument('<task-dir>', 'multi-SDK task directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
@@ -372,6 +340,41 @@ export function registerMultisdkCommands(program: Command, context: CliContext):
         handoffPath: result.handoffPath
       }, opts.format);
     });
+
+  hideLegacyCommand(multisdk
+    .command('export')
+    .description('legacy Feishu-direct code-block operation; prefer multisdk apply-local plus md2feishu push'))
+    .action(() => {
+      throw new Error('multisdk export is a legacy Feishu-direct command. Use multisdk init --language and multisdk prepare.');
+    });
+
+  hideLegacyCommand(multisdk
+    .command('verify')
+    .description('legacy Feishu-direct code-block operation; prefer multisdk validate'))
+    .action(() => {
+      throw new Error('multisdk verify is a legacy command. Use multisdk validate.');
+    });
+
+  hideLegacyCommand(multisdk
+    .command('diff')
+    .description('legacy Feishu-direct code-block operation; prefer multisdk apply-local plus md2feishu push'))
+    .action(() => {
+      throw new Error('multisdk diff is a legacy Feishu-direct command. Use multisdk apply-local and inspect outputs/review.diff.');
+    });
+
+  hideLegacyCommand(multisdk
+    .command('apply')
+    .description('legacy Feishu-direct code-block operation; prefer multisdk apply-local plus md2feishu push'))
+    .action(() => {
+      throw new Error('multisdk apply is a legacy Feishu-direct command. Use multisdk apply-local plus md2feishu push.');
+    });
+
+  hideLegacyCommand(multisdk
+    .command('land-docs')
+    .description('legacy Feishu-direct code-block operation; prefer multisdk apply-local plus md2feishu push'))
+    .action(() => {
+      throw new Error('multisdk land-docs is a legacy command. Use multisdk apply-local plus md2feishu push.');
+    });
 }
 
 function normalizeBaseOptions(program: Command, opts: BaseCommandOptions): Required<BaseCommandOptions> {
@@ -382,12 +385,6 @@ function normalizeBaseOptions(program: Command, opts: BaseCommandOptions): Requi
     host: argvHost ?? commandOptionValue<string>(opts, 'host') ?? globals.host ?? process.env.FEISHU_HOST ?? 'https://open.feishu.cn',
     timeoutMs: argvTimeout ? parseIntOption(argvTimeout) : commandOptionValue<number>(opts, 'timeoutMs') ?? globals.timeoutMs ?? 20_000
   };
-}
-
-function normalizeBooleanOption(program: Command, opts: unknown, key: string, flag: string): boolean {
-  return optionFlagFromArgv(flag) ||
-    commandOptionValue<boolean>(opts, key) === true ||
-    program.opts<Record<string, unknown>>()[key] === true;
 }
 
 function commandOptionValue<T>(opts: unknown, key: string): T | undefined {
@@ -408,10 +405,6 @@ function commandOptionValue<T>(opts: unknown, key: string): T | undefined {
     }
   }
   return undefined;
-}
-
-function optionFlagFromArgv(name: string): boolean {
-  return process.argv.includes(name);
 }
 
 function optionFromArgv(name: string): string | undefined {
@@ -436,52 +429,22 @@ async function resolveDocumentId(client: FeishuClient, feishuDoc: string): Promi
   return target.kind === 'wiki' ? await client.resolveWikiNode(target.token) : target.token;
 }
 
-async function buildDocsLandingGitReport(input: {
-  repo: string;
-  baseRef: string;
-  branch?: string;
-  target: string;
-  language: ReturnType<typeof parseMultisdkLanguage>;
-  commitMessage: string;
-}) {
-  const currentBranch = await gitOutput(input.repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const commitsRelativeToBase = (await gitOutput(input.repo, ['log', '--oneline', `${input.baseRef}..HEAD`]))
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const intendedBranch = input.branch ?? suggestTopicBranch({
-    baseRef: input.baseRef,
-    target: input.target,
-    language: input.language
-  });
-  const hygiene = assessPrBranchHygiene({
-    baseRef: input.baseRef,
-    currentBranch,
-    intendedBranch,
-    target: input.target,
-    language: input.language,
-    commitsRelativeToBase
-  });
-  const cleanBranchPlan = buildCleanBranchPlan({
-    baseRef: input.baseRef,
-    branch: intendedBranch,
-    target: input.target,
-    commitMessage: input.commitMessage
-  });
-  return {
-    hygiene,
-    cleanBranchPlan
-  };
+function parseValidationRunner(value: string | undefined): MultisdkValidationRunner {
+  if (value === undefined || value === 'manta') return 'manta';
+  if (value === 'local') return 'local';
+  throw new Error(`Invalid --runner ${value}. Expected manta or local.`);
 }
 
-async function gitOutput(repo: string, args: string[]): Promise<string> {
-  const { stdout: output } = await execFileAsync('git', ['-C', repo, ...args], { maxBuffer: 10 * 1024 * 1024 });
-  return output.trim();
+function parseRequiredMultisdkLanguage(value: string | undefined): ReturnType<typeof parseMultisdkLanguage> {
+  if (!value?.trim()) {
+    throw new Error('Ask the user which target SDK language to complete before running multisdk init. Expected one of: java, javascript/node/nodejs/js, go, or restful.');
+  }
+  return parseMultisdkLanguage(value);
 }
 
-function defaultLandDocsCommitMessage(language: string, target: string): string {
-  const name = target.split('/').at(-1)?.replace(/\.[^.]+$/, '') || 'docs';
-  return `docs: update ${language} examples in ${name}`;
+function parsePushMode(value: string): 'dry-run' | 'write' {
+  if (value === 'dry-run' || value === 'write') return value;
+  throw new Error(`Invalid --mode ${value}. Expected dry-run or write.`);
 }
 
 function safeDefaultValidationProfile(language: ReturnType<typeof parseMultisdkLanguage>) {
@@ -490,4 +453,9 @@ function safeDefaultValidationProfile(language: ReturnType<typeof parseMultisdkL
   } catch {
     return null;
   }
+}
+
+function hideLegacyCommand(command: Command): Command {
+  const maybeHidden = command as Command & { hideHelp?: () => Command };
+  return maybeHidden.hideHelp ? maybeHidden.hideHelp() : command;
 }

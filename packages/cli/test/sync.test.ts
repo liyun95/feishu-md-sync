@@ -582,14 +582,13 @@ Milvus 3.0 keeps existing behavior.
     const task = createInitialMultisdkTask({
       document: 'doc-url',
       documentId: 'doc1234567890123',
-      taskDir
+      taskDir,
+      language: 'java'
     });
     await saveMultisdkTask({
       ...task,
-      languages: {
-        ...task.languages,
-        java: { ...task.languages.java, status: 'exported', snippetsReady: true }
-      }
+      status: 'prepared',
+      lane: { ...task.lane, prepared: true }
     });
     const desired = markdownToFeishuBlocks('# Title\n');
 
@@ -620,7 +619,8 @@ Milvus 3.0 keeps existing behavior.
     await saveMultisdkTask(createInitialMultisdkTask({
       document: 'doc-url',
       documentId: 'doc1234567890123',
-      taskDir
+      taskDir,
+      language: 'java'
     }));
     const desired = markdownToFeishuBlocks('# Title\n');
 
@@ -640,7 +640,8 @@ Milvus 3.0 keeps existing behavior.
     await saveMultisdkTask(createInitialMultisdkTask({
       document: 'doc-url',
       documentId: 'doc1234567890123',
-      taskDir
+      taskDir,
+      language: 'java'
     }));
     const desired = markdownToFeishuBlocks('# Title\n');
     const client = fakeClient(desired);

@@ -1,7 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { loadMultisdkTask, type MultisdkTask } from './task.js';
-import { MULTISDK_LANGUAGES } from './language.js';
 
 export type ActiveMultisdkTask = {
   taskDir: string;
@@ -25,9 +24,7 @@ export async function findActiveMultisdkTasks(rootDir: string, documentId: strin
           taskDir,
           document: task.document,
           documentId: task.documentId,
-          languages: Object.fromEntries(
-            MULTISDK_LANGUAGES.map((language) => [language, task.languages[language].status])
-          )
+          languages: { [task.language]: task.status }
         });
       }
     } catch {
@@ -43,13 +40,13 @@ export function formatActiveMultisdkTaskWarning(tasks: ActiveMultisdkTask[]): st
   return (
     `This document has an active multisdk task (${taskList}). ` +
     'Whole-document sync may replace non-target blocks. ' +
-    'Use md2feishu multisdk apply <task-dir> --language <lang> for code-block patches.'
+    'Use md2feishu multisdk apply-local <task-dir> and md2feishu push for reviewed Markdown.'
   );
 }
 
 function isActiveTask(task: MultisdkTask): boolean {
   if (!task.finalAuditPassed) return true;
-  return MULTISDK_LANGUAGES.some((language) => task.languages[language].status !== 'audited');
+  return task.status !== 'audited' || !task.lane.audited;
 }
 
 async function findTaskFiles(dir: string, depth: number): Promise<string[]> {

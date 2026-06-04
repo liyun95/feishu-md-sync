@@ -1,9 +1,8 @@
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { MULTISDK_LANGUAGES, type MultisdkLanguage } from '../multisdk/language.js';
 import { loadMultisdkTask, type MultisdkTask } from '../multisdk/task.js';
 import type { HarnessGrade, HarnessGradeCheck, HarnessGradeSeverity } from './task.js';
-import { readHarnessTraceEvents, type HarnessTraceEvent } from './trace.js';
+import { readHarnessTraceEvents } from './trace.js';
 
 export type GradeMultisdkTaskOptions = {
   taskDir: string;
@@ -23,29 +22,15 @@ export async function gradeMultisdkTask(options: GradeMultisdkTaskOptions): Prom
     return grade(options, checks, nextCommands);
   }
 
-  const traceEvents = await readHarnessTraceEvents(options.taskDir);
-  for (const language of MULTISDK_LANGUAGES) {
-    gradeLanguage(task, language, traceEvents, checks, nextCommands);
-  }
+  gradeLanguage(task, checks, nextCommands);
 
+  const traceEvents = await readHarnessTraceEvents(options.taskDir);
   if (traceEvents.length > 0) {
     checks.push(pass('trace-exists', `Trace contains ${traceEvents.length} event(s).`));
   } else if (task.finalAuditPassed) {
     checks.push(fail('trace-exists', 'blocked', 'Trace is missing even though finalAuditPassed is true.'));
   } else {
     checks.push(fail('trace-exists', 'incomplete', 'Trace is missing for this in-progress or legacy task.'));
-  }
-
-  if (task.finalAuditPassed) {
-    const handoffExists = await exists(join(options.taskDir, 'handoff.md'));
-    checks.push(handoffExists
-      ? pass('handoff-exists', 'handoff.md exists.')
-      : fail('handoff-exists', 'blocked', 'handoff.md is required when finalAuditPassed is true.'));
-  } else {
-    checks.push(fail('final-audit', 'incomplete', 'Final multi-SDK audit has not passed.'));
-    if (!nextCommands.includes(`md2feishu multisdk finalize ${options.taskDir}`)) {
-      nextCommands.push(`md2feishu multisdk finalize ${options.taskDir}`);
-    }
   }
 
   return grade(options, checks, nextCommands);
@@ -82,101 +67,86 @@ export function renderHarnessGradeMarkdown(gradeResult: HarnessGrade): string {
 
 function gradeLanguage(
   task: MultisdkTask,
-  language: MultisdkLanguage,
-  traceEvents: HarnessTraceEvent[],
   checks: HarnessGradeCheck[],
   nextCommands: string[]
 ): void {
-  const state = task.languages[language];
-  if (state.status === 'blocked') {
-    checks.push(fail(`${language}-status`, 'blocked', state.reason ?? `${language} is blocked.`));
+  const language = task.language;
+
+  if (task.status === 'blocked') {
+    checks.push(fail(`${language}-status`, 'blocked', task.lane.reason ?? `${language} is blocked.`));
     return;
   }
+  checks.push(pass(`${language}-status`, `${language} status is ${task.status}.`));
 
-  if (state.status === 'pending') {
-    checks.push(fail(`${language}-status`, 'incomplete', `${language} has not been exported.`));
-    nextCommands.push(`md2feishu multisdk export ${task.taskDir} --language ${language}`);
+  if (!task.milvusTarget) {
+    checks.push(fail(`${language}-environment`, 'incomplete', `${language} Milvus target is missing.`));
+    nextCommands.push(`Ask the user to confirm the Milvus target, then run: md2feishu multisdk environment ${task.taskDir} --milvus-version 2.6.0`);
     return;
   }
+  checks.push(pass(`${language}-environment`, `${language} Milvus target is ${task.milvusTarget.version}.`));
 
-  checks.push(pass(`${language}-status`, `${language} status is ${state.status}.`));
-
-  if (!state.snippetsReady) {
-    checks.push(fail(`${language}-snippets`, 'blocked', `${language} is beyond pending but snippetsReady is false.`));
-    nextCommands.push(`md2feishu multisdk export ${task.taskDir} --language ${language}`);
+  if (!task.lane.prepared) {
+    checks.push(fail(`${language}-prepare`, 'incomplete', `${language} verifier artifacts are missing.`));
+    nextCommands.push(`md2feishu multisdk prepare ${task.taskDir} --remote-markdown ${task.taskDir}/inputs/remote.md --snippet ${task.taskDir}/snippets/${snippetHint(language)}`);
     return;
   }
-  checks.push(pass(`${language}-snippets`, `${language} snippets are ready.`));
+  checks.push(pass(`${language}-prepare`, `${language} verifier artifacts are prepared.`));
 
-  if (!state.validated || state.evidence.length === 0) {
-    const severity: HarnessGradeSeverity = state.writePassed || state.auditPassed ? 'blocked' : 'incomplete';
-    checks.push(fail(`${language}-evidence`, severity, `${language} validation evidence is missing.`));
-    nextCommands.push(`md2feishu multisdk verify ${task.taskDir} --language ${language} --evidence <file> --command "<command>"`);
+  if (!task.lane.authored) {
+    checks.push(fail(`${language}-author`, task.lane.validated || task.lane.localApplied || task.lane.remoteWritten || task.lane.audited ? 'blocked' : 'incomplete', `${language} snippets have not been authored from Python context.`));
+    nextCommands.push(`md2feishu multisdk author ${task.taskDir} --snippet ${task.taskDir}/snippets/${snippetHint(language)}`);
     return;
   }
-  checks.push(pass(`${language}-evidence`, `${language} has validation evidence.`));
+  checks.push(pass(`${language}-author`, `${language} snippets are authored.`));
 
-  if (!state.dryRunPassed) {
-    const severity: HarnessGradeSeverity = state.writePassed || state.auditPassed ? 'blocked' : 'incomplete';
-    checks.push(fail(`${language}-dry-run`, severity, `${language} dry-run has not passed.`));
-    nextCommands.push(`md2feishu multisdk apply ${task.taskDir} --language ${language}`);
+  if (!task.lane.validated || task.lane.evidence.length === 0) {
+    checks.push(fail(`${language}-validation`, task.lane.localApplied || task.lane.remoteWritten || task.lane.audited ? 'blocked' : 'incomplete', `${language} live Milvus validation evidence is missing.`));
+    nextCommands.push(`md2feishu multisdk validate ${task.taskDir} --runner manta --command "${defaultValidationCommand(language)}"`);
     return;
   }
-  checks.push(pass(`${language}-dry-run`, `${language} dry-run passed.`));
+  checks.push(pass(`${language}-validation`, `${language} has live validation evidence.`));
 
-  if (!state.writePassed) {
-    const severity: HarnessGradeSeverity = state.auditPassed ? 'blocked' : 'incomplete';
-    checks.push(fail(`${language}-write`, severity, `${language} write has not passed.`));
-    nextCommands.push(`md2feishu multisdk apply ${task.taskDir} --language ${language} --write -y`);
+  if (!task.localReview || !task.lane.localApplied) {
+    checks.push(fail(`${language}-local-review`, task.lane.remoteWritten || task.lane.audited ? 'blocked' : 'incomplete', `${language} local review Markdown is missing.`));
+    nextCommands.push(`md2feishu multisdk apply-local ${task.taskDir} --remote-markdown ${task.taskDir}/inputs/remote.md --snippet ${task.taskDir}/snippets/${snippetHint(language)}`);
     return;
   }
-  checks.push(pass(`${language}-write`, `${language} write passed.`));
+  checks.push(pass(`${language}-local-review`, `${language} local review Markdown exists.`));
 
-  if (!state.auditPassed || state.status !== 'audited') {
+  if (!task.remotePush?.dryRunAt) {
+    checks.push(fail(`${language}-push-dry-run`, task.lane.remoteWritten || task.lane.audited ? 'blocked' : 'incomplete', `${language} push dry-run has not been recorded.`));
+    nextCommands.push(`md2feishu push ${task.localReview.markdownPath} ${task.document}`);
+    return;
+  }
+  checks.push(pass(`${language}-push-dry-run`, `${language} push dry-run is recorded.`));
+
+  if (!task.remotePush?.writeAt || !task.lane.remoteWritten) {
+    checks.push(fail(`${language}-push-write`, task.lane.audited ? 'blocked' : 'incomplete', `${language} push write has not been recorded.`));
+    nextCommands.push(`md2feishu push ${task.localReview.markdownPath} ${task.document} --write -y`);
+    return;
+  }
+  checks.push(pass(`${language}-push-write`, `${language} push write is recorded.`));
+
+  if (!task.lane.audited || task.status !== 'audited' || !task.finalAuditPassed) {
     checks.push(fail(`${language}-audit`, 'incomplete', `${language} readback audit has not passed.`));
-    nextCommands.push(`md2feishu multisdk audit ${task.taskDir} --language ${language}`);
+    nextCommands.push(`md2feishu multisdk audit ${task.taskDir}`);
     return;
   }
   checks.push(pass(`${language}-audit`, `${language} readback audit passed.`));
-
-  for (const expected of expectedTracePhases(language)) {
-    if (hasTraceEvent(traceEvents, expected)) {
-      checks.push(pass(expected.id, `${language} trace contains ${expected.tool} ${expected.mode}.`));
-    } else {
-      checks.push(fail(expected.id, 'blocked', `${language} trace is missing ${expected.tool} ${expected.mode}.`));
-    }
-  }
 }
 
-function expectedTracePhases(language: MultisdkLanguage): Array<{
-  id: string;
-  tool: string;
-  mode: string;
-  language: MultisdkLanguage;
-}> {
-  return [
-    { id: `${language}-trace-verify`, tool: 'multisdk.verify', mode: 'record-evidence', language },
-    { id: `${language}-trace-dry-run`, tool: 'multisdk.apply', mode: 'dry-run', language },
-    { id: `${language}-trace-write`, tool: 'multisdk.apply', mode: 'write', language },
-    { id: `${language}-trace-audit`, tool: 'multisdk.audit', mode: 'readback-audit', language }
-  ];
+function snippetHint(language: string): string {
+  if (language === 'javascript') return 'javascript-01.js';
+  if (language === 'go') return 'go-01.go';
+  if (language === 'restful') return 'restful-01.sh';
+  return 'java-01-create-index.java';
 }
 
-function hasTraceEvent(
-  events: HarnessTraceEvent[],
-  expected: { tool: string; mode: string; language: MultisdkLanguage }
-): boolean {
-  return events.some((event) =>
-    event.status === 'passed' &&
-    event.tool === expected.tool &&
-    event.mode === expected.mode &&
-    isTraceArgumentsRecord(event.arguments) &&
-    event.arguments.language === expected.language
-  );
-}
-
-function isTraceArgumentsRecord(value: unknown): value is { language?: unknown } {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+function defaultValidationCommand(language: string): string {
+  if (language === 'javascript') return 'npm test';
+  if (language === 'go') return 'go test ./...';
+  if (language === 'restful') return 'bash test-rest.sh';
+  return 'mvn test';
 }
 
 function grade(
@@ -207,14 +177,4 @@ function pass(id: string, message: string): HarnessGradeCheck {
 
 function fail(id: string, severity: Exclude<HarnessGradeSeverity, 'passed'>, message: string): HarnessGradeCheck {
   return { id, passed: false, severity, message };
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
 }

@@ -20,8 +20,9 @@ describe('harness task contract', () => {
 
   it('keeps multisdk as a compatibility alias', () => {
     expect(parseHarnessWorkflow('multisdk')).toBe('multisdk');
-    expect(getHarnessTools('multisdk').tools.map((tool) => tool.name)).toContain('multisdk apply');
-    expect(getHarnessTools('multisdk-examples').tools.map((tool) => tool.name)).toContain('multisdk apply');
+    expect(getHarnessTools('multisdk').tools.map((tool) => tool.name)).toContain('multisdk apply-local');
+    expect(getHarnessTools('multisdk-examples').tools.map((tool) => tool.name)).toContain('multisdk apply-local');
+    expect(getHarnessTools('multisdk').tools.map((tool) => tool.name)).not.toContain('multisdk apply');
   });
 
   it('exposes tools for SDK reference release separately from authoring', () => {

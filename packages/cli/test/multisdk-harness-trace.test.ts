@@ -1,16 +1,16 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { CodeBlockInventory } from '../src/feishu/code-blocks.js';
 import { readHarnessTraceEvents } from '../src/harness/trace.js';
 import { createInitialMultisdkTask, saveMultisdkTask } from '../src/multisdk/task.js';
 import {
-  applyMultisdkLanguage,
+  applyMultisdkLocalReview,
+  configureMultisdkEnvironment,
   initMultisdkTask,
-  recordMultisdkVerification
+  validateMultisdkTask
 } from '../src/multisdk/workflow.js';
-import type { CodeBlockManifest } from '../src/sync/code-block-plan.js';
 
 const tempDirs: string[] = [];
 
@@ -20,64 +20,93 @@ describe('multisdk harness trace integration', () => {
     tempDirs.length = 0;
   });
 
-  it('writes trace events for init and verify', async () => {
+  it('writes trace events for init and environment configuration', async () => {
     const dir = await tempDir();
     await initMultisdkTask({
       document: 'doc-url',
       documentId: 'doc',
       taskDir: dir,
+      language: 'java',
       inventory: inventory()
     });
-    const evidencePath = join(dir, 'java.log');
-    await writeFile(evidencePath, 'PASS\n', 'utf8');
-    await recordMultisdkVerification({
+    await configureMultisdkEnvironment({
       taskDir: dir,
-      language: 'java',
-      evidencePath,
-      command: 'mvn test'
+      milvusTarget: { kind: 'released-version', version: '2.6.0' }
     });
 
     const events = await readHarnessTraceEvents(dir);
-    expect(events.map((event) => event.tool)).toEqual(['multisdk.init', 'multisdk.verify']);
+    expect(events.map((event) => event.tool)).toEqual(['multisdk.init', 'multisdk.environment']);
     expect(events[0]).toEqual(expect.objectContaining({
       workflow: 'multisdk',
       status: 'passed',
       mode: 'initialize'
     }));
     expect(events[1].arguments).toEqual(expect.objectContaining({ language: 'java' }));
-    expect(events[1].artifacts.map((artifact) => artifact.path)).toContain('evidence/evidence.json');
   });
 
-  it('writes a failed trace event when apply is blocked by missing evidence', async () => {
+  it('writes a failed trace event when apply-local is blocked by missing evidence', async () => {
     const dir = await tempDir();
+    await mkdir(join(dir, 'inputs'), { recursive: true });
     await mkdir(join(dir, 'snippets'), { recursive: true });
+    await writeFile(join(dir, 'inputs/remote.md'), '# Docs\n', 'utf8');
     await writeFile(join(dir, 'snippets/java.java'), 'System.out.println("ok");', 'utf8');
-    await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest(), null, 2)}\n`, 'utf8');
-    const task = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    const task = createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc',
+      taskDir: dir,
+      language: 'java'
+    });
     await saveMultisdkTask({
       ...task,
-      languages: {
-        ...task.languages,
-        java: { ...task.languages.java, status: 'exported', snippetsReady: true }
-      }
+      status: 'prepared',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' },
+      lane: { ...task.lane, prepared: true, authored: true }
     });
 
-    await expect(applyMultisdkLanguage({
+    await expect(applyMultisdkLocalReview({
       taskDir: dir,
-      language: 'java',
-      write: true,
-      client: {
-        batchUpdateBlocks: vi.fn(async () => []),
-        createChildren: vi.fn(async () => [])
-      }
-    })).rejects.toThrow(/requires verification evidence/);
+      remoteMarkdownPath: join(dir, 'inputs/remote.md'),
+      snippetPaths: [join(dir, 'snippets/java.java')]
+    })).rejects.toThrow(/validation evidence/);
 
     const events = await readHarnessTraceEvents(dir);
     expect(events.at(-1)).toEqual(expect.objectContaining({
-      tool: 'multisdk.apply',
+      tool: 'multisdk.apply-local',
       status: 'failed'
     }));
-    expect(events.at(-1)?.summary).toContain('requires verification evidence');
+    expect(events.at(-1)?.summary).toContain('validation evidence');
+  });
+
+  it('traces validation evidence recording', async () => {
+    const dir = await tempDir();
+    const task = createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc',
+      taskDir: dir,
+      language: 'java'
+    });
+    await saveMultisdkTask({
+      ...task,
+      status: 'prepared',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' },
+      lane: { ...task.lane, prepared: true, authored: true }
+    });
+    await writeFile(join(dir, 'evidence.log'), 'PASS\n', 'utf8');
+
+    await validateMultisdkTask({
+      taskDir: dir,
+      command: 'mvn test',
+      evidencePath: join(dir, 'evidence.log'),
+      runner: 'manta',
+      jobId: 'job-123'
+    });
+
+    const events = await readHarnessTraceEvents(dir);
+    expect(events.at(-1)).toEqual(expect.objectContaining({
+      tool: 'multisdk.validate',
+      mode: 'record-validation',
+      status: 'passed'
+    }));
   });
 });
 
@@ -119,24 +148,5 @@ function inventory(): CodeBlockInventory {
       }
     ],
     blocks: [pythonBlock]
-  };
-}
-
-function manifest(): CodeBlockManifest {
-  return {
-    document: 'doc-url',
-    documentId: 'doc',
-    languageOrder: ['python', 'java', 'javascript', 'go', 'restful'],
-    items: [
-      {
-        action: 'insert',
-        groupId: 'group-1',
-        anchorBlockId: 'python-1',
-        insertAfterBlockId: 'python-1',
-        parentBlockId: 'doc',
-        language: 'java',
-        file: 'snippets/java.java'
-      }
-    ]
   };
 }
