@@ -13,27 +13,39 @@ describe('harness tools registry', () => {
     expect(registry.tools.map((tool) => tool.name)).toEqual([
       'multisdk init',
       'multisdk status',
-      'multisdk export',
-      'multisdk profile',
-      'multisdk verify',
-      'multisdk diff',
-      'multisdk apply',
+      'multisdk environment',
+      'multisdk prepare',
+      'multisdk author',
+      'multisdk validate',
+      'multisdk apply-local',
+      'multisdk record-push',
       'multisdk audit',
-      'multisdk land-docs',
       'multisdk finalize',
       'doctor auth',
-      'code-blocks inspect',
-      'code-blocks audit',
-      'pull'
+      'pull',
+      'push'
     ]);
-    expect(registry.tools.find((tool) => tool.name === 'multisdk apply')).toEqual(expect.objectContaining({
-      mode: 'dry-run-or-write',
-      writesFeishu: true,
-      writesLocalFiles: true,
-      writesExternalRepos: false,
-      requires: ['taskDir', 'language'],
-      writeRequires: ['--write', 'validation evidence', 'fresh dry-run']
+    expect(registry.tools.find((tool) => tool.name === 'multisdk init')).toEqual(expect.objectContaining({
+      requires: ['feishuDoc', '--out', '--language'],
+      writeRequires: ['user-selected target language']
     }));
+    expect(registry.tools.find((tool) => tool.name === 'multisdk environment')).toEqual(expect.objectContaining({
+      writeRequires: ['user-confirmed Milvus target']
+    }));
+    expect(registry.tools.find((tool) => tool.name === 'multisdk validate')).toEqual(expect.objectContaining({
+      writesFeishu: false,
+      writeRequires: ['confirmed Milvus target', 'prepared verifier', 'authored snippets', 'real Milvus execution']
+    }));
+    expect(registry.tools.find((tool) => tool.name === 'multisdk author')).toEqual(expect.objectContaining({
+      writesFeishu: false,
+      writeRequires: ['prepared verifier', 'non-empty selected-language snippets']
+    }));
+    expect(registry.tools.find((tool) => tool.name === 'push')).toEqual(expect.objectContaining({
+      writesFeishu: true,
+      writeRequires: ['local review markdown', 'user approval', '--write']
+    }));
+    expect(registry.tools.map((tool) => tool.name)).not.toContain('multisdk apply');
+    expect(registry.tools.map((tool) => tool.name)).not.toContain('multisdk land-docs');
   });
 
   it('parses supported workflows and rejects unsupported workflows', () => {

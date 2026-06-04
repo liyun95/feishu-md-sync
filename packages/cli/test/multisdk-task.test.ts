@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createInitialMultisdkTask,
   loadMultisdkTask,
-  markLanguageStatus,
   saveMultisdkTask,
   summarizeMultisdkTask
 } from '../src/multisdk/task.js';
@@ -19,29 +18,38 @@ describe('multisdk task model', () => {
     tempDirs.length = 0;
   });
 
-  it('creates initial per-language state', () => {
+  it('creates a single-language local-first task', () => {
     const task = createInitialMultisdkTask({
-      document: 'https://zilliverse.feishu.cn/wiki/doc-token',
-      documentId: 'doc-id',
-      taskDir: 'runs/doc-token'
+      document: 'https://zilliverse.feishu.cn/wiki/doc',
+      documentId: 'doc',
+      taskDir: 'runs/doc-java',
+      language: 'java'
     });
 
-    expect(task.kind).toBe('feishu-multisdk-task');
-    expect(task.languageOrder).toEqual(['python', 'java', 'javascript', 'go', 'restful']);
-    expect(task.languages.java.status).toBe('pending');
-    expect(task.languages.javascript.status).toBe('pending');
-    expect(task.languages.go.status).toBe('pending');
-    expect(task.languages.restful.status).toBe('pending');
-    expect(task.finalAuditPassed).toBe(false);
+    expect(task.language).toBe('java');
+    expect(task.languages).toEqual(['java']);
+    expect(task.status).toBe('initialized');
+    expect(task.milvusTarget).toBeNull();
+    expect(task.localReview).toBeNull();
+    expect(task.remotePush).toBeNull();
+    expect(task.lane).toEqual(expect.objectContaining({
+      language: 'java',
+      prepared: false,
+      authored: false,
+      validated: false,
+      localApplied: false,
+      remoteWritten: false,
+      audited: false
+    }));
   });
 
   it('saves and loads task.json', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'multisdk-task-'));
-    tempDirs.push(dir);
+    const dir = await tempDir();
     const task = createInitialMultisdkTask({
       document: 'doc-url',
       documentId: 'doc-id',
-      taskDir: dir
+      taskDir: dir,
+      language: 'java'
     });
 
     await saveMultisdkTask(task);
@@ -50,66 +58,80 @@ describe('multisdk task model', () => {
     await expect(loadMultisdkTask(dir)).resolves.toEqual(task);
   });
 
-  it('updates language status without mutating other lanes', () => {
-    const task = createInitialMultisdkTask({
-      document: 'doc-url',
-      documentId: 'doc-id',
-      taskDir: 'runs/doc-id'
-    });
-
-    const updated = markLanguageStatus(task, 'java', 'exported');
-
-    expect(updated.languages.java.status).toBe('exported');
-    expect(updated.languages.javascript.status).toBe('pending');
-    expect(task.languages.java.status).toBe('pending');
-  });
-
   it('summarizes the task for status output', () => {
     const task = createInitialMultisdkTask({
       document: 'doc-url',
       documentId: 'doc-id',
-      taskDir: 'runs/doc-id'
+      taskDir: 'runs/doc-id-java',
+      language: 'java'
     });
-    const updated = markLanguageStatus(task, 'java', 'audited');
 
-    expect(summarizeMultisdkTask(updated)).toEqual({
+    expect(summarizeMultisdkTask({
+      ...task,
+      status: 'validated',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' }
+    })).toEqual({
       document: 'doc-url',
       documentId: 'doc-id',
-      taskDir: 'runs/doc-id',
-      languages: {
-        java: 'audited',
-        javascript: 'pending',
-        go: 'pending',
-        restful: 'pending'
-      },
+      taskDir: 'runs/doc-id-java',
+      language: 'java',
+      status: 'validated',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' },
+      localReview: null,
       finalAuditPassed: false
     });
   });
 
-  it('renders docs landing records in the handoff summary', () => {
+  it('renders local review and push state in the handoff summary', () => {
     const task = createInitialMultisdkTask({
       document: 'doc-url',
       documentId: 'doc-id',
-      taskDir: 'runs/doc-id'
+      taskDir: 'runs/doc-id-java',
+      language: 'java'
     });
 
     const handoff = renderMultisdkHandoff({
       ...task,
-      docsLandings: [{
-        language: 'java',
-        repo: '/Users/liyun/milvus-docs',
-        target: 'site/en/userGuide/schema/nullable-and-default.md',
-        reviewedBaselinePath: 'inputs/feishu.reviewed-baseline.md',
-        mode: 'write',
-        baseRef: 'upstream/v3.0.x',
-        branch: 'docs/nullable-and-default-java-v3-0-x',
-        commitMessage: 'docs(schema): update nullable Java examples',
-        recordedAt: '2026-05-26T00:00:00.000Z'
-      }]
+      status: 'audited',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' },
+      lane: {
+        ...task.lane,
+        prepared: true,
+        authored: true,
+        validated: true,
+        localApplied: true,
+        remoteWritten: true,
+        audited: true,
+        evidence: [{
+          runner: 'manta',
+          command: 'mvn test',
+          evidencePath: 'evidence/manta-job-123.log',
+          recordedAt: '2026-05-31T00:00:00.000Z',
+          milvusTarget: { kind: 'released-version', version: '2.6.0' },
+          jobId: 'job-123'
+        }]
+      },
+      localReview: {
+        markdownPath: 'outputs/review.md',
+        diffPath: 'outputs/review.diff',
+        generatedAt: '2026-05-31T00:00:00.000Z'
+      },
+      remotePush: {
+        writeAt: '2026-05-31T00:01:00.000Z',
+        command: 'md2feishu push outputs/review.md doc-url --write -y'
+      },
+      finalAuditPassed: true
     });
 
-    expect(handoff).toContain('## Docs Landing');
-    expect(handoff).toContain('java: /Users/liyun/milvus-docs/site/en/userGuide/schema/nullable-and-default.md');
-    expect(handoff).toContain('branch: docs/nullable-and-default-java-v3-0-x');
+    expect(handoff).toContain('Language: java');
+    expect(handoff).toContain('Manta job: job-123');
+    expect(handoff).toContain('markdown: outputs/review.md');
+    expect(handoff).toContain('md2feishu push outputs/review.md doc-url --write -y');
   });
 });
+
+async function tempDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'multisdk-task-'));
+  tempDirs.push(dir);
+  return dir;
+}

@@ -21,7 +21,14 @@ describe('harness CLI commands', () => {
 
     expect(parsed.kind).toBe('feishu-harness-tools');
     expect(parsed.workflow).toBe('multisdk');
-    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toContain('multisdk apply');
+    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toContain('multisdk apply-local');
+    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toContain('push');
+  });
+
+  it('tells agents to ask the user when multisdk init has no language', async () => {
+    const result = await runCliFailure(['multisdk', 'init', 'doc-token', '--out', '/tmp/multisdk-no-language']);
+
+    expect(result.stderr).toContain('Ask the user which target SDK language to complete');
   });
 
   it('prints the SDK reference release tools registry as JSON', async () => {
@@ -56,4 +63,17 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ st
     maxBuffer: 10 * 1024 * 1024
   });
   return { stdout: result.stdout, stderr: result.stderr };
+}
+
+async function runCliFailure(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  try {
+    await runCli(args);
+  } catch (error) {
+    const failure = error as { stdout?: string; stderr?: string };
+    return {
+      stdout: failure.stdout ?? '',
+      stderr: failure.stderr ?? ''
+    };
+  }
+  throw new Error('Expected CLI command to fail.');
 }

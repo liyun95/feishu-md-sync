@@ -76,18 +76,23 @@ const RECIPES: WorkflowRecipe[] = [
   },
   {
     id: 'multisdk-examples',
-    title: 'Complete and validate multi-language examples',
-    whenToUse: 'A Feishu user doc has Python examples and missing Java, Node, Go, or REST examples.',
-    primaryArtifacts: ['runs/<doc>/task.json', 'manifest.json', 'evidence/', 'trace/events.jsonl', 'grade.md'],
+    title: 'Complete and validate one multi-SDK example lane',
+    whenToUse: 'A Feishu user doc has Python examples and needs one reviewed Java, Node, Go, or REST lane.',
+    primaryArtifacts: ['runs/<doc>-<language>/task.json', 'manifest.json', 'work/', 'outputs/review.md', 'evidence/', 'trace/events.jsonl', 'grade.md'],
     steps: [
-      { id: 'init', purpose: 'Create a task directory and code-block manifest.', command: 'md2feishu multisdk init <feishu-doc> --out runs/<doc-token>', writes: 'local', verifies: 'task.json, manifest.json, snippets, and environment.json exist.' },
-      { id: 'tools', purpose: 'Show the allowed operation menu.', command: 'md2feishu harness tools --workflow multisdk', writes: 'none', verifies: 'The agent uses only listed tools.' },
-      { id: 'export', purpose: 'Refresh one target language snippet lane.', command: 'md2feishu multisdk export runs/<doc-token> --language <language>', writes: 'local', verifies: 'Language snippets are ready.' },
-      { id: 'verify', purpose: 'Record execution evidence.', command: 'md2feishu multisdk verify runs/<doc-token> --language <language> --evidence <log> --command "<command>"', writes: 'local', verifies: 'Evidence is copied and summarized.' },
-      { id: 'dry-run', purpose: 'Plan Feishu code-block writes.', command: 'md2feishu multisdk apply runs/<doc-token> --language <language>', writes: 'local', verifies: 'Dry-run report passes.' },
-      { id: 'write', purpose: 'Write verified snippets to Feishu.', command: 'md2feishu multisdk apply runs/<doc-token> --language <language> --write -y', writes: 'feishu', verifies: 'Write report passes.' },
-      { id: 'audit', purpose: 'Read back and compare Feishu code blocks.', command: 'md2feishu multisdk audit runs/<doc-token> --language <language>', writes: 'local', verifies: 'Audit passes for the language.' },
-      { id: 'grade', purpose: 'Summarize task completion and next commands.', command: 'md2feishu harness grade runs/<doc-token> --workflow multisdk', writes: 'local', verifies: 'Result is passed or nextCommands explains remaining work.' }
+      { id: 'confirm-language', purpose: 'Ask the user for exactly one target language.', command: 'Ask: Which one target SDK language should this run complete: Java, Node.js/JavaScript, Go, or REST?', writes: 'none', verifies: 'The user selected exactly one language before init.' },
+      { id: 'init', purpose: 'Create a single-language task from the Feishu document.', command: 'md2feishu multisdk init https://zilliverse.feishu.cn/wiki/ZxQkwC3r6iy3s5kSdgwc2J2nnTf --out runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --language java', writes: 'local', verifies: 'task.json, manifest.json, snippets, and environment.json exist for one language.' },
+      { id: 'confirm-environment', purpose: 'Ask the user for the Milvus version or source ref, then record it.', command: 'md2feishu multisdk environment runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --milvus-version 2.6.0', writes: 'local', verifies: 'The user confirmed the Milvus target and task.json records it.' },
+      { id: 'prepare', purpose: 'Create verifier artifacts from Python context and selected-language snippets.', command: 'md2feishu multisdk prepare runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --remote-markdown runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/inputs/remote.md --snippet runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/snippets/java-01-create-index.java', writes: 'local', verifies: 'work/java/ contains python context, snippets, and verifier scaffold.' },
+      { id: 'author', purpose: 'Fill selected-language snippets from the Python context and record them as authored.', command: 'md2feishu multisdk author runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --snippet runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/snippets/java-01-create-index.java', writes: 'local', verifies: 'Selected-language snippets are non-empty and copied into work/java/snippets/.' },
+      { id: 'validate', purpose: 'Run examples against real Milvus, defaulting to Manta.', command: 'md2feishu multisdk validate runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --runner manta --command "mvn test"', writes: 'local', verifies: 'evidence contains a completed Manta or local live validation log.' },
+      { id: 'apply-local', purpose: 'Write reviewed examples into local Markdown only.', command: 'md2feishu multisdk apply-local runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --remote-markdown runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/inputs/remote.md --snippet runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/snippets/java-01-create-index.java', writes: 'local', verifies: 'outputs/review.md and outputs/review.diff exist.' },
+      { id: 'push-dry-run', purpose: 'Show the Feishu push plan for the reviewed Markdown.', command: 'md2feishu push runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/outputs/review.md https://zilliverse.feishu.cn/wiki/ZxQkwC3r6iy3s5kSdgwc2J2nnTf', writes: 'none', verifies: 'The user reviews the push dry-run plan.' },
+      { id: 'record-push-dry-run', purpose: 'Record the reviewed push dry-run in the multi-SDK task.', command: 'md2feishu multisdk record-push runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --mode dry-run --command "md2feishu push runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/outputs/review.md https://zilliverse.feishu.cn/wiki/ZxQkwC3r6iy3s5kSdgwc2J2nnTf"', writes: 'local', verifies: 'task.json records remote dry-run state.' },
+      { id: 'push-write', purpose: 'Push reviewed Markdown to Feishu after user approval.', command: 'md2feishu push runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/outputs/review.md https://zilliverse.feishu.cn/wiki/ZxQkwC3r6iy3s5kSdgwc2J2nnTf --write -y', writes: 'feishu', verifies: 'Push readback verification passes.' },
+      { id: 'record-push-write', purpose: 'Record the push result in the multi-SDK task.', command: 'md2feishu multisdk record-push runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --mode write --command "md2feishu push runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java/outputs/review.md https://zilliverse.feishu.cn/wiki/ZxQkwC3r6iy3s5kSdgwc2J2nnTf --write -y"', writes: 'local', verifies: 'task.json records remote write state.' },
+      { id: 'audit', purpose: 'Audit the selected language after push.', command: 'md2feishu multisdk audit runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java', writes: 'local', verifies: 'Selected language is audited.' },
+      { id: 'grade', purpose: 'Summarize the single-language task.', command: 'md2feishu harness grade runs/ZxQkwC3r6iy3s5kSdgwc2J2nnTf-java --workflow multisdk', writes: 'local', verifies: 'Result is passed or nextCommands explains remaining work.' }
     ]
   },
   {

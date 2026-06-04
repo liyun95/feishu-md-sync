@@ -15,12 +15,12 @@ describe('harness grade dispatcher', () => {
 
   it('dispatches multisdk aliases to the existing multisdk grader', async () => {
     const dir = await tempDir();
-    await saveMultisdkTask(createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir }));
+    await saveMultisdkTask(createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir, language: 'java' }));
 
     const grade = await gradeHarnessTask({ workflow: 'multisdk-examples', taskDir: dir });
 
     expect(grade.workflow).toBe('multisdk');
-    expect(grade.nextCommands[0]).toBe(`md2feishu multisdk export ${dir} --language java`);
+    expect(grade.nextCommands[0]).toContain(`md2feishu multisdk environment ${dir} --milvus-version 2.6.0`);
   });
 
   it('dispatches non-multisdk workflows to conservative graders', async () => {

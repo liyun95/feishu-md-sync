@@ -1,4 +1,3 @@
-import { MULTISDK_LANGUAGES } from './language.js';
 import type { MultisdkTask } from './task.js';
 
 export function renderMultisdkHandoff(task: MultisdkTask): string {
@@ -8,35 +7,48 @@ export function renderMultisdkHandoff(task: MultisdkTask): string {
     `Document: ${task.document}`,
     `Document ID: ${task.documentId}`,
     `Task dir: ${task.taskDir}`,
+    `Language: ${task.language}`,
+    `Status: ${task.status}`,
     `Final audit: ${task.finalAuditPassed ? 'passed' : 'not passed'}`,
-    '',
-    '## Languages',
     ''
   ];
 
-  for (const language of MULTISDK_LANGUAGES) {
-    const state = task.languages[language];
-    lines.push(`- ${language}: ${state.status}`);
-    for (const evidence of state.evidence) {
-      lines.push(`  - evidence: ${evidence.path}`);
-      lines.push(`  - command: ${evidence.command}`);
-      if (evidence.profile) lines.push(`  - profile: ${evidence.profile}`);
-      if (evidence.sdkVersion) lines.push(`  - SDK version: ${evidence.sdkVersion}`);
-      if (evidence.sourceCommit) lines.push(`  - source commit: ${evidence.sourceCommit}`);
-      if (evidence.endpoint) lines.push(`  - endpoint: ${evidence.endpoint}`);
-    }
-    if (state.reason) lines.push(`  - reason: ${state.reason}`);
+  if (task.milvusTarget) {
+    lines.push('## Milvus Target', '');
+    lines.push(`- kind: ${task.milvusTarget.kind}`);
+    lines.push(`- version: ${task.milvusTarget.version}`);
+    if (task.milvusTarget.sourceRepo) lines.push(`- source repo: ${task.milvusTarget.sourceRepo}`);
+    if (task.milvusTarget.sourceRef) lines.push(`- source ref: ${task.milvusTarget.sourceRef}`);
+    lines.push('');
   }
 
-  if ((task.docsLandings ?? []).length > 0) {
-    lines.push('', '## Docs Landing', '');
-    for (const landing of task.docsLandings) {
-      lines.push(`- ${landing.language}: ${landing.repo}/${landing.target}`);
-      lines.push(`  - reviewed baseline: ${landing.reviewedBaselinePath}`);
-      if (landing.baseRef) lines.push(`  - base: ${landing.baseRef}`);
-      if (landing.branch) lines.push(`  - branch: ${landing.branch}`);
-      if (landing.commitMessage) lines.push(`  - commit: ${landing.commitMessage}`);
-    }
+  lines.push('## Lane', '');
+  lines.push(`- prepared: ${task.lane.prepared}`);
+  lines.push(`- authored: ${task.lane.authored}`);
+  lines.push(`- validated: ${task.lane.validated}`);
+  lines.push(`- local applied: ${task.lane.localApplied}`);
+  lines.push(`- remote written: ${task.lane.remoteWritten}`);
+  lines.push(`- audited: ${task.lane.audited}`);
+  if (task.lane.reason) lines.push(`- reason: ${task.lane.reason}`);
+  for (const evidence of task.lane.evidence) {
+    lines.push(`- evidence: ${evidence.evidencePath}`);
+    lines.push(`  - runner: ${evidence.runner}`);
+    lines.push(`  - command: ${evidence.command}`);
+    if (evidence.jobId) lines.push(`  - Manta job: ${evidence.jobId}`);
+  }
+
+  if (task.localReview) {
+    lines.push('', '## Local Review', '');
+    lines.push(`- markdown: ${task.localReview.markdownPath}`);
+    lines.push(`- diff: ${task.localReview.diffPath}`);
+  }
+
+  if (task.remotePush) {
+    lines.push('', '## Remote Push', '');
+    if (task.remotePush.dryRunAt) lines.push(`- dry-run: ${task.remotePush.dryRunAt}`);
+    if (task.remotePush.writeAt) lines.push(`- write: ${task.remotePush.writeAt}`);
+    if (task.remotePush.command) lines.push(`- command: ${task.remotePush.command}`);
+    if (task.remotePush.resultPath) lines.push(`- result: ${task.remotePush.resultPath}`);
   }
 
   if (task.cleanup.length > 0) {

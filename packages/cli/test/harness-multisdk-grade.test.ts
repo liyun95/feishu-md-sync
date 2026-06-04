@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,8 +8,7 @@ import {
   writeHarnessGradeArtifacts
 } from '../src/harness/multisdk-grade.js';
 import { appendHarnessTraceEvent } from '../src/harness/trace.js';
-import { MULTISDK_LANGUAGES } from '../src/multisdk/language.js';
-import { createInitialMultisdkTask, saveMultisdkTask, type MultisdkTask } from '../src/multisdk/task.js';
+import { createInitialMultisdkTask, saveMultisdkTask } from '../src/multisdk/task.js';
 
 const tempDirs: string[] = [];
 
@@ -19,139 +18,157 @@ describe('multisdk harness grader', () => {
     tempDirs.length = 0;
   });
 
-  it('grades a fresh task as incomplete and suggests the next export command', async () => {
+  it('grades a fresh task as incomplete and asks for the Milvus target', async () => {
     const dir = await tempDir();
-    await saveMultisdkTask(createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir }));
+    await saveMultisdkTask(createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc',
+      taskDir: dir,
+      language: 'java'
+    }));
 
-    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-26T00:00:00.000Z' });
+    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-31T00:00:00.000Z' });
 
     expect(grade.result).toBe('incomplete');
     expect(grade.checks).toContainEqual(expect.objectContaining({
-      id: 'java-status',
+      id: 'java-environment',
       passed: false,
       severity: 'incomplete'
     }));
-    expect(grade.nextCommands[0]).toBe(`md2feishu multisdk export ${dir} --language java`);
+    expect(grade.nextCommands[0]).toContain(`md2feishu multisdk environment ${dir} --milvus-version 2.6.0`);
   });
 
-  it('blocks a written language that has no validation evidence', async () => {
+  it('passes a single-language task after local review, remote push, and audit', async () => {
     const dir = await tempDir();
-    const task = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir: dir });
+    const task = createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc',
+      taskDir: dir,
+      language: 'java'
+    });
     await saveMultisdkTask({
       ...task,
-      languages: {
-        ...task.languages,
-        java: {
-          ...task.languages.java,
-          status: 'written',
-          snippetsReady: true,
-          validated: false,
-          dryRunPassed: true,
-          writePassed: true,
-          evidence: []
-        }
-      }
+      status: 'audited',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' },
+      lane: {
+        ...task.lane,
+        prepared: true,
+        authored: true,
+        validated: true,
+        localApplied: true,
+        remoteWritten: true,
+        audited: true,
+        evidence: [{
+          runner: 'manta',
+          command: 'mvn test',
+          evidencePath: 'evidence/manta-job-123.log',
+          recordedAt: '2026-05-31T00:00:00.000Z',
+          milvusTarget: { kind: 'released-version', version: '2.6.0' },
+          jobId: 'job-123'
+        }]
+      },
+      localReview: {
+        markdownPath: 'outputs/review.md',
+        diffPath: 'outputs/review.diff',
+        generatedAt: '2026-05-31T00:00:00.000Z'
+      },
+      remotePush: {
+        dryRunAt: '2026-05-31T00:01:00.000Z',
+        writeAt: '2026-05-31T00:02:00.000Z',
+        command: 'md2feishu push outputs/review.md doc-url --write -y',
+        resultPath: 'outputs/push-result.json'
+      },
+      finalAuditPassed: true
+    });
+    await appendHarnessTraceEvent({
+      workflow: 'multisdk',
+      taskDir: dir,
+      tool: 'multisdk.audit',
+      mode: 'readback-audit',
+      status: 'passed',
+      startedAt: '2026-05-31T00:02:00.000Z',
+      endedAt: '2026-05-31T00:02:01.000Z',
+      arguments: { language: 'java' },
+      summary: 'java audit passed.',
+      eventId: 'audit-java'
     });
 
-    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-26T00:00:00.000Z' });
-
-    expect(grade.result).toBe('blocked');
-    expect(grade.checks).toContainEqual(expect.objectContaining({
-      id: 'java-evidence',
-      passed: false,
-      severity: 'blocked'
-    }));
-  });
-
-  it('blocks a final-passed task when trace is missing', async () => {
-    const dir = await tempDir();
-    await writeFile(join(dir, 'handoff.md'), '# handoff\n', 'utf8');
-    await saveMultisdkTask(completedTask(dir, true));
-
-    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-26T00:00:00.000Z' });
-
-    expect(grade.result).toBe('blocked');
-    expect(grade.checks).toContainEqual(expect.objectContaining({
-      id: 'trace-exists',
-      passed: false,
-      severity: 'blocked'
-    }));
-  });
-
-  it('passes a completed task with final audit, handoff, evidence, and trace', async () => {
-    const dir = await tempDir();
-    await mkdir(join(dir, 'evidence'), { recursive: true });
-    await writeFile(join(dir, 'handoff.md'), '# handoff\n', 'utf8');
-    await writeFile(join(dir, 'evidence/evidence.json'), JSON.stringify({
-      kind: 'feishu-multisdk-evidence',
-      version: 1,
-      items: MULTISDK_LANGUAGES.map((language) => ({
-        language,
-        path: `evidence/${language}.log`,
-        command: `${language} smoke`,
-        recordedAt: '2026-05-26T00:00:00.000Z'
-      }))
-    }, null, 2), 'utf8');
-    await saveMultisdkTask(completedTask(dir, true));
-    for (const language of MULTISDK_LANGUAGES) {
-      await appendHarnessTraceEvent({
-        workflow: 'multisdk',
-        taskDir: dir,
-        tool: 'multisdk.verify',
-        mode: 'record-evidence',
-        status: 'passed',
-        startedAt: '2026-05-26T00:00:00.000Z',
-        endedAt: '2026-05-26T00:00:01.000Z',
-        arguments: { language },
-        summary: `${language} verification recorded.`,
-        eventId: `verify-${language}`
-      });
-      await appendHarnessTraceEvent({
-        workflow: 'multisdk',
-        taskDir: dir,
-        tool: 'multisdk.apply',
-        mode: 'dry-run',
-        status: 'passed',
-        startedAt: '2026-05-26T00:00:01.000Z',
-        endedAt: '2026-05-26T00:00:02.000Z',
-        arguments: { language, write: false },
-        summary: `${language} apply dry-run passed.`,
-        eventId: `dry-run-${language}`
-      });
-      await appendHarnessTraceEvent({
-        workflow: 'multisdk',
-        taskDir: dir,
-        tool: 'multisdk.apply',
-        mode: 'write',
-        status: 'passed',
-        startedAt: '2026-05-26T00:00:02.000Z',
-        endedAt: '2026-05-26T00:00:03.000Z',
-        arguments: { language, write: true },
-        summary: `${language} apply write passed.`,
-        eventId: `write-${language}`
-      });
-      await appendHarnessTraceEvent({
-        workflow: 'multisdk',
-        taskDir: dir,
-        tool: 'multisdk.audit',
-        mode: 'readback-audit',
-        status: 'passed',
-        startedAt: '2026-05-26T00:00:00.000Z',
-        endedAt: '2026-05-26T00:00:01.000Z',
-        arguments: { language },
-        summary: `${language} audit passed.`,
-        eventId: `audit-${language}`
-      });
-    }
-
-    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-26T00:00:00.000Z' });
+    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-31T00:03:00.000Z' });
     await writeHarnessGradeArtifacts(dir, grade);
 
     expect(grade.result).toBe('passed');
     expect(grade.nextCommands).toEqual([]);
     expect(renderHarnessGradeMarkdown(grade)).toContain('Result: passed');
     expect(JSON.parse(await readFile(join(dir, 'grade.json'), 'utf8')).result).toBe('passed');
-    await expect(readFile(join(dir, 'grade.md'), 'utf8')).resolves.toContain('Result: passed');
+  });
+
+  it('suggests push dry-run after local review is generated', async () => {
+    const dir = await tempDir();
+    const task = createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc',
+      taskDir: dir,
+      language: 'java'
+    });
+    await saveMultisdkTask({
+      ...task,
+      status: 'local-applied',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' },
+      lane: {
+        ...task.lane,
+        prepared: true,
+        authored: true,
+        validated: true,
+        localApplied: true,
+        evidence: [{
+          runner: 'manta',
+          command: 'mvn test',
+          evidencePath: 'evidence/manta-job-123.log',
+          recordedAt: '2026-05-31T00:00:00.000Z',
+          milvusTarget: { kind: 'released-version', version: '2.6.0' },
+          jobId: 'job-123'
+        }]
+      },
+      localReview: {
+        markdownPath: 'outputs/review.md',
+        diffPath: 'outputs/review.diff',
+        generatedAt: '2026-05-31T00:00:00.000Z'
+      }
+    });
+
+    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-31T00:03:00.000Z' });
+
+    expect(grade.result).toBe('incomplete');
+    expect(grade.nextCommands).toContain('md2feishu push outputs/review.md doc-url');
+  });
+
+  it('suggests authoring snippets after verifier preparation', async () => {
+    const dir = await tempDir();
+    const task = createInitialMultisdkTask({
+      document: 'doc-url',
+      documentId: 'doc',
+      taskDir: dir,
+      language: 'java'
+    });
+    await saveMultisdkTask({
+      ...task,
+      status: 'prepared',
+      milvusTarget: { kind: 'released-version', version: '2.6.0' },
+      lane: {
+        ...task.lane,
+        prepared: true
+      }
+    });
+
+    const grade = await gradeMultisdkTask({ taskDir: dir, now: () => '2026-05-31T00:03:00.000Z' });
+
+    expect(grade.result).toBe('incomplete');
+    expect(grade.checks).toContainEqual(expect.objectContaining({
+      id: 'java-author',
+      passed: false,
+      severity: 'incomplete'
+    }));
+    expect(grade.nextCommands[0]).toContain(`md2feishu multisdk author ${dir}`);
   });
 });
 
@@ -159,29 +176,4 @@ async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'harness-grade-'));
   tempDirs.push(dir);
   return dir;
-}
-
-function completedTask(taskDir: string, finalAuditPassed: boolean): MultisdkTask {
-  const task = createInitialMultisdkTask({ document: 'doc-url', documentId: 'doc', taskDir });
-  for (const language of MULTISDK_LANGUAGES) {
-    task.languages[language] = {
-      status: 'audited',
-      sourceVerified: true,
-      snippetsReady: true,
-      validated: true,
-      dryRunPassed: true,
-      dryRunHashes: [{ file: `snippets/${language}.txt`, contentHash: `sha256:${language}` }],
-      writePassed: true,
-      auditPassed: true,
-      evidence: [{
-        path: `evidence/${language}.log`,
-        command: `${language} smoke`,
-        recordedAt: '2026-05-26T00:00:00.000Z'
-      }]
-    };
-  }
-  return {
-    ...task,
-    finalAuditPassed
-  };
 }

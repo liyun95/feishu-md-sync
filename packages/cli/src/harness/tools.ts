@@ -35,10 +35,10 @@ const MULTISDK_TOOLS: HarnessTool[] = [
     writesFeishu: false,
     writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['feishuDoc', '--out'],
-    writeRequires: [],
+    requires: ['feishuDoc', '--out', '--language'],
+    writeRequires: ['user-selected target language'],
     artifacts: ['task.json', 'manifest.json', 'snippets/', 'environment.json', 'trace/events.jsonl'],
-    description: 'Initialize a resumable multi-SDK task from a Feishu document.'
+    description: 'Initialize a single-language multi-SDK task from a Feishu document.'
   },
   {
     name: 'multisdk status',
@@ -52,59 +52,70 @@ const MULTISDK_TOOLS: HarnessTool[] = [
     description: 'Show task progress from task.json.'
   },
   {
-    name: 'multisdk export',
+    name: 'multisdk environment',
     mode: 'write-task',
     writesFeishu: false,
     writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['taskDir', 'language'],
-    writeRequires: [],
-    artifacts: ['manifest.json', 'snippets/', 'task.json', 'trace/events.jsonl'],
-    description: 'Refresh snippet files for one SDK language.'
+    requires: ['taskDir', '--milvus-version'],
+    writeRequires: ['user-confirmed Milvus target'],
+    artifacts: ['task.json', 'trace/events.jsonl'],
+    description: 'Record the Milvus target and validation runner.'
   },
   {
-    name: 'multisdk profile',
-    mode: 'read',
+    name: 'multisdk prepare',
+    mode: 'write-task',
     writesFeishu: false,
-    writesLocalFiles: false,
+    writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['language'],
-    writeRequires: [],
-    artifacts: [],
-    description: 'Show validation profiles for one SDK language.'
+    requires: ['taskDir', '--remote-markdown', '--snippet'],
+    writeRequires: ['confirmed Milvus target'],
+    artifacts: ['work/<language>/', 'task.json', 'trace/events.jsonl'],
+    description: 'Prepare selected-language verifier artifacts from Python context.'
   },
   {
-    name: 'multisdk verify',
+    name: 'multisdk author',
+    mode: 'write-task',
+    writesFeishu: false,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['taskDir', '--snippet'],
+    writeRequires: ['prepared verifier', 'non-empty selected-language snippets'],
+    artifacts: ['work/<language>/snippets/', 'task.json', 'trace/events.jsonl'],
+    description: 'Record snippets authored from Python context before validation.'
+  },
+  {
+    name: 'multisdk validate',
     mode: 'record-evidence',
     writesFeishu: false,
     writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['taskDir', 'language', '--evidence', '--command'],
-    writeRequires: [],
-    artifacts: ['task.json', 'evidence/evidence.json', 'evidence/evidence.md', 'trace/events.jsonl'],
-    description: 'Record validation evidence for one SDK language.'
+    requires: ['taskDir', '--command'],
+    writeRequires: ['confirmed Milvus target', 'prepared verifier', 'authored snippets', 'real Milvus execution'],
+    artifacts: ['task.json', 'evidence/', 'trace/events.jsonl'],
+    description: 'Run or record live Milvus validation, defaulting to manta-client.'
   },
   {
-    name: 'multisdk diff',
-    mode: 'read',
+    name: 'multisdk apply-local',
+    mode: 'write-task',
     writesFeishu: false,
     writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['taskDir', 'language'],
-    writeRequires: [],
-    artifacts: ['trace/events.jsonl'],
-    description: 'Show a block-level diff before apply.'
+    requires: ['taskDir', '--remote-markdown', '--snippet'],
+    writeRequires: ['validated examples'],
+    artifacts: ['outputs/review.md', 'outputs/review.diff', 'task.json', 'trace/events.jsonl'],
+    description: 'Write reviewed examples into local Markdown only.'
   },
   {
-    name: 'multisdk apply',
-    mode: 'dry-run-or-write',
-    writesFeishu: true,
+    name: 'multisdk record-push',
+    mode: 'write-task',
+    writesFeishu: false,
     writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['taskDir', 'language'],
-    writeRequires: ['--write', 'validation evidence', 'fresh dry-run'],
+    requires: ['taskDir', '--mode', '--command'],
+    writeRequires: ['local review markdown'],
     artifacts: ['task.json', 'trace/events.jsonl'],
-    description: 'Dry-run or write one SDK language.'
+    description: 'Record push dry-run or write state after user approval.'
   },
   {
     name: 'multisdk audit',
@@ -112,21 +123,10 @@ const MULTISDK_TOOLS: HarnessTool[] = [
     writesFeishu: false,
     writesLocalFiles: true,
     writesExternalRepos: false,
-    requires: ['taskDir', 'language'],
+    requires: ['taskDir'],
     writeRequires: [],
     artifacts: ['task.json', 'trace/events.jsonl'],
-    description: 'Read back and audit one SDK language.'
-  },
-  {
-    name: 'multisdk land-docs',
-    mode: 'external-dry-run-or-write',
-    writesFeishu: false,
-    writesLocalFiles: true,
-    writesExternalRepos: true,
-    requires: ['taskDir', 'language', '--repo', '--target'],
-    writeRequires: ['--write', 'passing multisdk audit', 'branch hygiene when --base is provided'],
-    artifacts: ['task.json', 'inputs/feishu.reviewed-baseline.md', 'trace/events.jsonl'],
-    description: 'Patch reviewed Feishu code blocks into a local docs repo target.'
+    description: 'Read back and audit the selected SDK language.'
   },
   {
     name: 'multisdk finalize',
@@ -135,7 +135,7 @@ const MULTISDK_TOOLS: HarnessTool[] = [
     writesLocalFiles: true,
     writesExternalRepos: false,
     requires: ['taskDir'],
-    writeRequires: ['all languages audited'],
+    writeRequires: ['selected language audited'],
     artifacts: ['task.json', 'handoff.md', 'trace/events.jsonl'],
     description: 'Run final full audit and write the handoff summary.'
   },
@@ -151,28 +151,6 @@ const MULTISDK_TOOLS: HarnessTool[] = [
     description: 'Report auth env loading without printing secrets.'
   },
   {
-    name: 'code-blocks inspect',
-    mode: 'read',
-    writesFeishu: false,
-    writesLocalFiles: false,
-    writesExternalRepos: false,
-    requires: ['feishuDoc'],
-    writeRequires: [],
-    artifacts: [],
-    description: 'Inspect Feishu code block inventory.'
-  },
-  {
-    name: 'code-blocks audit',
-    mode: 'readback-audit',
-    writesFeishu: false,
-    writesLocalFiles: false,
-    writesExternalRepos: false,
-    requires: ['feishuDoc', '--expect'],
-    writeRequires: [],
-    artifacts: [],
-    description: 'Audit expected code-block languages, order, and placeholders.'
-  },
-  {
     name: 'pull',
     mode: 'read',
     writesFeishu: false,
@@ -182,6 +160,17 @@ const MULTISDK_TOOLS: HarnessTool[] = [
     writeRequires: [],
     artifacts: ['output markdown when --output is provided'],
     description: 'Export current Feishu content as best-effort Markdown.'
+  },
+  {
+    name: 'push',
+    mode: 'dry-run-or-write',
+    writesFeishu: true,
+    writesLocalFiles: true,
+    writesExternalRepos: false,
+    requires: ['markdownFile', 'feishuDoc'],
+    writeRequires: ['local review markdown', 'user approval', '--write'],
+    artifacts: ['dry-run/write output', 'readback verification'],
+    description: 'Push reviewed local Markdown to Feishu after approval.'
   }
 ];
 
