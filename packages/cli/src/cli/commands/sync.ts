@@ -801,6 +801,7 @@ export function resolvePublishTransformOptions(input: {
     publishProfile,
     publishTransform: {
       ...profileTransform,
+      ...(input.reviewProfile ? { reviewDraft: true } : {}),
       ...(input.linkBaseUrl ? { linkBaseUrl: input.linkBaseUrl } : {})
     }
   };

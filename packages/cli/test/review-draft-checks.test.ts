@@ -42,6 +42,14 @@ describe('review draft checks', () => {
     expect(reviewDraftCheckSummaryLines(report)).toEqual(['Review draft checks: passed']);
   });
 
+  it('does not require product include tags in Markdown headings', () => {
+    expect(analyzeReviewDraftChecks([
+      '## Drop fields | Milvus 3.0.x',
+      '',
+      '<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> supports schema updates.'
+    ].join('\n'))).toEqual({ passed: true, issues: [] });
+  });
+
   it('formats concise failed check summary lines', () => {
     expect(reviewDraftCheckSummaryLines(analyzeReviewDraftChecks('Milvus text.\n'))).toEqual([
       'Review draft checks: failed',

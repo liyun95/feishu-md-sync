@@ -70,6 +70,8 @@ Options:
 - `--replace-all` - allow `document-replace` writes to replace the existing Feishu document.
 - `--force-whole-document-sync` - allow whole-document push when an active `multisdk` task exists for the same document.
 - `--publish-profile <profile>` - apply a publish transform before planning or writing. Currently supports `milvus`.
+- `--review-profile <profile>` - apply a Feishu review-draft transform before planning or writing. Currently supports `milvus`.
+- `--link-base-url <url>` - rewrite relative Markdown links against this absolute base URL when a review profile needs public links.
 - `--markdown-engine <engine>` - `auto`, `official`, or `local`. `publish-new` defaults to `local` for stable first-publication baselines.
 - `--format <format>` - `pretty` or `json`.
 - `--host <url>` - Feishu API host.
@@ -98,6 +100,14 @@ Allow full document replacement only when intentional:
 ```bash
 md2feishu push ./doc.md DocToken --strategy document-replace --replace-all --write -y
 ```
+
+For Milvus review drafts, prefer:
+
+```bash
+md2feishu push ./doc.md DocToken --review-profile milvus
+```
+
+The `milvus` review profile removes docs-site-only HTML wrappers such as `multipleCode`, converts note alert HTML to review-safe text, rewrites relative links to public docs links, removes page-local anchor links, applies Milvus/Zilliz Cloud include tags to body prose, and leaves code fences and Markdown headings unchanged.
 
 ## `publish-new`
 
