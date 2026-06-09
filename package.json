@@ -9,7 +9,7 @@
     "apps/docs"
   ],
   "scripts": {
-    "build": "npm run build --workspace=feishu-md-sync",
+    "build": "npm run build --workspace=feishu-md-sync && node scripts/deprecate-root-dist-cli.mjs",
     "test": "npm run test --workspace=feishu-md-sync",
     "test:coverage": "npm run test:coverage --workspace=feishu-md-sync",
     "typecheck": "npm run typecheck --workspace=feishu-md-sync",
