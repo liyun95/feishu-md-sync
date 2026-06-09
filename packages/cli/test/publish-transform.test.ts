@@ -55,4 +55,45 @@ print("Milvus")
       '```'
     ].join('\n'));
   });
+
+  it('makes Milvus review draft Markdown safe for Feishu', () => {
+    const source = `---
+title: "Alter Collection Schema"
+---
+
+# Alter Collection Schema
+
+## Drop fields | Milvus 3.0.x
+
+Milvus supports schema updates. See [Storage cleanup](#storage-cleanup) and [Schema](../schema.md#schema-update).
+
+<div class="multipleCode">
+    <a href="#python">Python</a>
+    <a href="#java">Java</a>
+</div>
+
+<div class="alert note">
+
+Milvus note.
+
+</div>
+
+\`\`\`python
+print("Milvus")
+\`\`\`
+`;
+
+    const transformed = applyPublishTransform(source, {
+      profile: 'milvus',
+      linkBaseUrl: 'https://milvus.io/docs/',
+      reviewDraft: true
+    });
+
+    expect(transformed).not.toContain('title:');
+    expect(transformed).not.toContain('<div class="multipleCode">');
+    expect(transformed).toContain('## Drop fields | Milvus 3.0.x');
+    expect(transformed).toContain('<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> supports schema updates. See Storage cleanup and [Schema](https://milvus.io/docs/schema.md#schema-update).');
+    expect(transformed).toContain('Note: <include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> note.');
+    expect(transformed).toContain('print("Milvus")');
+  });
 });

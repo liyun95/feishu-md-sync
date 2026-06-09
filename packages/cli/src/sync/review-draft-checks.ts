@@ -15,7 +15,7 @@ export type ReviewDraftCheckReport = {
 };
 
 export function analyzeReviewDraftChecks(markdown: string): ReviewDraftCheckReport {
-  const withoutCode = stripFencedCode(markdown.replace(/\r\n/g, '\n'));
+  const withoutCode = stripMarkdownHeadings(stripFencedCode(markdown.replace(/\r\n/g, '\n')));
   const issues: ReviewDraftCheckIssue[] = [];
 
   if (/^---\n[\s\S]*?\n---(?:\n|$)/.test(withoutCode)) {
@@ -56,6 +56,10 @@ export function reviewDraftCheckSummaryLines(report: ReviewDraftCheckReport): st
 
 function stripFencedCode(markdown: string): string {
   return markdown.replace(/```[\s\S]*?```/g, '');
+}
+
+function stripMarkdownHeadings(markdown: string): string {
+  return markdown.split('\n').filter((line) => !/^#{1,6}\s+/.test(line)).join('\n');
 }
 
 function containsUnwrappedMilvus(markdown: string): boolean {

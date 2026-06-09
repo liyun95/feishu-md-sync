@@ -3,6 +3,7 @@ export type PublishTransformProfile = 'milvus';
 export type PublishTransformOptions = {
   profile?: PublishTransformProfile;
   linkBaseUrl?: string;
+  reviewDraft?: boolean;
 };
 
 type Frontmatter = {
@@ -15,14 +16,19 @@ const MILVUS_SHARED_NAME = '<include target="milvus">Milvus</include><include ta
 export function applyPublishTransform(markdown: string, options: PublishTransformOptions = {}): string {
   let transformed = markdown;
 
+  if (options.reviewDraft) {
+    transformed = stripMultipleCodeWrappers(transformed);
+    transformed = convertAlertNotes(transformed);
+  }
+
   if (options.profile === 'milvus') {
     const frontmatter = stripFrontmatter(transformed);
     const withoutDuplicateTitle = dropDuplicateTitleHeading(frontmatter.body, frontmatter.title);
-    transformed = transformProductNames(withoutDuplicateTitle);
+    transformed = transformProductNames(withoutDuplicateTitle, { skipHeadings: options.reviewDraft === true });
   }
 
   if (options.linkBaseUrl) {
-    transformed = rewriteRelativeLinks(transformed, options.linkBaseUrl);
+    transformed = rewriteRelativeLinks(transformed, options.linkBaseUrl, { reviewDraft: options.reviewDraft === true });
   }
 
   return transformed;
@@ -75,7 +81,17 @@ function normalizeTitle(value: string): string {
   return value.trim().replace(/^["']|["']$/g, '').toLowerCase();
 }
 
-function transformProductNames(markdown: string): string {
+function stripMultipleCodeWrappers(markdown: string): string {
+  return markdown.replace(/<div class="multipleCode">\n[\s\S]*?<\/div>\n*/g, '');
+}
+
+function convertAlertNotes(markdown: string): string {
+  return markdown.replace(/<div class="alert note">\n\n([\s\S]*?)\n\n<\/div>/g, (_, body: string) => {
+    return `Note: ${body.trim()}`;
+  });
+}
+
+function transformProductNames(markdown: string, options: { skipHeadings?: boolean } = {}): string {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   let inCodeFence = false;
 
@@ -84,7 +100,7 @@ function transformProductNames(markdown: string): string {
       inCodeFence = !inCodeFence;
       return line;
     }
-    if (inCodeFence) return line;
+    if (inCodeFence || (options.skipHeadings && /^#{1,6}\s+/.test(line))) return line;
     return replaceOutsideProtectedSpans(line);
   }).join('\n');
 }
@@ -111,7 +127,7 @@ function replaceOutsideProtectedSpans(line: string): string {
   return transformed.replace(/\u0000(\d+)\u0000/g, (_, index: string) => protectedSpans[Number(index)] ?? '');
 }
 
-function rewriteRelativeLinks(markdown: string, baseUrl: string): string {
+function rewriteRelativeLinks(markdown: string, baseUrl: string, options: { reviewDraft?: boolean } = {}): string {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   let inCodeFence = false;
 
@@ -121,11 +137,11 @@ function rewriteRelativeLinks(markdown: string, baseUrl: string): string {
       return line;
     }
     if (inCodeFence) return line;
-    return rewriteRelativeLinksInLine(line, baseUrl);
+    return rewriteRelativeLinksInLine(line, baseUrl, options);
   }).join('\n');
 }
 
-function rewriteRelativeLinksInLine(line: string, baseUrl: string): string {
+function rewriteRelativeLinksInLine(line: string, baseUrl: string, options: { reviewDraft?: boolean }): string {
   const protectedSpans: string[] = [];
   const protect = (value: string): string => {
     const token = `\u0000${protectedSpans.length}\u0000`;
@@ -138,11 +154,24 @@ function rewriteRelativeLinksInLine(line: string, baseUrl: string): string {
     .replace(/`[^`]*`/g, protect);
 
   const rewritten = protectedLine.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label: string, url: string) => {
-    if (!shouldRewriteLink(url)) return match;
-    return `[${label}](${new URL(url, baseUrl).toString()})`;
+    const trimmed = url.trim();
+    if (options.reviewDraft && trimmed.startsWith('#')) return label;
+    if (!shouldRewriteLink(trimmed)) return match;
+    return `[${label}](${options.reviewDraft ? milvusDocsUrl(trimmed, baseUrl) : new URL(trimmed, baseUrl).toString()})`;
   });
 
   return rewritten.replace(/\u0000(\d+)\u0000/g, (_, index: string) => protectedSpans[Number(index)] ?? '');
+}
+
+function milvusDocsUrl(url: string, baseUrl: string): string {
+  const [pathPart, hashPart] = url.split('#', 2);
+  const fileName = pathPart.split('/').filter(Boolean).at(-1) ?? pathPart;
+  const suffix = hashPart ? `${fileName}#${hashPart}` : fileName;
+  return new URL(suffix, ensureTrailingSlash(baseUrl)).toString();
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
 }
 
 function shouldRewriteLink(url: string): boolean {

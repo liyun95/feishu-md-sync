@@ -83,11 +83,11 @@ describe('sync CLI output', () => {
   it('treats the Milvus review profile as the Milvus publish transform', () => {
     expect(resolvePublishTransformOptions({ reviewProfile: 'milvus' })).toEqual({
       publishProfile: 'milvus',
-      publishTransform: { profile: 'milvus' }
+      publishTransform: { profile: 'milvus', reviewDraft: true }
     });
     expect(resolvePublishTransformOptions({ publishProfile: 'milvus', reviewProfile: 'milvus' })).toEqual({
       publishProfile: 'milvus',
-      publishTransform: { profile: 'milvus' }
+      publishTransform: { profile: 'milvus', reviewDraft: true }
     });
   });
 
@@ -114,7 +114,7 @@ describe('sync CLI output', () => {
     });
     expect(resolvePublishTransformOptions({ reviewProfile: 'milvus', linkBaseUrl: 'https://milvus.io/docs/' })).toEqual({
       publishProfile: 'milvus',
-      publishTransform: { profile: 'milvus', linkBaseUrl: 'https://milvus.io/docs/' }
+      publishTransform: { profile: 'milvus', reviewDraft: true, linkBaseUrl: 'https://milvus.io/docs/' }
     });
   });
 
