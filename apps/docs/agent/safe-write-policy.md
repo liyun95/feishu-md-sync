@@ -10,6 +10,7 @@ Agents must treat Feishu writes as user-authorized side effects.
 - Do not use `--strategy local-wins` unless the human explicitly chose overwrite or the agent is publishing a resolved `.merged.md`.
 - Prefer `push --scope heading:"Heading text"` when only one Feishu section should be considered.
 - Do not use `push --strategy document-replace --replace-all` unless the dry-run recommends full replacement and the human explicitly approves it.
+- Do not use `push --write-backend docx-v2-overwrite` unless a whole-document replacement is intended, the dry-run is reviewed, and `--replace-all` is explicitly approved. Never combine it with scoped push options.
 - Prefer `--strategy merge` for unattended sync.
 - Prefer `md2feishu multisdk diff` and `md2feishu multisdk apply` for language-scoped code-block tasks.
 - Use `md2feishu multisdk land-docs` after audit when reviewed Feishu blocks need to land in a docs repo; pass `--base` so base-named branches are rejected before write.

@@ -7,6 +7,7 @@
 | Receipt conflict check | whole-document `sync` | Prevent overwriting remote edits. |
 | Heading scope uniqueness | `push --scope heading:"..."` | Prevent ambiguous scoped writes. |
 | Replace-all gate | `push --strategy document-replace --replace-all` | Prevent silent full-document replacement. |
+| Docs v2 overwrite gate | `push --write-backend docx-v2-overwrite --replace-all` | Keep native Markdown table rendering and local media upload behind explicit whole-document approval. |
 | Validation evidence | `multisdk apply --write` | Prevent untested snippets from reaching Feishu. |
 | Report hash approval | `release apply --write` | Prevent stale audit approvals. |
 | Human release trigger | `sdk-reference-web-content-release` | Prevent authoring tasks from touching `web-content` prematurely. |
@@ -30,3 +31,5 @@ Push refuses or escalates unsafe block-level writes when:
 - A block type or nested structure cannot be updated in place and the fallback range is too large for an automatic block write.
 
 Scoped push writes can pass readback verification without updating the whole-document receipt. If a later `status` reports `diverged`, inspect the scoped write output and readback evidence before treating it as a failed push.
+
+Docs v2 overwrite is a whole-document backend. Use it only after the dry-run plan is reviewed and the user approves `--replace-all`; then check the table and media readback counts printed by the CLI.

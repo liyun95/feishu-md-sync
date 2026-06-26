@@ -18,6 +18,7 @@ import { unifiedDiff } from '../../sync/diff.js';
 import { buildMergeInstructions, defaultMergedPath, threeWayMerge } from '../../sync/merge.js';
 import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull.js';
 import { runSync, type SyncStrategy } from '../../sync/run-sync.js';
+import type { ImageDimensions } from '../../sync/docx-v2-overwrite.js';
 import { assertRequestedPushStrategy, buildPushPlan, type PushPlan, type PushStrategy } from '../../sync/push-plan.js';
 import { getSyncStatus, type SyncStatusResult } from '../../sync/status.js';
 import { renderRiskSummaryLines } from '../../sync/render-risk.js';
@@ -47,6 +48,9 @@ type SyncCommandOptions = BaseCommandOptions & {
   linkBaseUrl?: string;
   markdownEngine?: string;
   receiptDir?: string;
+  writeBackend?: string;
+  imageRootDir?: string;
+  imageSize?: string[];
 };
 
 type PushCommandOptions = BaseCommandOptions & {
@@ -66,6 +70,9 @@ type PushCommandOptions = BaseCommandOptions & {
   beforeHeading?: string;
   markdownEngine?: string;
   receiptDir?: string;
+  writeBackend?: string;
+  imageRootDir?: string;
+  imageSize?: string[];
 };
 
 type PublishNewCommandOptions = BaseCommandOptions & {
@@ -109,6 +116,9 @@ type NormalizedSyncCommandOptions = SyncCommandOptions & Required<BaseCommandOpt
   publishTransform?: PublishTransformOptions;
   markdownEngine: MarkdownEngineName;
   receiptDir?: string;
+  writeBackend?: 'block-patch' | 'docx-v2-overwrite';
+  imageRootDir?: string;
+  imageDimensions?: Record<string, ImageDimensions>;
 };
 
 type NormalizedPushCommandOptions = Omit<PushCommandOptions, 'insertSection' | 'beforeSection' | 'afterSection' | 'beforeHeading'> & Required<BaseCommandOptions> & {
@@ -123,6 +133,9 @@ type NormalizedPushCommandOptions = Omit<PushCommandOptions, 'insertSection' | '
   beforeHeading?: string;
   markdownEngine: MarkdownEngineName;
   receiptDir?: string;
+  writeBackend?: 'block-patch' | 'docx-v2-overwrite';
+  imageRootDir?: string;
+  imageDimensions?: Record<string, ImageDimensions>;
 };
 
 type NormalizedPublishNewCommandOptions = PublishNewCommandOptions & Required<BaseCommandOptions> & {
@@ -154,6 +167,9 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
     .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--write-backend <backend>', 'write backend: block-patch | docx-v2-overwrite', 'block-patch')
+    .option('--image-root-dir <dir>', 'base directory for absolute-style Markdown image paths when using docx-v2-overwrite')
+    .option('--image-size <image=WIDTHxHEIGHT>', 'repeatable explicit image display size for docx-v2-overwrite', collectOption, [])
     .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--verbose', 'show status hash roles and raw hash values')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
@@ -182,6 +198,9 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
     .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--write-backend <backend>', 'write backend: block-patch | docx-v2-overwrite', 'block-patch')
+    .option('--image-root-dir <dir>', 'base directory for absolute-style Markdown image paths when using docx-v2-overwrite')
+    .option('--image-size <image=WIDTHxHEIGHT>', 'repeatable explicit image display size for docx-v2-overwrite', collectOption, [])
     .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
@@ -210,6 +229,9 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--review-profile <profile>', 'apply a review-draft profile: milvus')
     .option('--link-base-url <url>', 'rewrite relative Markdown links against this absolute base URL')
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
+    .option('--write-backend <backend>', 'write backend: block-patch | docx-v2-overwrite', 'block-patch')
+    .option('--image-root-dir <dir>', 'base directory for absolute-style Markdown image paths when using docx-v2-overwrite')
+    .option('--image-size <image=WIDTHxHEIGHT>', 'repeatable explicit image display size for docx-v2-overwrite', collectOption, [])
     .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .option('--env-file <file>', 'load credentials from an explicit dotenv file')
@@ -419,6 +441,7 @@ function normalizeSyncOptions(program: Command, opts: SyncCommandOptions): Norma
   const linkBaseUrl = optionFromArgv('--link-base-url') ?? commandOptionValue<string>(opts, 'linkBaseUrl') ?? globals.linkBaseUrl;
   const publish = resolvePublishTransformOptions({ publishProfile, reviewProfile, linkBaseUrl });
   const strategy = optionFromArgv('--strategy') ?? commandOptionValue<string>(opts, 'strategy') ?? globals.strategy ?? 'fail';
+  const imageSize = optionsFromArgv('--image-size', commandOptionValue<string[]>(opts, 'imageSize') ?? globals.imageSize ?? []);
   return {
     ...base,
     format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
@@ -432,6 +455,9 @@ function normalizeSyncOptions(program: Command, opts: SyncCommandOptions): Norma
     linkBaseUrl,
     publishTransform: publish.publishTransform,
     markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto'),
+    writeBackend: parseWriteBackend(optionFromArgv('--write-backend') ?? commandOptionValue<string>(opts, 'writeBackend') ?? globals.writeBackend ?? 'block-patch'),
+    imageRootDir: optionFromArgv('--image-root-dir') ?? commandOptionValue<string>(opts, 'imageRootDir') ?? globals.imageRootDir,
+    imageDimensions: parseImageDimensions(imageSize),
     receiptDir: optionFromArgv('--receipt-dir') ?? commandOptionValue<string>(opts, 'receiptDir') ?? globals.receiptDir
   };
 }
@@ -450,6 +476,7 @@ function normalizePushOptions(program: Command, opts: PushCommandOptions): Norma
   const beforeHeading = optionFromArgv('--before-heading') ?? commandOptionValue<string>(opts, 'beforeHeading') ?? globals.beforeHeading;
   const insertSection = parseInsertSectionOptions(rawInsertSection, rawBeforeSection, rawAfterSection);
   validateScopedOptions({ scope, insertSection, beforeHeading });
+  const imageSize = optionsFromArgv('--image-size', commandOptionValue<string[]>(opts, 'imageSize') ?? globals.imageSize ?? []);
   return {
     ...base,
     format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? globals.format ?? 'pretty',
@@ -466,6 +493,9 @@ function normalizePushOptions(program: Command, opts: PushCommandOptions): Norma
     insertSection,
     beforeHeading,
     markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? globals.markdownEngine ?? 'auto'),
+    writeBackend: parseWriteBackend(optionFromArgv('--write-backend') ?? commandOptionValue<string>(opts, 'writeBackend') ?? globals.writeBackend ?? 'block-patch'),
+    imageRootDir: optionFromArgv('--image-root-dir') ?? commandOptionValue<string>(opts, 'imageRootDir') ?? globals.imageRootDir,
+    imageDimensions: parseImageDimensions(imageSize),
     receiptDir: optionFromArgv('--receipt-dir') ?? commandOptionValue<string>(opts, 'receiptDir') ?? globals.receiptDir
   };
 }
@@ -569,6 +599,19 @@ function optionFromArgv(name: string): string | undefined {
   return undefined;
 }
 
+function optionsFromArgv(name: string, fallback: string[]): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < process.argv.length; index += 1) {
+    const arg = process.argv[index];
+    if (arg === name && process.argv[index + 1]) {
+      values.push(process.argv[index + 1]);
+    } else if (arg.startsWith(`${name}=`)) {
+      values.push(arg.slice(name.length + 1));
+    }
+  }
+  return values.length > 0 ? values : fallback;
+}
+
 function flagFromArgv(name: string): boolean | undefined {
   return process.argv.includes(name) ? true : undefined;
 }
@@ -579,6 +622,10 @@ function parseIntOption(value: string): number {
     throw new Error(`Expected a positive integer, got ${value}`);
   }
   return parsed;
+}
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
 }
 
 async function runSyncCommand(context: CliContext, markdownFile: string, feishuDoc: string, opts: NormalizedSyncCommandOptions): Promise<void> {
@@ -609,6 +656,9 @@ async function runSyncCommand(context: CliContext, markdownFile: string, feishuD
     forceWholeDocumentSync: opts.forceWholeDocumentSync,
     publishTransform: opts.publishTransform,
     markdownEngine: createCliMarkdownEngine(client, opts.markdownEngine),
+    writeBackend: opts.writeBackend,
+    imageRootDir: opts.imageRootDir,
+    imageDimensions: opts.imageDimensions,
     receiptDir: opts.receiptDir,
     confirm,
     runContext: syncReceiptRunContext(outputContext)
@@ -651,6 +701,9 @@ async function runPushCommand(context: CliContext, markdownFile: string, feishuD
     beforeHeading: opts.beforeHeading,
     sectionPatchMode: opts.strategy === 'section-replace' ? 'section-replace' : 'auto',
     markdownEngine,
+    writeBackend: opts.writeBackend,
+    imageRootDir: opts.imageRootDir,
+    imageDimensions: opts.imageDimensions,
     receiptDir: opts.receiptDir,
     runContext: syncReceiptRunContext(outputContext)
   });
@@ -689,6 +742,9 @@ async function runPushCommand(context: CliContext, markdownFile: string, feishuD
     beforeHeading: opts.beforeHeading,
     sectionPatchMode: plan.selectedStrategy === 'section-replace' ? 'section-replace' : 'auto',
     markdownEngine,
+    writeBackend: opts.writeBackend,
+    imageRootDir: opts.imageRootDir,
+    imageDimensions: opts.imageDimensions,
     receiptDir: opts.receiptDir,
     confirm,
     runContext: syncReceiptRunContext(outputContext)
@@ -818,6 +874,27 @@ function parsePublishTransform(value: string | undefined): PublishTransformOptio
 function parseMarkdownEngine(value: string): MarkdownEngineName {
   if (value === 'auto' || value === 'official' || value === 'local') return value;
   throw new Error(`Invalid --markdown-engine ${value}. Expected auto, official, or local.`);
+}
+
+function parseWriteBackend(value: string): 'block-patch' | 'docx-v2-overwrite' {
+  if (value === 'block-patch' || value === 'docx-v2-overwrite') return value;
+  throw new Error(`Invalid --write-backend ${value}. Expected block-patch or docx-v2-overwrite.`);
+}
+
+function parseImageDimensions(values: string[]): Record<string, ImageDimensions> | undefined {
+  if (values.length === 0) return undefined;
+  const dimensions: Record<string, ImageDimensions> = {};
+  for (const value of values) {
+    const match = value.match(/^(.+?)=(\d+)x(\d+)$/);
+    if (!match) {
+      throw new Error(`Invalid --image-size ${value}. Expected image=WIDTHxHEIGHT, for example /img/diagram.svg=900x393.`);
+    }
+    dimensions[stripMatchingQuotes(match[1].trim())] = {
+      width: Number(match[2]),
+      height: Number(match[3])
+    };
+  }
+  return dimensions;
 }
 
 function parseInsertSectionOptions(
@@ -957,6 +1034,11 @@ export function pushResultSummaryLines(
 
   if (result.mode === 'write') {
     lines.push(`Readback verification: ${result.receipt.verificationResult.ok ? 'passed' : 'failed'}`);
+    if (result.docxV2) {
+      const verification = result.docxV2.verification;
+      lines.push(`Docs v2 table readback: ${verification.tablesReadback}/${verification.tablesExpected}`);
+      lines.push(`Docs v2 media readback: ${verification.mediaReadback}/${verification.mediaExpected}`);
+    }
     if (result.receiptWritten) {
       lines.push(`Receipt: ${result.receiptPath}`);
     }
@@ -1008,6 +1090,12 @@ export function syncResultSummaryLines(result: Awaited<ReturnType<typeof runSync
   if (result.patchPlan.operation !== 'noop' && !usesSafeBlockLevelPatch) {
     lines.push(`will delete: ${result.patchPlan.deleteCount}`);
     lines.push(`will create: ${result.patchPlan.createCount}`);
+  }
+  if (result.docxV2) {
+    const verification = result.docxV2.verification;
+    lines.push('write backend: docx-v2-overwrite');
+    lines.push(`table readback: ${verification.tablesReadback}/${verification.tablesExpected}`);
+    lines.push(`media readback: ${verification.mediaReadback}/${verification.mediaExpected}`);
   }
 
   if (result.mode === 'write' && result.receiptWritten) {

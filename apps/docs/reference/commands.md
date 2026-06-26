@@ -47,6 +47,9 @@ Options:
 - `--force-whole-document-sync` - allow whole-document sync when an active `multisdk` task exists for the same document.
 - `--publish-profile <profile>` - apply a publish transform before diffing or writing. Currently supports `milvus`.
 - `--markdown-engine <engine>` - `auto`, `official`, or `local`. `auto` tries official Feishu Markdown APIs first and falls back to local conversion.
+- `--write-backend <backend>` - `block-patch` or `docx-v2-overwrite`. Defaults to `block-patch`.
+- `--image-root-dir <dir>` - base directory for absolute-style Markdown image paths when using `docx-v2-overwrite`.
+- `--image-size <image=WIDTHxHEIGHT>` - repeatable explicit image display size for `docx-v2-overwrite`, for example `/img/diagram.svg=900x393`.
 - `--format <format>` - `pretty` or `json`.
 - `--host <url>` - Feishu API host.
 - `--timeout-ms <number>` - Feishu API timeout.
@@ -73,6 +76,9 @@ Options:
 - `--review-profile <profile>` - apply a Feishu review-draft transform before planning or writing. Currently supports `milvus`.
 - `--link-base-url <url>` - rewrite relative Markdown links against this absolute base URL when a review profile needs public links.
 - `--markdown-engine <engine>` - `auto`, `official`, or `local`. `publish-new` defaults to `local` for stable first-publication baselines.
+- `--write-backend <backend>` - `block-patch` or `docx-v2-overwrite`. Defaults to `block-patch`.
+- `--image-root-dir <dir>` - base directory for absolute-style Markdown image paths when using `docx-v2-overwrite`.
+- `--image-size <image=WIDTHxHEIGHT>` - repeatable explicit image display size for `docx-v2-overwrite`, for example `/img/diagram.svg=900x393`.
 - `--format <format>` - `pretty` or `json`.
 - `--host <url>` - Feishu API host.
 - `--timeout-ms <number>` - Feishu API timeout.
@@ -99,6 +105,12 @@ Allow full document replacement only when intentional:
 
 ```bash
 md2feishu push ./doc.md DocToken --strategy document-replace --replace-all --write -y
+```
+
+Use Feishu docs v2 overwrite for whole-document pushes with important tables or local images/SVGs:
+
+```bash
+md2feishu push ./doc.md DocToken --write-backend docx-v2-overwrite --image-root-dir ./static --image-size /img/diagram.svg=900x393 --replace-all --write -y
 ```
 
 For Milvus review drafts, prefer:

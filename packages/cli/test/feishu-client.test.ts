@@ -128,6 +128,45 @@ describe('FeishuClient', () => {
     });
   });
 
+  it('overwrites a docx document through docs_ai v1 markdown overwrite', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ code: 0, data: {} }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+
+    await client.overwriteDocumentMarkdown('doc', '# Title\n');
+
+    expect(fetchImpl.mock.calls[0][0]).toContain('/open-apis/docs_ai/v1/documents/doc');
+    expect(fetchImpl.mock.calls[0][1]?.method).toBe('PUT');
+    expect(JSON.parse(fetchImpl.mock.calls[0][1]?.body as string)).toEqual({
+      command: 'overwrite',
+      content: '# Title\n',
+      format: 'markdown',
+      revision_id: -1
+    });
+  });
+
+  it('uploads media files for docx image binding with multipart form data', async () => {
+    const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0,
+      data: { file_token: 'file-token', content_type: 'image/svg+xml' }
+    }));
+    const client = new FeishuClient({ tokenProvider, fetchImpl });
+    const filePath = new URL('fixtures/static/img/scim-provisioning-workflow.svg', import.meta.url);
+
+    await expect(client.uploadMediaFile({
+      filePath: filePath.pathname,
+      parentNode: 'image-block',
+      parentType: 'docx_image'
+    })).resolves.toEqual({ token: 'file-token', contentType: 'image/svg+xml' });
+
+    const init = fetchImpl.mock.calls[0][1] as RequestInit;
+    expect(fetchImpl.mock.calls[0][0]).toContain('/open-apis/drive/v1/medias/upload_all');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual({ Authorization: 'Bearer token' });
+    expect(init.body).toBeInstanceOf(FormData);
+  });
+
   it('strips server-owned block metadata before creating children', async () => {
     const tokenProvider = { token: vi.fn().mockResolvedValue('token') } as unknown as FeishuTokenProvider;
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({

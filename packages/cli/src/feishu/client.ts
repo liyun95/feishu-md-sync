@@ -7,6 +7,8 @@ import type {
   FeishuDocClient,
   FeishuDriveFile
 } from './types.js';
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { FeishuTokenProvider } from './token.js';
 import { FeishuApiError } from '../services/feishu/errors.js';
 import { withFeishuRetry } from '../services/feishu/retry.js';
@@ -81,6 +83,50 @@ export class FeishuClient implements FeishuDocClient {
 
   async deleteChildren(documentId: string, parentBlockId: string, startIndex: number, endIndex: number): Promise<void> {
     await this.docx.deleteChildren(documentId, parentBlockId, startIndex, endIndex);
+  }
+
+  async overwriteDocumentMarkdown(documentId: string, markdown: string): Promise<void> {
+    await this.request(
+      'PUT',
+      `/open-apis/docs_ai/v1/documents/${documentId}`,
+      {
+        command: 'overwrite',
+        content: markdown,
+        format: 'markdown',
+        revision_id: -1
+      }
+    );
+  }
+
+  async uploadMediaFile(input: {
+    filePath: string;
+    parentNode: string;
+    parentType: string;
+  }): Promise<{ token: string; contentType?: string }> {
+    const file = await readFile(input.filePath);
+    const fileStat = await stat(input.filePath);
+    const mimeType = mimeTypeForPath(input.filePath);
+    const form = new FormData();
+    form.set('file_name', path.basename(input.filePath));
+    form.set('parent_node', input.parentNode);
+    form.set('parent_type', input.parentType);
+    form.set('size', String(fileStat.size));
+    form.set('file', new Blob([new Uint8Array(file)], { type: mimeType }), path.basename(input.filePath));
+
+    const data = await this.requestForm<{
+      file_token?: string;
+      token?: string;
+      content_type?: string;
+      mime_type?: string;
+    }>('POST', '/open-apis/drive/v1/medias/upload_all', form);
+    const token = data.file_token ?? data.token;
+    if (!token) {
+      throw new FeishuApiError(`Feishu media upload returned no file token for ${input.filePath}.`);
+    }
+    return {
+      token,
+      contentType: data.content_type ?? data.mime_type
+    };
   }
 
   async createChildren(
@@ -274,6 +320,10 @@ export class FeishuClient implements FeishuDocClient {
     return withFeishuRetry(() => this.requestOnce<T>(method, path, body), { sleep: async () => undefined });
   }
 
+  private async requestForm<T = unknown>(method: string, path: string, body: FormData): Promise<T> {
+    return withFeishuRetry(() => this.requestFormOnce<T>(method, path, body), { sleep: async () => undefined });
+  }
+
   private async requestOnce<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.tokenProvider.token();
     const controller = new AbortController();
@@ -308,6 +358,50 @@ export class FeishuClient implements FeishuDocClient {
       clearTimeout(timeout);
     }
   }
+
+  private async requestFormOnce<T = unknown>(method: string, path: string, body: FormData): Promise<T> {
+    const token = await this.tokenProvider.token();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await this.fetchImpl(`${this.host}${path}`, {
+        method,
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body
+      });
+
+      const payload = await parseJson(response);
+      if (!response.ok || payload.code !== 0) {
+        throw new FeishuApiError(
+          `Feishu API ${method} ${path} failed: ${payload.msg ?? response.statusText}`,
+          { code: payload.code, status: response.status, method, path, responseBody: payload }
+        );
+      }
+
+      return (payload.data ?? {}) as T;
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') {
+        throw new FeishuApiError(`Feishu API ${method} ${path} timed out after ${this.timeoutMs}ms`, { method, path });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function mimeTypeForPath(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === '.svg') return 'image/svg+xml';
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.gif') return 'image/gif';
+  if (extension === '.webp') return 'image/webp';
+  return 'application/octet-stream';
 }
 
 function stripInlineChildren(block: FeishuBlock): FeishuBlock {

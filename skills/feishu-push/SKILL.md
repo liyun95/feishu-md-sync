@@ -32,9 +32,10 @@ Follow the returned steps.
 - For `block-patch`, write only after the dry-run is understood and approved.
 - For `section-replace`, explicitly tell the user which heading section will be recreated.
 - For `document-replace`, do not write unless the dry-run recommends full replacement and the user approves `--replace-all`.
+- For Markdown with important tables or local images/SVGs, consider `--write-backend docx-v2-overwrite` only as a whole-document replacement path. Dry-run first, require `--replace-all`, pass `--image-root-dir` and `--image-size` when needed, and report table/media readback counts.
 - Use `push --scope heading:"..."` only when a heading scope is a guard, not as a separate workflow.
 - After write, verify readback and ask the user to visually inspect Feishu when rendered document content changed.
 
 ## Completion
 
-Finish only when the push write has passed readback verification, or when the dry-run shows no Feishu write is needed. If the CLI selects `document-replace`, stop at dry-run unless the user explicitly approves full document replacement.
+Finish only when the push write has passed readback verification, or when the dry-run shows no Feishu write is needed. If the CLI selects `document-replace` or docs v2 overwrite, stop at dry-run unless the user explicitly approves full document replacement.

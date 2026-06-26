@@ -59,6 +59,12 @@ export function formatSyncResultPretty(result: SyncRunResult, context?: SyncOutp
     lines.push(`will delete: ${result.patchPlan.deleteCount}`);
     lines.push(`will create: ${result.patchPlan.createCount}`);
   }
+  if (result.docxV2) {
+    const verification = result.docxV2.verification;
+    lines.push('write backend: docx-v2-overwrite');
+    lines.push(`table readback: ${verification.tablesReadback}/${verification.tablesExpected}`);
+    lines.push(`media readback: ${verification.mediaReadback}/${verification.mediaExpected}`);
+  }
   if (result.mode === 'write' && result.receiptWritten) {
     lines.push(`receipt: ${result.receiptPath}`);
   }

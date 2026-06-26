@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="480" viewBox="0 0 1100 480" role="img" aria-labelledby="title desc">
+  <title id="title">SCIM provisioning workflow in Zilliz Cloud</title>
+  <desc id="desc">An identity provider syncs users, groups, and group memberships to a Zilliz Cloud organization through SCIM.</desc>
+  <rect width="1100" height="480" fill="#ffffff" />
+  <text x="40" y="80">Identity Provider</text>
+  <text x="420" y="240">Zilliz Cloud organization</text>
+  <text x="760" y="420">Access Control</text>
+</svg>

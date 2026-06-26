@@ -46,6 +46,11 @@ export type FeishuBlockUpdateRequest = {
       language?: number;
     };
   };
+  replace_image?: {
+    token: string;
+    width?: number;
+    height?: number;
+  };
 };
 
 export type WriteResult = {
@@ -87,6 +92,15 @@ export type BitableRecord = {
 
 export interface FeishuDocClient {
   getDocumentBlocks(documentId: string): Promise<FeishuBlock[]>;
+  overwriteDocumentMarkdown?(documentId: string, markdown: string): Promise<void>;
+  uploadMediaFile?(input: {
+    filePath: string;
+    parentNode: string;
+    parentType: string;
+  }): Promise<{
+    token: string;
+    contentType?: string;
+  }>;
   deleteChildren(documentId: string, parentBlockId: string, startIndex: number, endIndex: number): Promise<void>;
   createChildren(
     documentId: string,

@@ -86,6 +86,15 @@ describe('CLI help surface', () => {
     expect(result.stdout).toContain('--before-heading <heading>');
   });
 
+  it('documents docs v2 overwrite push options for tables and local media', async () => {
+    const result = await runCli(['push', '--help']);
+
+    expect(result.stdout).toContain('--write-backend <backend>');
+    expect(result.stdout).toContain('docx-v2-overwrite');
+    expect(result.stdout).toContain('--image-root-dir <dir>');
+    expect(result.stdout).toContain('--image-size <image=WIDTHxHEIGHT>');
+  });
+
   it('rejects insert-section without a relative target', async () => {
     const result = await runCli(['push', 'doc.md', 'doc1234567890123', '--insert-section', 'New']);
 

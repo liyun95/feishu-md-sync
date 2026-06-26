@@ -10,6 +10,7 @@ import { readReceipt, receiptPathFor, type SyncReceipt, type SyncReceiptRunConte
 import { buildMarkdownPreflightReport, type MarkdownPreflightReport } from '../services/markdown/preflight.js';
 import { comparableDirectChildBlocks, findPageBlock } from './block-state.js';
 import { detectConflict } from './conflict.js';
+import { runDocxV2Overwrite, type ImageDimensions, type DocxV2Verification } from './docx-v2-overwrite.js';
 import { defaultMergedPath, threeWayMerge } from './merge.js';
 import { applyPatch, planSmartPatch, type PatchPlan } from './patch.js';
 import { assertFeishuBlocksWritable } from './preflight.js';
@@ -54,6 +55,9 @@ export type SyncOptions = {
   markdownEngine?: MarkdownEngine;
   confirm?: (question: string) => Promise<boolean>;
   runContext?: SyncReceiptRunContext;
+  writeBackend?: 'block-patch' | 'docx-v2-overwrite';
+  imageRootDir?: string;
+  imageDimensions?: Record<string, ImageDimensions>;
 };
 
 export type SyncStrategy = 'fail' | 'local-wins' | 'merge';
@@ -75,6 +79,9 @@ export type SyncRunResult = {
   publishTransforms?: string[];
   renderRisk?: RenderRiskReport;
   reviewDraftChecks?: ReviewDraftCheckReport;
+  docxV2?: {
+    verification: DocxV2Verification;
+  };
 };
 
 export async function runSync(client: FeishuDocClient, options: SyncOptions): Promise<SyncRunResult> {
@@ -177,6 +184,64 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
     warnings.push('No previous receipt found; treating this as the first sync baseline.');
   }
 
+  const sourceHash = hashSource(effectiveSourceContent);
+
+  if (options.writeBackend === 'docx-v2-overwrite') {
+    if (isScopedSync(options)) {
+      throw new Error('docs v2 overwrite backend only supports whole-document writes.');
+    }
+    if (!conflict.ok && strategy === 'merge') {
+      throw new Error('docs v2 overwrite backend does not support merge conflict strategy.');
+    }
+    if (
+      conflict.reason === 'no-receipt' &&
+      mode === 'write' &&
+      currentChildren.length > 0 &&
+      !options.forceInitialOverwrite
+    ) {
+      throw new Error(
+        `Initial write would replace existing Feishu content (${currentChildren.length} blocks). ` +
+        `Run without --write to inspect the plan, or pass --force-initial-overwrite if this is intentional.`
+      );
+    }
+    if (mode === 'write' && !options.yes) {
+      const confirm = options.confirm;
+      if (!confirm) {
+        throw new Error('Write mode requires --yes or an interactive confirmation callback.');
+      }
+      const accepted = await confirm(`Overwrite Feishu document ${options.documentId} with docs v2 Markdown backend?`);
+      if (!accepted) {
+        throw new Error('Sync cancelled.');
+      }
+    }
+
+    const result = await runDocxV2Overwrite(client, {
+      sourcePath: absoluteSourcePath,
+      documentId: options.documentId,
+      rootDir,
+      statePath,
+      receiptSourcePath,
+      sourceMarkdown: effectiveSourceContent,
+      sourceHash,
+      currentChildren,
+      currentHash,
+      dryRun: mode !== 'write',
+      warnings,
+      receiptWritten: true,
+      runContext: options.runContext,
+      imageRootDir: options.imageRootDir,
+      imageDimensions: options.imageDimensions
+    });
+    return {
+      ...result,
+      markdownEngine: {
+        requested: markdownEngine.name,
+        import: 'official'
+      },
+      publishTransforms: publishTransformNames(options.publishTransform)
+    };
+  }
+
   const effectiveMarkdownForImport = options.section
     ? extractUniqueMarkdownSection(effectiveSourceContent, options.section).markdown
     : effectiveSourceContent;
@@ -189,7 +254,6 @@ export async function runSync(client: FeishuDocClient, options: SyncOptions): Pr
   const desiredImport = await importEngine.importMarkdown({ markdown: effectiveMarkdownForImport });
   warnings.push(...desiredImport.warnings);
   const desiredBlocks = desiredImport.blocks;
-  const sourceHash = hashSource(effectiveSourceContent);
   const scopedPatch = scopedPatchPlan({
     currentChildren,
     desiredBlocks,

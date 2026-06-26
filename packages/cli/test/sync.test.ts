@@ -383,6 +383,102 @@ Local ignored
     expect(receipt.verificationResult.ok).toBe(true);
   });
 
+  it('uses docs v2 overwrite and explicit media binding for SCIM-style tables and SVG images', async () => {
+    const sourcePath = path.join(dir, 'scim-provisioning.md');
+    const fixturePath = path.join(import.meta.dirname, 'fixtures', 'scim-provisioning.md');
+    const staticDir = path.join(dir, 'static');
+    await mkdir(path.join(staticDir, 'img'), { recursive: true });
+    await writeFile(sourcePath, await readFile(fixturePath, 'utf8'));
+    await writeFile(
+      path.join(staticDir, 'img', 'scim-provisioning-workflow.svg'),
+      await readFile(path.join(import.meta.dirname, 'fixtures', 'static', 'img', 'scim-provisioning-workflow.svg'), 'utf8')
+    );
+    const afterOverwrite = [
+      {
+        block_id: 'about',
+        block_type: 4,
+        heading2: { elements: [{ text_run: { content: 'About SCIM provisioning in Zilliz Cloud', text_element_style: {} } }] }
+      },
+      {
+        block_id: 'anchor',
+        block_type: 2,
+        text: {
+          elements: [{
+            text_run: {
+              content: 'SCIM provisioning in Zilliz Cloud is an identity synchronization workflow between your IdP and your Zilliz Cloud organization. Your IdP acts as the SCIM client and remains the source of truth for users, groups, and group memberships. Zilliz Cloud acts as the SCIM 2.0 server, receives provisioning requests from the IdP, and represents the synced identities in your organization.',
+              text_element_style: {}
+            }
+          }]
+        }
+      },
+      { block_id: 'syncs', block_type: 4, heading2: { elements: [] } },
+      { block_id: 'table', block_type: 31, table: { property: { row_size: 3, column_size: 3 }, cells: [] } }
+    ];
+    const afterMedia = [
+      afterOverwrite[0],
+      afterOverwrite[1],
+      {
+        block_id: 'image-block',
+        block_type: 27,
+        image: {
+          token: 'svg-token',
+          width: 900,
+          height: 393,
+          content_type: 'image/svg+xml'
+        }
+      },
+      afterOverwrite[2],
+      afterOverwrite[3]
+    ];
+    const client = fakeDocxV2Client({
+      afterOverwrite,
+      afterMedia,
+      createdImageBlockId: 'image-block',
+      uploadedToken: 'svg-token'
+    });
+
+    const result = await runSync(client, {
+      sourcePath,
+      documentId: 'doc1234567890123',
+      rootDir: dir,
+      dryRun: false,
+      yes: true,
+      forceInitialOverwrite: true,
+      writeBackend: 'docx-v2-overwrite',
+      imageRootDir: staticDir,
+      imageDimensions: {
+        '/img/scim-provisioning-workflow.svg': { width: 900, height: 393 }
+      }
+    });
+
+    expect(client.overwriteDocumentMarkdown).toHaveBeenCalledOnce();
+    const overwrittenMarkdown = client.overwriteDocumentMarkdown.mock.calls[0][1] as string;
+    expect(overwrittenMarkdown).not.toContain('slug: /scim-provisioning');
+    expect(overwrittenMarkdown).not.toContain('![');
+    expect(overwrittenMarkdown).toContain('| Area | Synced by SCIM | Where to manage changes |');
+    expect(client.createChildren).toHaveBeenCalledWith('doc1234567890123', 'page', [{ block_type: 27, image: {} }], { index: 2 });
+    expect(client.uploadMediaFile).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: path.join(staticDir, 'img', 'scim-provisioning-workflow.svg'),
+      parentNode: 'image-block',
+      parentType: 'docx_image'
+    }));
+    expect(client.batchUpdateBlocks).toHaveBeenCalledWith('doc1234567890123', [{
+      block_id: 'image-block',
+      replace_image: {
+        token: 'svg-token',
+        width: 900,
+        height: 393
+      }
+    }]);
+    expect(result.docxV2?.verification).toEqual({
+      tablesExpected: 1,
+      tablesReadback: 1,
+      mediaExpected: 1,
+      mediaReadback: 1
+    });
+    expect(result.receipt.writeResult).toMatchObject({ mode: 'write', created: 5, deleted: 0, skipped: false });
+  });
+
   it('writes receipts to an explicit receipt directory', async () => {
     const sourcePath = path.join(dir, 'doc.md');
     const receiptDir = path.join(dir, 'custom-receipts');
@@ -1066,4 +1162,48 @@ function fakeClient(readbackChildren: FeishuBlock[], initialChildren: FeishuBloc
     createChildren: vi.fn(async (_documentId: string, _parentBlockId: string, blocks: FeishuBlock[]) => blocks),
     batchUpdateBlocks: vi.fn(async () => [])
   };
+}
+
+function fakeDocxV2Client(input: {
+  afterOverwrite: FeishuBlock[];
+  afterMedia: FeishuBlock[];
+  createdImageBlockId: string;
+  uploadedToken: string;
+}): FeishuDocClient & {
+  deleteChildren: ReturnType<typeof vi.fn>;
+  createChildren: ReturnType<typeof vi.fn>;
+  batchUpdateBlocks: ReturnType<typeof vi.fn>;
+  overwriteDocumentMarkdown: ReturnType<typeof vi.fn>;
+  uploadMediaFile: ReturnType<typeof vi.fn>;
+} {
+  let blocks = blockList([]);
+  const client = {
+    getDocumentBlocks: vi.fn(async () => blocks),
+    deleteChildren: vi.fn(async () => undefined),
+    createChildren: vi.fn(async (_documentId: string, _parentBlockId: string, created: FeishuBlock[]) => {
+      blocks = blockList([
+        input.afterOverwrite[0],
+        input.afterOverwrite[1],
+        { block_id: input.createdImageBlockId, ...created[0] },
+        ...input.afterOverwrite.slice(2)
+      ]);
+      return [{ block_id: input.createdImageBlockId, ...created[0] }];
+    }),
+    batchUpdateBlocks: vi.fn(async () => {
+      blocks = blockList(input.afterMedia);
+      return input.afterMedia.filter((block) => block.block_id === input.createdImageBlockId);
+    }),
+    overwriteDocumentMarkdown: vi.fn(async () => {
+      blocks = blockList(input.afterOverwrite);
+    }),
+    uploadMediaFile: vi.fn(async () => ({ token: input.uploadedToken, contentType: 'image/svg+xml' }))
+  };
+  return client;
+}
+
+function blockList(children: FeishuBlock[]): FeishuBlock[] {
+  return [
+    { block_id: 'page', block_type: 1, children: children.map((child, index) => child.block_id ?? `child-${index}`) },
+    ...children.map((child, index) => ({ block_id: child.block_id ?? `child-${index}`, ...child }))
+  ];
 }

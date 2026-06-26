@@ -99,6 +99,12 @@ Allow full document replacement only when the dry-run recommends it and replacem
 npm exec -- md2feishu push ./doc.md DocToken --strategy document-replace --replace-all --write --yes
 ```
 
+For whole-document pushes with important Markdown tables or local images/SVGs, use docs v2 overwrite plus explicit media upload:
+
+```bash
+npm exec -- md2feishu push ./doc.md DocToken --write-backend docx-v2-overwrite --image-root-dir ./static --image-size /img/diagram.svg=900x393 --replace-all --write --yes
+```
+
 Supported target forms:
 
 ```bash

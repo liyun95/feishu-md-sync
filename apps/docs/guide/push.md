@@ -108,6 +108,34 @@ md2feishu push doc.md '<feishu-doc>' --strategy document-replace --replace-all -
 
 Use this only when replacing the existing Feishu document is intentional.
 
+### Use docs v2 overwrite for tables and local media
+
+For whole-document updates where Feishu's native Markdown renderer handles tables better than block patching, or where local images/SVGs must be uploaded exactly, use the docs v2 overwrite backend:
+
+```bash
+md2feishu push doc.md '<feishu-doc>' \
+  --write-backend docx-v2-overwrite \
+  --image-root-dir ./static \
+  --image-size /img/diagram.svg=900x393
+```
+
+This backend removes local Markdown image syntax from the Markdown body, writes the body with docs v2 Markdown overwrite, then uploads each local image and binds it to a Feishu image block. It is a whole-document replacement path, so the write still requires `--replace-all`:
+
+```bash
+md2feishu push doc.md '<feishu-doc>' \
+  --write-backend docx-v2-overwrite \
+  --image-root-dir ./static \
+  --image-size /img/diagram.svg=900x393 \
+  --replace-all --write --yes
+```
+
+After the write, check the docs v2 readback lines:
+
+```text
+Docs v2 table readback: 2/2
+Docs v2 media readback: 1/1
+```
+
 ## How it works
 
 ### Decision flow
@@ -123,6 +151,8 @@ Feishu push starts with a dry-run strategy plan. The safest normal path is `bloc
 | `block-patch` | Small block updates, creates, or deletes when the local and remote structure can be matched safely. | Low | Review the dry-run counts and write after approval. |
 | `section-replace` | Recreates one heading section when block-level patching is unsafe but the change is still bounded to a unique heading. | Medium | Confirm that replacing the whole section is intentional. |
 | `document-replace` | Replaces the whole Feishu document content. | High | Requires `--replace-all` and explicit human intent. |
+
+`--write-backend docx-v2-overwrite` is not a smaller strategy. It is an alternate whole-document backend for native Feishu Markdown table rendering plus explicit local image/SVG upload and bind.
 
 The strategy is selected by the dry-run. Do not force a larger strategy unless the dry-run explains why the smaller strategy is unsafe.
 
@@ -147,6 +177,8 @@ The default safe path is:
 5. Visually inspect the rendered Feishu document when content changed.
 
 Do not use `--replace-all` unless replacing the whole document is intentional.
+
+Do not use `--write-backend docx-v2-overwrite` for scoped pushes. It overwrites the Markdown body and reinserts media as a whole-document operation.
 
 ### Completion check
 
@@ -207,6 +239,14 @@ diff -u doc.md doc.readback.md
 ### `Verification mismatch after write`
 
 Readback did not match the expected block state after the write. Stop and inspect the Feishu document before retrying. Do not rerun with a larger strategy until the mismatch is understood.
+
+### `docs v2 overwrite backend only supports whole-document writes`
+
+The docs v2 overwrite backend cannot be combined with `--scope`, `--insert-section`, or `--before-heading`. Use normal push for scoped edits, or run a whole-document dry-run with:
+
+```bash
+md2feishu push doc.md '<feishu-doc>' --write-backend docx-v2-overwrite
+```
 
 ### zsh rejects or changes a wiki URL
 

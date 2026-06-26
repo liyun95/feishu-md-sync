@@ -35,10 +35,13 @@ describe('workflow registry', () => {
       'dry-run',
       'write',
       'replace-all',
+      'docs-v2-overwrite',
       'visual-verify'
     ]);
     expect(recipe.steps[0].command).toBe('md2feishu push <doc.md> <feishu-doc>');
     expect(recipe.steps[2].command).toContain('--replace-all');
+    expect(recipe.steps[3].command).toContain('--write-backend docx-v2-overwrite');
+    expect(recipe.steps[3].verifies).toContain('table and media readback');
   });
 
   it('describes review-draft as the Milvus review workflow', () => {

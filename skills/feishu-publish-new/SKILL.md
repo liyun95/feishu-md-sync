@@ -34,6 +34,7 @@ Follow the returned steps.
 - For wiki publication, require `FEISHU_PUBLISH_FOLDER_TOKEN` or `--folder-token` because V1 creates a staging Drive docx before moving it into wiki.
 - If duplicate title candidates are reported, use the existing URL with `md2feishu push` unless the user explicitly wants a separate new document.
 - After write, verify the receipt exists and use the printed `md2feishu push <doc.md> '<new-url>'` command for subsequent updates.
+- If later updates include important tables or local images/SVGs, use `feishu-push` and its docs v2 overwrite backend rules rather than changing the first-publication workflow.
 
 ## Completion
 
