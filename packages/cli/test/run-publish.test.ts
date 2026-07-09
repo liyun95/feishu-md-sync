@@ -115,6 +115,38 @@ describe('runPublish', () => {
     }]);
   });
 
+  it('treats an empty block-patch as a no-op even when write is requested', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '# lark-cli-test\n\nMilvus stores vector data.', 'utf8');
+    const adapter = blockPatchAdapter({
+      beforeMarkdown: '# lark-cli-test\n\nMilvus stores vector data.\n',
+      afterMarkdown: '# lark-cli-test\n\nMilvus stores vector data.\n',
+      blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['p1'] },
+        textBlock('p1', 'Milvus stores vector data.')
+      ]
+    });
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.mode).toBe('dry-run');
+    expect(result.plan.strategy).toBe('no-op');
+    expect(result.plan.blockPatch?.operations).toEqual([]);
+    expect(adapter.calls).toEqual([]);
+    await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
+  });
+
   it('requires collaboration-risk confirmation before block-patch updates existing blocks', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
