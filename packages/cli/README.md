@@ -14,7 +14,8 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 | Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` skill or `md2feishu publish-new` |
 | Push local Markdown changes back to Feishu | `feishu-md-sync publish` |
 | Inspect a planned write before applying it | `feishu-md-sync publish` without `--write` |
-| Resolve local/remote drift | `md2feishu status`, `md2feishu diff`, and `md2feishu merge` |
+| Check publish readiness | `feishu-md-sync status` |
+| Resolve local/remote drift | `feishu-md-sync pull`, then review or use legacy `md2feishu diff` / `md2feishu merge` |
 | Work on multi-SDK examples, SDK references, or release notes | Use the matching workflow skill first |
 
 The CLI is dry-run-first. Commands that write to Feishu require `--write` and either interactive confirmation or `--yes`.
@@ -57,6 +58,12 @@ Pull the current Feishu document into a profile-filtered remote snapshot:
 
 ```bash
 npm exec -- feishu-md-sync pull --target DocToken --output feishu.remote.md --profile milvus
+```
+
+Check whether local and remote are ready for publish:
+
+```bash
+npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
 ```
 
 Refresh an existing local file only after reviewing the remote copy:

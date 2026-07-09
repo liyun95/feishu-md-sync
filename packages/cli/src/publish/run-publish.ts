@@ -10,11 +10,12 @@ import {
   writePublishReceipt,
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
-import { applyZillizPublishTransform } from '../transform/zilliz-publish.js';
+import { canonicalMarkdownHash } from '../core/markdown-canonical.js';
 import { findPageBlock, renderableDirectChildBlocks } from '../sync/block-state.js';
 import { planPublishBlockPatch, type PublishBlockPatchPlan } from './block-patch-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
 import { resolvePublishTitle } from '../sync/publish-new-plan.js';
+import { applyPublishTransformForProfile } from './profile-transform.js';
 
 export type RunPublishResult = {
   mode: 'dry-run' | 'write';
@@ -183,11 +184,6 @@ export async function runPublish(input: {
   throw new Error(`Write strategy ${plan.strategy} is not implemented in the first slice.`);
 }
 
-function applyPublishTransformForProfile(markdown: string, profile: PublishProfileName): { markdown: string; warnings: string[] } {
-  if (profile === 'zilliz') return applyZillizPublishTransform(markdown);
-  return { markdown, warnings: [] };
-}
-
 async function applyBlockPatch(input: {
   adapter: FeishuAdapter;
   doc: string;
@@ -271,18 +267,6 @@ function isWritableMarkdownBlockType(blockType: number): boolean {
 function isSimpleTableCellBlock(value: unknown): boolean {
   if (!isFeishuBlock(value)) return false;
   return value.block_type === 2 && (!Array.isArray(value.children) || value.children.length === 0);
-}
-
-function canonicalMarkdownHash(markdown: string): string {
-  return hashText(canonicalMarkdown(markdown));
-}
-
-function canonicalMarkdown(markdown: string): string {
-  return markdown
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+$/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 function markdownBodyForBlockPatch(publishDraft: string, remoteMarkdown: string): string {

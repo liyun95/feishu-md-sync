@@ -17,6 +17,7 @@ import { buildAuthDoctorReport } from '../env.js';
 import { runPublishNew } from '../../sync/publish-new.js';
 import { publishNewHelpAfter, publishNewJson, publishNewSummaryLines } from '../../sync/publish-new-output.js';
 import { runPull } from '../../pull/run-pull.js';
+import { runStatus } from '../../status/run-status.js';
 import { unifiedDiff } from '../../sync/diff.js';
 import { buildMergeInstructions, defaultMergedPath, threeWayMerge } from '../../sync/merge.js';
 import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull.js';
@@ -108,6 +109,8 @@ type PullCommandOptions = BaseCommandOptions & {
 };
 
 type StatusCommandOptions = BaseCommandOptions & {
+  target?: string;
+  profile?: string;
   format?: string;
   publishProfile?: string;
   reviewProfile?: string;
@@ -298,9 +301,11 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
 
   program
     .command('status')
-    .description('show local/remote sync status without writing')
+    .description('show local/remote publish status without writing; positional <feishu-doc> is legacy')
     .argument('<markdown-file>', 'local Markdown file')
-    .argument('<feishu-doc>', 'Feishu docx ID or URL')
+    .argument('[feishu-doc]', 'legacy Feishu docx ID or URL')
+    .option('--target <url-or-token>', 'new-core Feishu/Lark docx or wiki URL/token')
+    .option('--profile <profile>', 'publish profile for new-core status: zilliz | milvus | none')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--publish-profile <profile>', 'apply a publish transform profile: milvus')
@@ -309,8 +314,26 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
-    .action(async (markdownFile: string, feishuDoc: string, opts: StatusCommandOptions) => {
+    .action(async (markdownFile: string, feishuDoc: string | undefined, opts: StatusCommandOptions) => {
       const normalized = normalizeStatusOptions(program, opts);
+      if (normalized.target) {
+        if (feishuDoc) throw new Error('Use either --target or legacy <feishu-doc>, not both.');
+        const target = parseFeishuTarget(normalized.target);
+        if (target.kind === 'folder') throw new Error('status --target does not support Drive folder targets.');
+        const config = await loadSyncConfig({ cwd: process.cwd() });
+        const profile = resolvePublishProfile({ cliProfile: normalized.profile, config });
+        const status = await runStatus({
+          cwd: process.cwd(),
+          sourcePath: path.resolve(process.cwd(), markdownFile),
+          target,
+          profile,
+          adapter: new LarkCliAdapter()
+        });
+        printFormatted(status, normalized.format);
+        return;
+      }
+
+      if (!feishuDoc) throw new Error('status requires --target <doc> or legacy <feishu-doc>.');
       const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
       const documentId = await resolveDocumentId(client, feishuDoc);
       const status = await getSyncStatus(client, {
@@ -578,6 +601,8 @@ function normalizeStatusOptions(
   const publish = resolvePublishTransformOptions({ publishProfile, reviewProfile, linkBaseUrl });
   return {
     ...base,
+    target: optionFromArgv('--target') ?? commandOptionValue<string>(opts, 'target'),
+    profile: optionFromArgv('--profile') ?? commandOptionValue<string>(opts, 'profile'),
     format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? 'pretty',
     publishProfile: publish.publishProfile,
     reviewProfile,

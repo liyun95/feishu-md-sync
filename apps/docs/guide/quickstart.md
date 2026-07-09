@@ -87,6 +87,12 @@ Pull a remote snapshot before resolving remote edits:
 npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
 ```
 
+Check publish status:
+
+```bash
+npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
+```
+
 Write after inspecting the plan:
 
 ```bash

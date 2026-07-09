@@ -42,6 +42,10 @@ Create-only block patches do not require collaboration-risk confirmation because
 - `--write-receipt` writes an independent pull snapshot receipt under `.sync/feishu-md-sync/pulls/`.
 - Pull receipts do not affect publish receipts.
 
+## Status gates
+
+`status --target` is read-only. It reads the local Markdown file, the publish receipt, and the current remote Markdown export. It does not write local files, write receipts, fetch blocks, or plan a block patch. Use `publish` dry-run for the detailed write plan.
+
 ## Push strategy gates
 
 Push dry-run chooses the write strategy before any Feishu write:

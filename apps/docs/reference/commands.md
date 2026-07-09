@@ -270,10 +270,36 @@ md2feishu harness grade runs/<doc-token> --workflow multisdk --format json
 ## `status`
 
 ```bash
-md2feishu status <markdown-file> <feishu-doc> [--publish-profile milvus]
+feishu-md-sync status <markdown-file> --target <docx-or-wiki> [options]
 ```
 
-Shows local/remote sync state without writing.
+Options:
+
+- `--target <url-or-token>` - existing docx or Wiki node URL/token.
+- `--profile <profile>` - `zilliz`, `milvus`, or `none`.
+- `--format <format>` - `pretty` or `json`.
+
+Shows publish readiness without writing. It reads the local Markdown, applies the selected publish profile, fetches the current remote Markdown through `lark-cli docs +fetch`, and compares both sides with the publish receipt.
+
+States:
+
+- `untracked` - no publish receipt exists for this target.
+- `clean` - local publish draft and remote still match the last publish receipt.
+- `local-changed` - local publish draft changed while remote stayed at the last published state.
+- `remote-changed` - remote changed while local stayed at the last published state.
+- `diverged` - local publish draft and remote both changed.
+
+Check whether a publish would be safe:
+
+```bash
+feishu-md-sync status ./doc.md --target DocToken --profile zilliz --format json
+```
+
+Legacy positional status remains available for old workflows:
+
+```bash
+md2feishu status <markdown-file> <feishu-doc> [--publish-profile milvus]
+```
 
 ## `diff`
 
