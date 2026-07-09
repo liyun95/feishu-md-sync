@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
+import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
   hashText,
@@ -8,6 +9,8 @@ import {
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
 import { applyZillizPublishTransform } from '../transform/zilliz-publish.js';
+import { findPageBlock, renderableDirectChildBlocks } from '../sync/block-state.js';
+import { planPublishBlockPatch, type PublishBlockPatchPlan } from './block-patch-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
 import { resolvePublishTitle } from '../sync/publish-new-plan.js';
 
@@ -29,6 +32,8 @@ export async function runPublish(input: {
   create: boolean;
   strategy: 'auto' | PublishStrategy;
   confirmDestructive: boolean;
+  confirmCollaborationRisk?: boolean;
+  confirmUntrackedRemote?: boolean;
   adapter: FeishuAdapter;
 }): Promise<RunPublishResult> {
   if (input.write && input.strategy === 'document-replace' && !input.confirmDestructive) {
@@ -87,6 +92,14 @@ export async function runPublish(input: {
 
   const remote = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
+  const blockPatch = input.strategy === 'document-replace'
+    ? undefined
+    : await planBlockPatchIfAvailable({
+      adapter: input.adapter,
+      target: input.target,
+      publishDraft: transform.markdown,
+      warnings: transform.warnings
+    });
   const plan = buildPublishPlan({
     target: input.target,
     profile: input.profile,
@@ -94,7 +107,8 @@ export async function runPublish(input: {
     publishDraft: transform.markdown,
     remoteMarkdown: remote.markdown,
     receipt,
-    transformWarnings: transform.warnings
+    transformWarnings: transform.warnings,
+    blockPatch
   });
 
   if (!input.write || plan.strategy === 'no-op') return { mode: 'dry-run', plan };
@@ -130,4 +144,28 @@ export async function runPublish(input: {
 function applyPublishTransformForProfile(markdown: string, profile: PublishProfileName): { markdown: string; warnings: string[] } {
   if (profile === 'zilliz') return applyZillizPublishTransform(markdown);
   return { markdown, warnings: [] };
+}
+
+async function planBlockPatchIfAvailable(input: {
+  adapter: FeishuAdapter;
+  target: PublishReceiptTarget;
+  publishDraft: string;
+  warnings: string[];
+}): Promise<PublishBlockPatchPlan | undefined> {
+  if (input.target.kind !== 'docx' || !input.adapter.fetchDocBlocks) {
+    return undefined;
+  }
+
+  try {
+    const remote = await input.adapter.fetchDocBlocks({ doc: input.target.token });
+    const pageBlock = findPageBlock(remote.blocks, input.target.token);
+    return planPublishBlockPatch({
+      parentBlockId: pageBlock.block_id,
+      remoteBlocks: renderableDirectChildBlocks(remote.blocks, pageBlock),
+      desiredBlocks: markdownToFeishuBlocks(input.publishDraft)
+    });
+  } catch (error) {
+    input.warnings.push(`block-patch planning unavailable: ${(error as Error).message}`);
+    return undefined;
+  }
 }

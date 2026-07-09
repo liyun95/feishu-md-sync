@@ -68,6 +68,71 @@ describe('LarkCliAdapter', () => {
     ]]);
   });
 
+  it('fetches docx blocks through lark-cli raw api and paginates', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'bot',
+      exec: async (args) => {
+        calls.push(args);
+        const params = JSON.parse(args[args.indexOf('--params') + 1]) as { page_token?: string };
+        if (!params.page_token) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                items: [{ block_id: 'page', block_type: 1 }],
+                has_more: true,
+                page_token: 'next'
+              }
+            }),
+            stderr: ''
+          };
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              items: [{ block_id: 'p1', block_type: 2 }],
+              has_more: false
+            }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.fetchDocBlocks({ doc: 'doc_token' })).resolves.toEqual({
+      blocks: [
+        { block_id: 'page', block_type: 1 },
+        { block_id: 'p1', block_type: 2 }
+      ]
+    });
+    expect(calls).toEqual([
+      [
+        'api',
+        'GET',
+        '/open-apis/docx/v1/documents/doc_token/blocks',
+        '--params',
+        '{"page_size":500,"document_revision_id":-1}',
+        '--format',
+        'json',
+        '--as',
+        'bot'
+      ],
+      [
+        'api',
+        'GET',
+        '/open-apis/docx/v1/documents/doc_token/blocks',
+        '--params',
+        '{"page_size":500,"document_revision_id":-1,"page_token":"next"}',
+        '--format',
+        'json',
+        '--as',
+        'bot'
+      ]
+    ]);
+  });
+
   it('creates a Markdown doc under a parent token through lark-cli docs +create', async () => {
     const calls: string[][] = [];
     const adapter = new LarkCliAdapter({

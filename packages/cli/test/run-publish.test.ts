@@ -34,6 +34,79 @@ describe('runPublish', () => {
     expect(writes).toEqual([]);
   });
 
+  it('includes a block-patch plan during dry-run when remote blocks are available', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Milvus stores vectors.' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'page', block_type: 1, children: ['p1'] },
+          {
+            block_id: 'p1',
+            block_type: 2,
+            text: {
+              elements: [{ text_run: { content: 'Milvus stores vectors.', text_element_style: {} } }]
+            }
+          }
+        ]
+      }),
+      replaceDocument: async () => {}
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.mode).toBe('dry-run');
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(result.plan.requiresUntrackedRemoteConfirmation).toBe(true);
+    expect(result.plan.blockPatch?.operations).toEqual([{
+      kind: 'update',
+      remoteBlockId: 'p1',
+      path: [0],
+      blockType: 2
+    }]);
+  });
+
+  it('falls back to document-replace planning when block fetch is unavailable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Milvus stores vectors.' }),
+      fetchDocBlocks: async () => {
+        throw new Error('missing docx block permission');
+      },
+      replaceDocument: async () => {}
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('document-replace');
+    expect(result.plan.warnings).toContain('block-patch planning unavailable: missing docx block permission');
+  });
+
   it('refuses document replace without explicit destructive strategy', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
@@ -84,6 +157,39 @@ describe('runPublish', () => {
       profile: 'zilliz',
       target: { kind: 'docx', token: 'doc_token' }
     });
+  });
+
+  it('honors explicit document-replace even when block planning is available', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    const writes: string[] = [];
+    let blockFetches = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: writes.at(-1) ?? 'Milvus stores vectors.', revision: 'rev1' }),
+      fetchDocBlocks: async () => {
+        blockFetches += 1;
+        return { blocks: [] };
+      },
+      replaceDocument: async ({ markdown }) => { writes.push(markdown); }
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'document-replace',
+      confirmDestructive: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(result.plan.strategy).toBe('document-replace');
+    expect(blockFetches).toBe(0);
+    expect(writes).toEqual(['Milvus stores vector data.']);
   });
 
   it('creates a new remote document under a folder target and records a receipt for the created doc', async () => {

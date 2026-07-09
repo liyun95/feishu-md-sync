@@ -1,6 +1,12 @@
+import type { FeishuBlock } from '../feishu/types.js';
+
 export type RemoteMarkdown = {
   markdown: string;
   revision?: string;
+};
+
+export type RemoteBlocks = {
+  blocks: FeishuBlock[];
 };
 
 export type CreatedDocument = {
@@ -11,6 +17,7 @@ export type CreatedDocument = {
 
 export type FeishuAdapter = {
   fetchDocMarkdown(input: { doc: string }): Promise<RemoteMarkdown>;
+  fetchDocBlocks?(input: { doc: string }): Promise<RemoteBlocks>;
   replaceDocument(input: { doc: string; markdown: string }): Promise<void>;
   createDocument(input: { title: string; markdown: string; parentToken: string }): Promise<CreatedDocument>;
 };

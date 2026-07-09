@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import type { CreatedDocument, FeishuAdapter, RemoteMarkdown } from './feishu-adapter.js';
+import type { FeishuBlock } from '../feishu/types.js';
+import type { CreatedDocument, FeishuAdapter, RemoteBlocks, RemoteMarkdown } from './feishu-adapter.js';
 
 export type LarkCliExecResult = {
   stdout: string;
@@ -36,6 +37,35 @@ export class LarkCliAdapter implements FeishuAdapter {
     }
     const revision = revisionFromData(data.data);
     return { markdown: content, revision };
+  }
+
+  async fetchDocBlocks(input: { doc: string }): Promise<RemoteBlocks> {
+    const blocks: FeishuBlock[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const params: Record<string, string | number> = {
+        page_size: 500,
+        document_revision_id: -1
+      };
+      if (pageToken) params.page_token = pageToken;
+
+      const result = await this.exec(withIdentity([
+        'api',
+        'GET',
+        `/open-apis/docx/v1/documents/${input.doc}/blocks`,
+        '--params',
+        JSON.stringify(params),
+        '--format',
+        'json'
+      ], this.identity));
+      const parsed = parseLarkCliJson(result);
+      const page = blockPageFromData(parsed.data);
+      blocks.push(...page.items);
+      pageToken = page.hasMore ? page.pageToken : undefined;
+    } while (pageToken);
+
+    return { blocks };
   }
 
   async replaceDocument(input: { doc: string; markdown: string }): Promise<void> {
@@ -156,4 +186,19 @@ function documentFromData(data: unknown): Record<string, unknown> | undefined {
   if (!data || typeof data !== 'object' || !('document' in data)) return undefined;
   const document = (data as { document?: unknown }).document;
   return document && typeof document === 'object' ? document as Record<string, unknown> : undefined;
+}
+
+function blockPageFromData(data: unknown): { items: FeishuBlock[]; hasMore: boolean; pageToken?: string } {
+  if (!data || typeof data !== 'object') {
+    return { items: [], hasMore: false };
+  }
+  const record = data as Record<string, unknown>;
+  const items = Array.isArray(record.items) ? record.items.filter(isFeishuBlock) : [];
+  const hasMore = record.has_more === true;
+  const pageToken = typeof record.page_token === 'string' ? record.page_token : undefined;
+  return { items, hasMore, pageToken };
+}
+
+function isFeishuBlock(value: unknown): value is FeishuBlock {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'block_type' in value);
 }

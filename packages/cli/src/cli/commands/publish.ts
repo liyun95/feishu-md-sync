@@ -51,6 +51,8 @@ export function registerPublishCommand(program: Command): void {
         create: requested.create,
         strategy: requested.strategy,
         confirmDestructive: requested.confirmDestructive,
+        confirmCollaborationRisk: requested.confirmCollaborationRisk,
+        confirmUntrackedRemote: requested.confirmUntrackedRemote,
         adapter: new LarkCliAdapter()
       });
 
