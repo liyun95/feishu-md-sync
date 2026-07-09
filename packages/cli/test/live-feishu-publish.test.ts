@@ -44,7 +44,47 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
 
     assertCliSuccess(write, 'guarded write publish');
     expect(write.stdout).toContain('"mode": "write"');
-  });
+  }, 30_000);
+
+  it.runIf(process.env.FEISHU_MD_SYNC_TEST_CREATE_PARENT)('creates a Zilliz draft under a test parent', async () => {
+    const target = requiredEnv('FEISHU_MD_SYNC_TEST_CREATE_PARENT');
+    const dir = await mkdtemp(join(tmpdir(), 'fms-live-create-'));
+    const file = join(dir, 'doc.md');
+    const title = `fms-live-create-${Date.now()}`;
+    await writeFile(file, `# ${title}\n\nMilvus stores vectors.`, 'utf8');
+
+    const dryRun = await runCli([
+      'publish',
+      file,
+      '--target',
+      target,
+      '--create',
+      '--profile',
+      'zilliz',
+      '--format',
+      'json'
+    ]);
+
+    assertCliSuccess(dryRun, 'dry-run create publish');
+    expect(dryRun.stdout).toContain('"strategy": "create-document"');
+
+    const write = await runCli([
+      'publish',
+      file,
+      '--target',
+      target,
+      '--create',
+      '--profile',
+      'zilliz',
+      '--write',
+      '--format',
+      'json'
+    ]);
+
+    assertCliSuccess(write, 'write create publish');
+    expect(write.stdout).toContain('"mode": "write"');
+    expect(write.stdout).toContain('"documentId"');
+  }, 30_000);
 });
 
 function assertCliSuccess(result: { stdout: string; stderr: string; status: number | null }, label: string): void {
@@ -62,7 +102,8 @@ function runCli(args: string[]): Promise<{ stdout: string; stderr: string; statu
   return new Promise((resolve) => {
     execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
       cwd: new URL('..', import.meta.url),
-      env: process.env
+      env: process.env,
+      timeout: 25_000
     }, (error, stdout, stderr) => {
       resolve({
         stdout,
