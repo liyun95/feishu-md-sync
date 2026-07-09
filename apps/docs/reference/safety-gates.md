@@ -2,8 +2,9 @@
 
 | Gate | Applies to | Why |
 | --- | --- | --- |
-| Dry-run default | `publish`, `publish-new`, `push`, `sync`, `code-blocks apply`, `multisdk apply`, `reference apply`, `release apply` | Prevent accidental writes. |
+| Dry-run default | `publish`, `publish-new`, `push`, `sync`, `code-blocks apply`, `multisdk apply`, `reference apply`, `release apply` | Prevent accidental Feishu writes. |
 | `--write` plus confirmation | Feishu and local docs writes | Requires explicit user intent. |
+| Pull overwrite gate | `pull --target` | Prevent a remote snapshot from replacing an existing local file without `--overwrite`. |
 | Receipt conflict check | `publish` block-patch and whole-document `sync` | Prevent overwriting remote edits. |
 | Heading scope uniqueness | `push --scope heading:"..."` | Prevent ambiguous scoped writes. |
 | Replace-all gate | `push --strategy document-replace --replace-all` | Prevent silent full-document replacement. |
@@ -31,6 +32,15 @@
 - Remote changes since the last publish receipt refuse auto/block-patch writes. Review or pull the remote changes before retrying, or explicitly choose guarded `document-replace`.
 
 Create-only block patches do not require collaboration-risk confirmation because they do not replace existing block identities. Update and delete operations require the confirmation because comments, anchors, or block identity can be affected.
+
+## Pull gates
+
+`pull --target` writes a local remote snapshot. It does not write to Feishu, does not merge, and does not replace the canonical local source by default.
+
+- `--output` is required.
+- Existing output files are refused unless `--overwrite` is present.
+- `--write-receipt` writes an independent pull snapshot receipt under `.sync/feishu-md-sync/pulls/`.
+- Pull receipts do not affect publish receipts.
 
 ## Push strategy gates
 

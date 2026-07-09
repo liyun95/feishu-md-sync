@@ -81,6 +81,12 @@ Run a dry-run for local Markdown to an existing Feishu document:
 npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
 ```
 
+Pull a remote snapshot before resolving remote edits:
+
+```bash
+npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
+```
+
 Write after inspecting the plan:
 
 ```bash

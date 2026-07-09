@@ -10,7 +10,7 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 
 | Need | Recommended entry |
 | --- | --- |
-| Pull a Feishu document into local Markdown before editing | `feishu-baseline-sync` skill or `md2feishu pull` |
+| Pull a Feishu document into a local remote snapshot | `feishu-md-sync pull` |
 | Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` skill or `md2feishu publish-new` |
 | Push local Markdown changes back to Feishu | `feishu-md-sync publish` |
 | Inspect a planned write before applying it | `feishu-md-sync publish` without `--write` |
@@ -53,18 +53,18 @@ The Feishu app also needs API permissions and document access. See the [Configur
 
 ## Direct CLI Examples
 
-Pull the current Feishu document into Markdown:
+Pull the current Feishu document into a profile-filtered remote snapshot:
 
 ```bash
-npm exec -- md2feishu pull '<feishu-doc>' --output feishu.remote.md --write-receipt
+npm exec -- feishu-md-sync pull --target DocToken --output feishu.remote.md --profile milvus
 ```
 
 Refresh an existing local file only after reviewing the remote copy:
 
 ```bash
-npm exec -- md2feishu pull '<feishu-doc>' --output feishu.remote.md
+npm exec -- feishu-md-sync pull --target DocToken --output feishu.remote.md --profile milvus
 diff -u doc.md feishu.remote.md
-npm exec -- md2feishu pull '<feishu-doc>' --output doc.md --overwrite --write-receipt
+npm exec -- feishu-md-sync pull --target DocToken --output feishu.remote.md --profile milvus --overwrite --write-receipt
 ```
 
 Dry-run a publish. The CLI chooses no-op, block-patch, or guarded document-replace from the local and remote state:

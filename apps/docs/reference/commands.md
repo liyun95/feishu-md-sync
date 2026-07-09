@@ -82,6 +82,52 @@ The `zilliz` profile transforms local Milvus-oriented Markdown for Zilliz Cloud 
 <include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include>
 ```
 
+## `pull`
+
+```bash
+feishu-md-sync pull --target <docx-or-wiki> --output <file.md> [options]
+```
+
+Options:
+
+- `--target <url-or-token>` - existing docx or Wiki node URL/token.
+- `--output <file>` - local remote snapshot file. Required in new-core target mode.
+- `--profile <profile>` - `zilliz`, `milvus`, or `none`.
+- `--overwrite` - allow replacing an existing output file.
+- `--write-receipt` - write an independent pull snapshot receipt.
+- `--format <format>` - `pretty` or `json`.
+
+Pull a reviewable remote snapshot:
+
+```bash
+feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
+```
+
+Pull the raw official Markdown export without profile filtering:
+
+```bash
+feishu-md-sync pull --target DocToken --output doc.remote.md --profile none
+```
+
+Refresh an existing snapshot only after review:
+
+```bash
+feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus --overwrite --write-receipt
+```
+
+`pull` uses `lark-cli docs +fetch --doc-format markdown` for the remote export. The custom layer only handles target parsing, profile filtering, overwrite protection, local write verification, and optional receipt writing.
+
+Pull output is a remote snapshot, not the canonical local source. It preserves the Feishu-exported H1 and does not merge or update the source Markdown file. Pull receipts are stored separately from publish receipts and do not make `publish` treat the source file as synchronized.
+
+Profile filtering interprets Feishu include/exclude tags for `milvus` and `zilliz`:
+
+```html
+<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include>
+<exclude target="zilliz">Milvus-only note.</exclude>
+```
+
+Use `--profile none` to keep those tags unchanged.
+
 ## `sync`
 
 ```bash

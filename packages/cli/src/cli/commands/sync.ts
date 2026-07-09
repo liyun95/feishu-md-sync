@@ -3,6 +3,8 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout } from 'node:process';
 import type { Command } from 'commander';
+import { LarkCliAdapter } from '../../adapters/lark-cli-adapter.js';
+import { loadSyncConfig, resolvePublishProfile } from '../../config/sync-config.js';
 import { parseFeishuTarget } from '../../core/doc-id.js';
 import { hashSource } from '../../core/hash.js';
 import type { FeishuClient } from '../../feishu/client.js';
@@ -14,6 +16,7 @@ import { readReceipt, receiptPathFor, writeReceipt, type SyncReceipt } from '../
 import { buildAuthDoctorReport } from '../env.js';
 import { runPublishNew } from '../../sync/publish-new.js';
 import { publishNewHelpAfter, publishNewJson, publishNewSummaryLines } from '../../sync/publish-new-output.js';
+import { runPull } from '../../pull/run-pull.js';
 import { unifiedDiff } from '../../sync/diff.js';
 import { buildMergeInstructions, defaultMergedPath, threeWayMerge } from '../../sync/merge.js';
 import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull.js';
@@ -30,6 +33,7 @@ import {
   syncReceiptRunContext,
   type SyncOutputContext
 } from '../sync-output.js';
+import { printFormatted } from '../output.js';
 
 type BaseCommandOptions = {
   host?: string;
@@ -93,7 +97,10 @@ type PublishNewCommandOptions = BaseCommandOptions & {
 };
 
 type PullCommandOptions = BaseCommandOptions & {
+  target?: string;
   output?: string;
+  profile?: string;
+  format?: string;
   markdownEngine?: string;
   overwrite?: boolean;
   writeReceipt?: boolean;
@@ -318,17 +325,41 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
 
   program
     .command('pull')
-    .description('export current Feishu docx content as best-effort Markdown')
-    .argument('<feishu-doc>', 'Feishu docx ID or URL')
+    .description('export current Feishu/Lark content as a local Markdown snapshot')
+    .argument('[feishu-doc]', 'legacy Feishu docx ID or URL')
+    .option('--target <url-or-token>', 'new-core Feishu/Lark docx or wiki URL/token')
     .option('-o, --output <file>', 'write remote Markdown to a local file')
+    .option('--profile <profile>', 'pull profile: zilliz | milvus | none')
     .option('--overwrite', 'allow pull to replace an existing output file')
     .option('--write-receipt', 'write a local baseline receipt after exporting to --output')
+    .option('--format <format>', 'output format for new-core --target mode: pretty | json', 'pretty')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
-    .action(async (feishuDoc: string, opts: PullCommandOptions) => {
+    .action(async (feishuDoc: string | undefined, opts: PullCommandOptions) => {
       const normalized = normalizePullOptions(program, opts);
+      if (normalized.target) {
+        if (feishuDoc) throw new Error('Use either --target or legacy <feishu-doc>, not both.');
+        if (!normalized.output) throw new Error('new-core pull requires --output <file>.');
+        const target = parseFeishuTarget(normalized.target);
+        if (target.kind === 'folder') throw new Error('pull --target does not support Drive folder targets.');
+        const config = await loadSyncConfig({ cwd: process.cwd() });
+        const profile = resolvePublishProfile({ cliProfile: normalized.profile, config });
+        const result = await runPull({
+          cwd: process.cwd(),
+          target,
+          outputPath: path.resolve(process.cwd(), normalized.output),
+          profile,
+          overwrite: normalized.overwrite === true,
+          writeReceipt: normalized.writeReceipt === true,
+          adapter: new LarkCliAdapter()
+        });
+        printFormatted(result, normalized.format);
+        return;
+      }
+
+      if (!feishuDoc) throw new Error('pull requires --target <doc> or legacy <feishu-doc>.');
       if (normalized.writeReceipt && !normalized.output) {
         throw new Error('--write-receipt requires --output <file>.');
       }
@@ -558,11 +589,14 @@ function normalizeStatusOptions(
   };
 }
 
-function normalizePullOptions(program: Command, opts: PullCommandOptions): PullCommandOptions & Required<BaseCommandOptions> & { markdownEngine: MarkdownEngineName; receiptDir?: string } {
+function normalizePullOptions(program: Command, opts: PullCommandOptions): PullCommandOptions & Required<BaseCommandOptions> & { format: string; markdownEngine: MarkdownEngineName; receiptDir?: string } {
   const base = normalizeBaseOptions(program, opts);
   return {
     ...base,
+    target: optionFromArgv('--target') ?? commandOptionValue<string>(opts, 'target'),
     output: optionFromArgv('--output') ?? optionFromArgv('-o') ?? commandOptionValue<string>(opts, 'output'),
+    profile: optionFromArgv('--profile') ?? commandOptionValue<string>(opts, 'profile'),
+    format: optionFromArgv('--format') ?? commandOptionValue<string>(opts, 'format') ?? 'pretty',
     overwrite: flagFromArgv('--overwrite') ?? commandOptionValue<boolean>(opts, 'overwrite'),
     writeReceipt: flagFromArgv('--write-receipt') ?? commandOptionValue<boolean>(opts, 'writeReceipt'),
     markdownEngine: parseMarkdownEngine(optionFromArgv('--markdown-engine') ?? commandOptionValue<string>(opts, 'markdownEngine') ?? 'auto'),
