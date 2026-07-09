@@ -82,6 +82,7 @@ describe('publish block patch plan', () => {
     expect(plan.operations).toEqual([{
       kind: 'create',
       parentBlockId: 'callout1',
+      insertAfterBlockId: 'p1',
       index: 1,
       path: [0, 1],
       blocks: [paragraph(undefined, 'New note.')]
@@ -113,6 +114,28 @@ describe('publish block patch plan', () => {
 
     expect(plan.safeToWrite).toBe(false);
     expect(plan.fallbackReason).toBe('whiteboard block changed at 0');
+  });
+
+  it('refuses to delete complex Feishu-only blocks', () => {
+    const plan = planPublishBlockPatch({
+      parentBlockId: 'page',
+      remoteBlocks: [{ block_id: 'callout1', block_type: 19, callout: {}, children: [] }],
+      desiredBlocks: []
+    });
+
+    expect(plan.safeToWrite).toBe(false);
+    expect(plan.fallbackReason).toBe('delete block_type 19 is unsupported at 0');
+  });
+
+  it('refuses to create complex Feishu-only blocks', () => {
+    const plan = planPublishBlockPatch({
+      parentBlockId: 'page',
+      remoteBlocks: [],
+      desiredBlocks: [{ block_type: 43, whiteboard: { token: 'new' } }]
+    });
+
+    expect(plan.safeToWrite).toBe(false);
+    expect(plan.fallbackReason).toBe('create block_type 43 is unsupported at 0');
   });
 });
 

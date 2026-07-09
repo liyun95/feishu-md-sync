@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
+import type { FeishuBlock } from '../feishu/types.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
+import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
   hashText,
@@ -113,6 +115,42 @@ export async function runPublish(input: {
 
   if (!input.write || plan.strategy === 'no-op') return { mode: 'dry-run', plan };
 
+  if (plan.strategy === 'block-patch') {
+    if (input.strategy !== 'auto' && input.strategy !== 'block-patch') {
+      throw new Error('block-patch requires --strategy auto or --strategy block-patch');
+    }
+    if (plan.requiresUntrackedRemoteConfirmation && !input.confirmUntrackedRemote) {
+      throw new Error('block-patch for an untracked remote requires --confirm-untracked-remote');
+    }
+    if (plan.requiresCollaborationRiskConfirmation && !input.confirmCollaborationRisk) {
+      throw new Error('block-patch replacing or deleting existing blocks requires --confirm-collaboration-risk');
+    }
+    await applyBlockPatch({
+      adapter: input.adapter,
+      doc: input.target.token,
+      plan,
+      desiredBlocks: markdownToFeishuBlocks(transform.markdown)
+    });
+    const after = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
+    if (canonicalMarkdownHash(after.markdown) !== canonicalMarkdownHash(transform.markdown)) {
+      throw new Error('block-patch readback verification failed: remote Markdown differs from publish draft');
+    }
+    await writePublishReceipt({
+      cwd: input.cwd,
+      receipt: {
+        version: 1,
+        target: input.target,
+        profile: input.profile,
+        localSourceHash: plan.localSourceHash,
+        publishDraftHash: plan.publishDraftHash,
+        remoteSnapshotHash: hashText(after.markdown),
+        remoteRevision: after.revision,
+        updatedAt: new Date().toISOString()
+      }
+    });
+    return { mode: 'write', plan };
+  }
+
   if (plan.strategy === 'document-replace') {
     if (input.strategy !== 'document-replace') {
       throw new Error('document-replace requires --strategy document-replace');
@@ -146,6 +184,103 @@ function applyPublishTransformForProfile(markdown: string, profile: PublishProfi
   return { markdown, warnings: [] };
 }
 
+async function applyBlockPatch(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  plan: PublishPlan;
+  desiredBlocks: FeishuBlock[];
+}): Promise<void> {
+  if (!input.plan.blockPatch) {
+    throw new Error('block-patch write is missing a block patch plan');
+  }
+  if (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks) {
+    throw new Error('Configured Feishu adapter does not support block-patch writes');
+  }
+
+  for (const operation of input.plan.blockPatch.operations) {
+    if (operation.kind === 'update') {
+      const block = blockAtPath(input.desiredBlocks, operation.path);
+      if (!block) throw new Error(`block-patch update missing desired block at ${operation.path.join('.')}`);
+      await input.adapter.replaceBlock({
+        doc: input.doc,
+        blockId: operation.remoteBlockId,
+        markdown: markdownForWritableBlocks([block])
+      });
+      continue;
+    }
+
+    if (operation.kind === 'create') {
+      await input.adapter.insertBlocksAfter({
+        doc: input.doc,
+        blockId: operation.insertAfterBlockId,
+        markdown: markdownForWritableBlocks(operation.blocks)
+      });
+      continue;
+    }
+
+    await input.adapter.deleteBlocks({
+      doc: input.doc,
+      blockIds: operation.blockIds
+    });
+  }
+}
+
+function blockAtPath(blocks: FeishuBlock[], path: number[]): FeishuBlock | undefined {
+  let currentBlocks = blocks;
+  let current: FeishuBlock | undefined;
+  for (const index of path) {
+    current = currentBlocks[index];
+    if (!current) return undefined;
+    currentBlocks = Array.isArray(current.children) && current.children.every(isFeishuBlock)
+      ? current.children
+      : [];
+  }
+  return current;
+}
+
+function markdownForWritableBlocks(blocks: FeishuBlock[]): string {
+  for (const block of blocks) {
+    assertWritableMarkdownBlock(block);
+  }
+  return feishuBlocksToMarkdown(blocks).trim();
+}
+
+function assertWritableMarkdownBlock(block: FeishuBlock): void {
+  if (!isWritableMarkdownBlockType(block.block_type)) {
+    throw new Error(`block-patch write does not support block_type ${block.block_type}`);
+  }
+  if (Array.isArray(block.children) && block.children.length > 0) {
+    throw new Error(`block-patch write does not support nested children for block_type ${block.block_type}`);
+  }
+  if (block.block_type === 31) {
+    const cells = (block.table as { cells?: unknown[] } | undefined)?.cells ?? [];
+    if (!cells.every(isSimpleTableCellBlock)) {
+      throw new Error('block-patch write only supports simple Markdown table cells');
+    }
+  }
+}
+
+function isWritableMarkdownBlockType(blockType: number): boolean {
+  return blockType === 2 || (blockType >= 3 && blockType <= 8) || blockType === 12 || blockType === 13 || blockType === 14 || blockType === 31;
+}
+
+function isSimpleTableCellBlock(value: unknown): boolean {
+  if (!isFeishuBlock(value)) return false;
+  return value.block_type === 2 && (!Array.isArray(value.children) || value.children.length === 0);
+}
+
+function canonicalMarkdownHash(markdown: string): string {
+  return hashText(canonicalMarkdown(markdown));
+}
+
+function canonicalMarkdown(markdown: string): string {
+  return markdown
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 async function planBlockPatchIfAvailable(input: {
   adapter: FeishuAdapter;
   target: PublishReceiptTarget;
@@ -168,4 +303,8 @@ async function planBlockPatchIfAvailable(input: {
     input.warnings.push(`block-patch planning unavailable: ${(error as Error).message}`);
     return undefined;
   }
+}
+
+function isFeishuBlock(value: unknown): value is FeishuBlock {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'block_type' in value);
 }

@@ -79,6 +79,160 @@ describe('runPublish', () => {
     }]);
   });
 
+  it('requires collaboration-risk confirmation before block-patch updates existing blocks', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    const adapter = blockPatchAdapter({
+      beforeMarkdown: 'Milvus stores vectors.',
+      afterMarkdown: 'Milvus stores vector data.',
+      blocks: [
+        { block_id: 'page', block_type: 1, children: ['p1'] },
+        textBlock('p1', 'Milvus stores vectors.')
+      ]
+    });
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    })).rejects.toThrow('block-patch replacing or deleting existing blocks requires --confirm-collaboration-risk');
+    expect(adapter.calls).toEqual([]);
+  });
+
+  it('writes a confirmed block-patch update and records a receipt after readback verification', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    const adapter = blockPatchAdapter({
+      beforeMarkdown: 'Milvus stores vectors.',
+      afterMarkdown: 'Milvus stores vector data.',
+      blocks: [
+        { block_id: 'page', block_type: 1, children: ['p1'] },
+        textBlock('p1', 'Milvus stores vectors.')
+      ]
+    });
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(adapter.calls).toEqual(['replace:p1:Milvus stores vector data.']);
+    await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toMatchObject({
+      profile: 'none',
+      target: { kind: 'docx', token: 'doc_token' }
+    });
+  });
+
+  it('writes a block-patch create with the planned insert anchor', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'First paragraph.\n\nSecond paragraph.', 'utf8');
+    const adapter = blockPatchAdapter({
+      beforeMarkdown: 'First paragraph.',
+      afterMarkdown: 'First paragraph.\n\nSecond paragraph.',
+      blocks: [
+        { block_id: 'page', block_type: 1, children: ['p1'] },
+        textBlock('p1', 'First paragraph.')
+      ]
+    });
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'block-patch',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(adapter.calls).toEqual(['insert-after:p1:Second paragraph.']);
+  });
+
+  it('writes a confirmed block-patch delete', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'First paragraph.', 'utf8');
+    const adapter = blockPatchAdapter({
+      beforeMarkdown: 'First paragraph.\n\nSecond paragraph.',
+      afterMarkdown: 'First paragraph.',
+      blocks: [
+        { block_id: 'page', block_type: 1, children: ['p1', 'p2'] },
+        textBlock('p1', 'First paragraph.'),
+        textBlock('p2', 'Second paragraph.')
+      ]
+    });
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'block-patch',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(adapter.calls).toEqual(['delete:p2']);
+  });
+
+  it('refuses to write a receipt when block-patch readback verification fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    const adapter = blockPatchAdapter({
+      beforeMarkdown: 'Milvus stores vectors.',
+      afterMarkdown: 'Unexpected remote.',
+      blocks: [
+        { block_id: 'page', block_type: 1, children: ['p1'] },
+        textBlock('p1', 'Milvus stores vectors.')
+      ]
+    });
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      confirmUntrackedRemote: true,
+      adapter
+    })).rejects.toThrow('block-patch readback verification failed');
+    await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
+  });
+
   it('falls back to document-replace planning when block fetch is unavailable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
@@ -289,3 +443,43 @@ describe('runPublish', () => {
     ]);
   });
 });
+
+function textBlock(blockId: string, text: string): { block_id: string; block_type: number; text: { elements: Array<{ text_run: { content: string; text_element_style: Record<string, never> } }> } } {
+  return {
+    block_id: blockId,
+    block_type: 2,
+    text: {
+      elements: [{ text_run: { content: text, text_element_style: {} } }]
+    }
+  };
+}
+
+function blockPatchAdapter(input: {
+  beforeMarkdown: string;
+  afterMarkdown: string;
+  blocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+}): FeishuAdapter & { calls: string[] } {
+  let written = false;
+  const calls: string[] = [];
+  return {
+    calls,
+    fetchDocMarkdown: async () => ({
+      markdown: written ? input.afterMarkdown : input.beforeMarkdown,
+      revision: written ? 'after' : 'before'
+    }),
+    fetchDocBlocks: async () => ({ blocks: input.blocks }),
+    replaceDocument: async () => {},
+    replaceBlock: async ({ blockId, markdown }) => {
+      calls.push(`replace:${blockId}:${markdown}`);
+      written = true;
+    },
+    insertBlocksAfter: async ({ blockId, markdown }) => {
+      calls.push(`insert-after:${blockId}:${markdown}`);
+      written = true;
+    },
+    deleteBlocks: async ({ blockIds }) => {
+      calls.push(`delete:${blockIds.join(',')}`);
+      written = true;
+    }
+  };
+}

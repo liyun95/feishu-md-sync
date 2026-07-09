@@ -133,6 +133,74 @@ describe('LarkCliAdapter', () => {
     ]);
   });
 
+  it('updates blocks through lark-cli docs +update markdown commands', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'bot',
+      exec: async (args) => {
+        calls.push(args);
+        return { stdout: JSON.stringify({ ok: true, data: { result: 'success' } }), stderr: '' };
+      }
+    });
+
+    await adapter.replaceBlock({ doc: 'doc_token', blockId: 'p1', markdown: 'New paragraph.' });
+    await adapter.insertBlocksAfter({ doc: 'doc_token', blockId: 'p1', markdown: '- New item' });
+    await adapter.deleteBlocks({ doc: 'doc_token', blockIds: ['p2', 'p3'] });
+
+    expect(calls).toEqual([
+      [
+        'docs',
+        '+update',
+        '--doc',
+        'doc_token',
+        '--command',
+        'block_replace',
+        '--block-id',
+        'p1',
+        '--doc-format',
+        'markdown',
+        '--content',
+        'New paragraph.',
+        '--format',
+        'json',
+        '--as',
+        'bot'
+      ],
+      [
+        'docs',
+        '+update',
+        '--doc',
+        'doc_token',
+        '--command',
+        'block_insert_after',
+        '--block-id',
+        'p1',
+        '--doc-format',
+        'markdown',
+        '--content',
+        '- New item',
+        '--format',
+        'json',
+        '--as',
+        'bot'
+      ],
+      [
+        'docs',
+        '+update',
+        '--doc',
+        'doc_token',
+        '--command',
+        'block_delete',
+        '--block-id',
+        'p2,p3',
+        '--format',
+        'json',
+        '--as',
+        'bot'
+      ]
+    ]);
+  });
+
   it('creates a Markdown doc under a parent token through lark-cli docs +create', async () => {
     const calls: string[][] = [];
     const adapter = new LarkCliAdapter({

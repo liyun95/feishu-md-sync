@@ -85,6 +85,39 @@ export class LarkCliAdapter implements FeishuAdapter {
     ], this.identity)));
   }
 
+  async replaceBlock(input: { doc: string; blockId: string; markdown: string }): Promise<void> {
+    await this.updateMarkdownBlock({
+      doc: input.doc,
+      command: 'block_replace',
+      blockId: input.blockId,
+      markdown: input.markdown
+    });
+  }
+
+  async insertBlocksAfter(input: { doc: string; blockId: string; markdown: string }): Promise<void> {
+    await this.updateMarkdownBlock({
+      doc: input.doc,
+      command: 'block_insert_after',
+      blockId: input.blockId,
+      markdown: input.markdown
+    });
+  }
+
+  async deleteBlocks(input: { doc: string; blockIds: string[] }): Promise<void> {
+    parseLarkCliJson(await this.exec(withIdentity([
+      'docs',
+      '+update',
+      '--doc',
+      input.doc,
+      '--command',
+      'block_delete',
+      '--block-id',
+      input.blockIds.join(','),
+      '--format',
+      'json'
+    ], this.identity)));
+  }
+
   async createDocument(input: { title: string; markdown: string; parentToken: string }): Promise<CreatedDocument> {
     const data = parseLarkCliJson(await this.exec(withIdentity([
       'docs',
@@ -115,6 +148,30 @@ export class LarkCliAdapter implements FeishuAdapter {
         ? String(document.revision_id)
         : undefined
     };
+  }
+
+  private async updateMarkdownBlock(input: {
+    doc: string;
+    command: 'block_replace' | 'block_insert_after';
+    blockId: string;
+    markdown: string;
+  }): Promise<void> {
+    parseLarkCliJson(await this.exec(withIdentity([
+      'docs',
+      '+update',
+      '--doc',
+      input.doc,
+      '--command',
+      input.command,
+      '--block-id',
+      input.blockId,
+      '--doc-format',
+      'markdown',
+      '--content',
+      input.markdown,
+      '--format',
+      'json'
+    ], this.identity)));
   }
 }
 

@@ -84,6 +84,7 @@ describe('publish plan', () => {
         operations: [{
           kind: 'create',
           parentBlockId: 'page',
+          insertAfterBlockId: 'p1',
           index: 1,
           path: [1],
           blocks: [{ block_type: 2, text: { elements: [] } }]
@@ -152,6 +153,7 @@ describe('publish plan', () => {
         operations: [{
           kind: 'create',
           parentBlockId: 'page',
+          insertAfterBlockId: 'p1',
           index: 1,
           path: [1],
           blocks: [{ block_type: 2, text: { elements: [] } }]
