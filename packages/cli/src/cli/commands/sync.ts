@@ -154,7 +154,7 @@ const DEFAULT_REVIEW_DRAFT_LINK_BASE_URL = 'https://milvus.io/docs/';
 
 export function registerSyncCommands(program: Command, context: CliContext): void {
   program
-    .name('md2feishu')
+    .name('feishu-md-sync')
     .description('Sync one local Markdown file to an existing Feishu document. Defaults to dry-run.')
     .argument('[markdown-file]', 'local Markdown file')
     .argument('[feishu-doc]', 'Feishu docx ID or URL')

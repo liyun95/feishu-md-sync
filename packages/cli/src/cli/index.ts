@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { registerCodeBlockCommands } from './commands/code-blocks.js';
 import { registerHarnessCommands } from './commands/harness.js';
 import { registerMultisdkCommands } from './commands/multisdk.js';
+import { registerPublishCommand } from './commands/publish.js';
 import { registerReferenceCommands } from './commands/reference.js';
 import { registerReleaseCommands } from './commands/release.js';
 import { registerSyncCommands } from './commands/sync.js';
@@ -16,6 +17,8 @@ const envLoadReport = loadCliEnv({ moduleUrl: import.meta.url });
 const cliContext = createCliContext(envLoadReport);
 
 registerSyncCommands(program, cliContext);
+
+registerPublishCommand(program);
 
 const doctor = program
   .command('doctor')
