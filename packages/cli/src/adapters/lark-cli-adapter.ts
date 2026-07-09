@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import type { FeishuAdapter, RemoteMarkdown } from './feishu-adapter.js';
+import type { CreatedDocument, FeishuAdapter, RemoteMarkdown } from './feishu-adapter.js';
 
 export type LarkCliExecResult = {
   stdout: string;
@@ -53,6 +53,38 @@ export class LarkCliAdapter implements FeishuAdapter {
       '--format',
       'json'
     ], this.identity)));
+  }
+
+  async createDocument(input: { title: string; markdown: string; parentToken: string }): Promise<CreatedDocument> {
+    const data = parseLarkCliJson(await this.exec(withIdentity([
+      'docs',
+      '+create',
+      '--title',
+      input.title,
+      '--doc-format',
+      'markdown',
+      '--content',
+      input.markdown,
+      '--parent-token',
+      input.parentToken,
+      '--format',
+      'json'
+    ], this.identity)));
+    const document = documentFromData(data.data);
+    if (!document) {
+      throw new Error('lark-cli docs +create did not return data.document.');
+    }
+    const documentId = typeof document.document_id === 'string' ? document.document_id : undefined;
+    if (!documentId) {
+      throw new Error('lark-cli docs +create did not return document.document_id.');
+    }
+    return {
+      documentId,
+      url: typeof document.url === 'string' ? document.url : undefined,
+      revision: typeof document.revision_id === 'string' || typeof document.revision_id === 'number'
+        ? String(document.revision_id)
+        : undefined
+    };
   }
 }
 
@@ -118,4 +150,10 @@ function revisionFromData(data: unknown): string | undefined {
     return typeof revision === 'string' || typeof revision === 'number' ? String(revision) : undefined;
   }
   return undefined;
+}
+
+function documentFromData(data: unknown): Record<string, unknown> | undefined {
+  if (!data || typeof data !== 'object' || !('document' in data)) return undefined;
+  const document = (data as { document?: unknown }).document;
+  return document && typeof document === 'object' ? document as Record<string, unknown> : undefined;
 }

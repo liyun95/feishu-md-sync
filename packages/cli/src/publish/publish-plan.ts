@@ -1,7 +1,7 @@
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
 
-export type PublishStrategy = 'no-op' | 'block-patch' | 'section-replace' | 'document-replace';
+export type PublishStrategy = 'no-op' | 'block-patch' | 'section-replace' | 'document-replace' | 'create-document';
 
 export type PublishPlan = {
   target: PublishReceiptTarget;
@@ -24,10 +24,26 @@ export function buildPublishPlan(input: {
   remoteMarkdown: string;
   receipt: PublishReceipt | undefined;
   transformWarnings: string[];
+  createDocument?: boolean;
 }): PublishPlan {
   const localSourceHash = hashText(input.localSource);
   const publishDraftHash = hashText(input.publishDraft);
   const remoteSnapshotHash = hashText(input.remoteMarkdown);
+  if (input.target.kind === 'folder' || input.createDocument === true) {
+    return {
+      target: input.target,
+      profile: input.profile,
+      strategy: 'create-document',
+      safeToWrite: true,
+      remoteChanged: false,
+      localSourceHash,
+      publishDraftHash,
+      remoteSnapshotHash,
+      risks: [],
+      warnings: input.transformWarnings
+    };
+  }
+
   const remoteChanged = input.receipt ? input.receipt.remoteSnapshotHash !== remoteSnapshotHash : false;
   const risks: string[] = [];
 

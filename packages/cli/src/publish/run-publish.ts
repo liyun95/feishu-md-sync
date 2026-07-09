@@ -9,10 +9,15 @@ import {
 } from '../receipts/publish-receipt.js';
 import { applyZillizPublishTransform } from '../transform/zilliz-publish.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
+import { resolvePublishTitle } from '../sync/publish-new-plan.js';
 
 export type RunPublishResult = {
   mode: 'dry-run' | 'write';
   plan: PublishPlan;
+  document?: {
+    documentId: string;
+    url?: string;
+  };
 };
 
 export async function runPublish(input: {
@@ -21,6 +26,7 @@ export async function runPublish(input: {
   target: PublishReceiptTarget;
   profile: PublishProfileName;
   write: boolean;
+  create: boolean;
   strategy: 'auto' | PublishStrategy;
   confirmDestructive: boolean;
   adapter: FeishuAdapter;
@@ -31,6 +37,54 @@ export async function runPublish(input: {
 
   const localSource = await readFile(input.file, 'utf8');
   const transform = applyPublishTransformForProfile(localSource, input.profile);
+  if (input.target.kind === 'folder' || (input.target.kind === 'wiki' && input.create)) {
+    const title = resolvePublishTitle({
+      sourcePath: input.file,
+      markdown: transform.markdown
+    }).title;
+    const plan = buildPublishPlan({
+      target: input.target,
+      profile: input.profile,
+      localSource,
+      publishDraft: transform.markdown,
+      remoteMarkdown: '',
+      receipt: undefined,
+      transformWarnings: transform.warnings,
+      createDocument: true
+    });
+
+    if (!input.write) return { mode: 'dry-run', plan };
+
+    const created = await input.adapter.createDocument({
+      title,
+      markdown: transform.markdown,
+      parentToken: input.target.token
+    });
+    const createdTarget = { kind: 'docx' as const, token: created.documentId };
+    const after = await input.adapter.fetchDocMarkdown({ doc: created.documentId });
+    await writePublishReceipt({
+      cwd: input.cwd,
+      receipt: {
+        version: 1,
+        target: createdTarget,
+        profile: input.profile,
+        localSourceHash: plan.localSourceHash,
+        publishDraftHash: plan.publishDraftHash,
+        remoteSnapshotHash: hashText(after.markdown),
+        remoteRevision: after.revision ?? created.revision,
+        updatedAt: new Date().toISOString()
+      }
+    });
+    return {
+      mode: 'write',
+      plan,
+      document: {
+        documentId: created.documentId,
+        url: created.url
+      }
+    };
+  }
+
   const remote = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
   const plan = buildPublishPlan({

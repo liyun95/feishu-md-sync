@@ -2,7 +2,8 @@ const DOC_ID_PATTERN = /^[A-Za-z0-9]{16,}$/;
 
 export type FeishuTarget =
   | { kind: 'docx'; token: string }
-  | { kind: 'wiki'; token: string };
+  | { kind: 'wiki'; token: string }
+  | { kind: 'folder'; token: string };
 
 export function parseFeishuDocId(input: string): string {
   const target = parseFeishuTarget(input);
@@ -44,5 +45,10 @@ export function parseFeishuTarget(input: string): FeishuTarget {
     return { kind: 'wiki', token: wikiMatch[1] };
   }
 
-  throw new Error(`Could not find a doc token in URL: ${input}`);
+  const folderMatch = url.pathname.match(/\/drive\/folder\/([A-Za-z0-9]+)/);
+  if (folderMatch) {
+    return { kind: 'folder', token: folderMatch[1] };
+  }
+
+  throw new Error(`Could not find a supported Feishu token in URL: ${input}`);
 }

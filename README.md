@@ -28,6 +28,13 @@ Preview a publish plan:
 feishu-md-sync publish ./doc.md --target <docx-url-or-token> --profile zilliz
 ```
 
+Preview creating a new document under a Drive folder or Wiki parent:
+
+```bash
+feishu-md-sync publish ./doc.md --target <folder-url> --profile zilliz
+feishu-md-sync publish ./doc.md --target <wiki-parent-url> --create --profile zilliz
+```
+
 Execute guarded whole-document replacement only when you intentionally accept the risk:
 
 ```bash

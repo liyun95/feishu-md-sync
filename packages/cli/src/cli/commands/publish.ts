@@ -10,6 +10,7 @@ type PublishCommandOptions = {
   target?: string;
   profile?: string;
   write?: boolean;
+  create?: boolean;
   strategy?: string;
   confirmDestructive?: boolean;
   format?: string;
@@ -23,6 +24,7 @@ export function registerPublishCommand(program: Command): void {
     .requiredOption('--target <url-or-token>', 'existing Feishu/Lark docx URL or token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
     .option('--write', 'write to Feishu/Lark; omitted means dry-run')
+    .option('--create', 'create a new document under a folder or wiki target')
     .option('--strategy <strategy>', 'write strategy: auto | document-replace', 'auto')
     .option('--confirm-destructive', 'confirm destructive document replacement in non-interactive mode')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
@@ -42,6 +44,7 @@ export function registerPublishCommand(program: Command): void {
         target,
         profile,
         write: requested.write,
+        create: requested.create,
         strategy: requested.strategy,
         confirmDestructive: requested.confirmDestructive,
         adapter: new LarkCliAdapter()
@@ -55,10 +58,12 @@ function publishRequestFromArgv(opts: PublishCommandOptions): {
   write: boolean;
   strategy: 'auto' | 'document-replace';
   confirmDestructive: boolean;
+  create: boolean;
 } {
   const strategy = optionValueFromArgv('--strategy') ?? opts.strategy ?? 'auto';
   return {
     write: opts.write === true || process.argv.includes('--write'),
+    create: opts.create === true || process.argv.includes('--create'),
     strategy: strategy === 'document-replace' ? 'document-replace' : 'auto',
     confirmDestructive: opts.confirmDestructive === true || process.argv.includes('--confirm-destructive')
   };

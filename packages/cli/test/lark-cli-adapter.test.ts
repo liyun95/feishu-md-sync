@@ -68,6 +68,56 @@ describe('LarkCliAdapter', () => {
     ]]);
   });
 
+  it('creates a Markdown doc under a parent token through lark-cli docs +create', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'bot',
+      exec: async (args) => {
+        calls.push(args);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              document: {
+                document_id: 'doc_created',
+                url: 'https://example.feishu.cn/docx/doc_created',
+                revision_id: 1
+              }
+            }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.createDocument({
+      title: 'Doc Title',
+      markdown: '# Doc Title\n\nBody\n',
+      parentToken: 'parent-token'
+    })).resolves.toEqual({
+      documentId: 'doc_created',
+      url: 'https://example.feishu.cn/docx/doc_created',
+      revision: '1'
+    });
+
+    expect(calls).toEqual([[
+      'docs',
+      '+create',
+      '--title',
+      'Doc Title',
+      '--doc-format',
+      'markdown',
+      '--content',
+      '# Doc Title\n\nBody\n',
+      '--parent-token',
+      'parent-token',
+      '--format',
+      'json',
+      '--as',
+      'bot'
+    ]]);
+  });
+
   it('throws a concise error when lark-cli returns an error envelope', async () => {
     const adapter = new LarkCliAdapter({
       exec: async () => ({

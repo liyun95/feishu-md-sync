@@ -25,6 +25,13 @@ describe('parseFeishuDocId', () => {
     });
   });
 
+  it('extracts Drive folder tokens as folder targets', () => {
+    expect(parseFeishuTarget('https://zilliverse.feishu.cn/drive/folder/fldcn8qL4qcQk4wabc123456789')).toEqual({
+      kind: 'folder',
+      token: 'fldcn8qL4qcQk4wabc123456789'
+    });
+  });
+
   it('does not return wiki node tokens as docx IDs', () => {
     expect(() => parseFeishuDocId('https://zilliverse.feishu.cn/wiki/Kz5rwMmxCixx78kWWnnc5teanzd')).toThrow(/Wiki URL/);
   });

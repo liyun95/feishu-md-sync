@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 
 export type PublishReceiptTarget = {
-  kind: 'docx' | 'wiki';
+  kind: 'docx' | 'wiki' | 'folder';
   token: string;
 };
 

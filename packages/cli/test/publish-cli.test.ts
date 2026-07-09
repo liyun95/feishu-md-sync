@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 
 type CliResult = {
@@ -59,5 +62,48 @@ describe('publish CLI', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Invalid --profile cloud. Expected zilliz, milvus, or none.');
+  });
+
+  it('dry-runs new document creation for a Drive folder URL without lark-cli IO', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-publish-cli-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '# New Doc\n\nMilvus stores vectors.', 'utf8');
+
+    const result = await runCli([
+      'publish',
+      file,
+      '--target',
+      'https://example.feishu.cn/drive/folder/fldcn8qL4qcQk4wabc123456789',
+      '--profile',
+      'zilliz',
+      '--format',
+      'json'
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"strategy": "create-document"');
+    expect(result.stdout).toContain('"kind": "folder"');
+  });
+
+  it('dry-runs new document creation for a Wiki parent URL only with --create', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-publish-cli-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '# New Wiki Child\n\nMilvus stores vectors.', 'utf8');
+
+    const result = await runCli([
+      'publish',
+      file,
+      '--target',
+      'https://example.feishu.cn/wiki/Kz5rwMmxCixx78kWWnnc5teanzd',
+      '--create',
+      '--profile',
+      'zilliz',
+      '--format',
+      'json'
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"strategy": "create-document"');
+    expect(result.stdout).toContain('"kind": "wiki"');
   });
 });
