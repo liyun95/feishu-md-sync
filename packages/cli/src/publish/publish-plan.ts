@@ -80,6 +80,29 @@ export function buildPublishPlan(input: {
   }
 
   if (input.blockPatch?.safeToWrite === true && !remoteChanged) {
+    if (input.blockPatch.operations.length === 0) {
+      return {
+        target: input.target,
+        profile: input.profile,
+        strategy: 'no-op',
+        safeToWrite: true,
+        remoteChanged,
+        localSourceHash,
+        publishDraftHash,
+        remoteSnapshotHash,
+        requiresCollaborationRiskConfirmation: false,
+        requiresUntrackedRemoteConfirmation: false,
+        blockPatch: {
+          operations: [],
+          requiresCollaborationRiskConfirmation: false,
+          fallbackReason: input.blockPatch.fallbackReason,
+          warnings: input.blockPatch.warnings
+        },
+        risks,
+        warnings: input.transformWarnings
+      };
+    }
+
     if (!input.receipt) {
       risks.push('untracked remote block-patch requires explicit confirmation');
     }

@@ -100,6 +100,37 @@ describe('publish plan', () => {
     expect(plan.blockPatch?.operations).toHaveLength(1);
   });
 
+  it('plans no-op when block-patch has no operations even if raw markdown hashes differ', () => {
+    const plan = buildPublishPlan({
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      localSource: '# lark-cli-test\n\nMilvus stores vector data.',
+      publishDraft: '# lark-cli-test\n\n<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vector data.',
+      remoteMarkdown: '# lark-cli-test\n\n<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vector data.\n',
+      receipt: {
+        version: 1,
+        target: { kind: 'docx', token: 'doc_token' },
+        profile: 'zilliz',
+        localSourceHash: 'old-source',
+        publishDraftHash: 'old-draft',
+        remoteSnapshotHash: hashText('# lark-cli-test\n\n<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vector data.\n'),
+        updatedAt: '2026-07-09T00:00:00.000Z'
+      },
+      transformWarnings: [],
+      blockPatch: {
+        kind: 'publish-block-patch-plan',
+        safeToWrite: true,
+        requiresCollaborationRiskConfirmation: false,
+        operations: [],
+        warnings: []
+      }
+    });
+
+    expect(plan.strategy).toBe('no-op');
+    expect(plan.safeToWrite).toBe(true);
+    expect(plan.blockPatch?.operations).toEqual([]);
+  });
+
   it('requires collaboration-risk confirmation for replacing existing blocks', () => {
     const plan = buildPublishPlan({
       target: { kind: 'docx', token: 'doc_token' },
