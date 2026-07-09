@@ -94,12 +94,13 @@ export async function runPublish(input: {
 
   const remote = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
+  const blockPatchDraftMarkdown = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
   const blockPatch = input.strategy === 'document-replace'
     ? undefined
     : await planBlockPatchIfAvailable({
       adapter: input.adapter,
       target: input.target,
-      publishDraft: transform.markdown,
+      publishDraft: blockPatchDraftMarkdown,
       warnings: transform.warnings
     });
   const plan = buildPublishPlan({
@@ -129,7 +130,7 @@ export async function runPublish(input: {
       adapter: input.adapter,
       doc: input.target.token,
       plan,
-      desiredBlocks: markdownToFeishuBlocks(transform.markdown)
+      desiredBlocks: markdownToFeishuBlocks(blockPatchDraftMarkdown)
     });
     const after = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
     if (canonicalMarkdownHash(after.markdown) !== canonicalMarkdownHash(transform.markdown)) {
@@ -279,6 +280,28 @@ function canonicalMarkdown(markdown: string): string {
     .replace(/[ \t]+$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function markdownBodyForBlockPatch(publishDraft: string, remoteMarkdown: string): string {
+  const publishTitle = leadingH1Title(publishDraft);
+  if (!publishTitle) return publishDraft;
+  const remoteTitle = leadingH1Title(remoteMarkdown);
+  if (remoteTitle !== publishTitle) return publishDraft;
+  return stripLeadingH1(publishDraft);
+}
+
+function leadingH1Title(markdown: string): string | undefined {
+  const normalized = markdown.replace(/\r\n/g, '\n').trimStart();
+  const match = normalized.match(/^#\s+(.+?)(?:\n|$)/);
+  return match?.[1]?.trim();
+}
+
+function stripLeadingH1(markdown: string): string {
+  return markdown
+    .replace(/\r\n/g, '\n')
+    .trimStart()
+    .replace(/^#\s+.+?(?:\n{1,2}|$)/, '')
+    .trimStart();
 }
 
 async function planBlockPatchIfAvailable(input: {

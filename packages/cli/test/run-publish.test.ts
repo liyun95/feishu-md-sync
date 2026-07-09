@@ -79,6 +79,42 @@ describe('runPublish', () => {
     }]);
   });
 
+  it('plans block-patch against the document body when the leading title matches', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '# lark-cli-test\n\nMilvus stores vector data.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '# lark-cli-test\n\nMilvus stores vectors.' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['p1'] },
+          textBlock('p1', 'Milvus stores vectors.')
+        ]
+      }),
+      replaceDocument: async () => {}
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.blockPatch?.operations).toEqual([{
+      kind: 'update',
+      remoteBlockId: 'p1',
+      path: [0],
+      blockType: 2
+    }]);
+  });
+
   it('requires collaboration-risk confirmation before block-patch updates existing blocks', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
