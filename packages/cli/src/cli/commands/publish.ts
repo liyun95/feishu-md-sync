@@ -13,6 +13,8 @@ type PublishCommandOptions = {
   create?: boolean;
   strategy?: string;
   confirmDestructive?: boolean;
+  confirmCollaborationRisk?: boolean;
+  confirmUntrackedRemote?: boolean;
   format?: string;
 };
 
@@ -25,8 +27,10 @@ export function registerPublishCommand(program: Command): void {
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
     .option('--write', 'write to Feishu/Lark; omitted means dry-run')
     .option('--create', 'create a new document under a folder or wiki target')
-    .option('--strategy <strategy>', 'write strategy: auto | document-replace', 'auto')
+    .option('--strategy <strategy>', 'write strategy: auto | block-patch | document-replace', 'auto')
     .option('--confirm-destructive', 'confirm destructive document replacement in non-interactive mode')
+    .option('--confirm-collaboration-risk', 'confirm block replacement/deletion may affect comments or block identity')
+    .option('--confirm-untracked-remote', 'confirm adopting an existing remote document without a publish receipt')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .action(async (markdownFile: string, opts: PublishCommandOptions) => {
       const requested = publishRequestFromArgv(opts);
@@ -56,16 +60,23 @@ export function registerPublishCommand(program: Command): void {
 
 function publishRequestFromArgv(opts: PublishCommandOptions): {
   write: boolean;
-  strategy: 'auto' | 'document-replace';
+  strategy: 'auto' | 'block-patch' | 'document-replace';
   confirmDestructive: boolean;
+  confirmCollaborationRisk: boolean;
+  confirmUntrackedRemote: boolean;
   create: boolean;
 } {
   const strategy = optionValueFromArgv('--strategy') ?? opts.strategy ?? 'auto';
+  if (strategy !== 'auto' && strategy !== 'block-patch' && strategy !== 'document-replace') {
+    throw new Error(`Invalid --strategy ${strategy}. Expected auto, block-patch, or document-replace.`);
+  }
   return {
     write: opts.write === true || process.argv.includes('--write'),
     create: opts.create === true || process.argv.includes('--create'),
-    strategy: strategy === 'document-replace' ? 'document-replace' : 'auto',
-    confirmDestructive: opts.confirmDestructive === true || process.argv.includes('--confirm-destructive')
+    strategy,
+    confirmDestructive: opts.confirmDestructive === true || process.argv.includes('--confirm-destructive'),
+    confirmCollaborationRisk: opts.confirmCollaborationRisk === true || process.argv.includes('--confirm-collaboration-risk'),
+    confirmUntrackedRemote: opts.confirmUntrackedRemote === true || process.argv.includes('--confirm-untracked-remote')
   };
 }
 

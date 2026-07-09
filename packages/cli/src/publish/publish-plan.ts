@@ -1,5 +1,6 @@
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
+import type { PublishBlockPatchPlan } from './block-patch-plan.js';
 
 export type PublishStrategy = 'no-op' | 'block-patch' | 'section-replace' | 'document-replace' | 'create-document';
 
@@ -12,6 +13,14 @@ export type PublishPlan = {
   localSourceHash: string;
   publishDraftHash: string;
   remoteSnapshotHash: string;
+  requiresCollaborationRiskConfirmation: boolean;
+  requiresUntrackedRemoteConfirmation: boolean;
+  blockPatch?: {
+    operations: PublishBlockPatchPlan['operations'];
+    requiresCollaborationRiskConfirmation: boolean;
+    fallbackReason?: string;
+    warnings: string[];
+  };
   risks: string[];
   warnings: string[];
 };
@@ -25,6 +34,7 @@ export function buildPublishPlan(input: {
   receipt: PublishReceipt | undefined;
   transformWarnings: string[];
   createDocument?: boolean;
+  blockPatch?: PublishBlockPatchPlan;
 }): PublishPlan {
   const localSourceHash = hashText(input.localSource);
   const publishDraftHash = hashText(input.publishDraft);
@@ -39,6 +49,8 @@ export function buildPublishPlan(input: {
       localSourceHash,
       publishDraftHash,
       remoteSnapshotHash,
+      requiresCollaborationRiskConfirmation: false,
+      requiresUntrackedRemoteConfirmation: false,
       risks: [],
       warnings: input.transformWarnings
     };
@@ -50,20 +62,70 @@ export function buildPublishPlan(input: {
   if (!input.receipt) risks.push('untracked remote: no publish receipt exists for this target');
   if (remoteChanged) risks.push('remote changed since last publish receipt');
 
-  const strategy: PublishStrategy = publishDraftHash === remoteSnapshotHash ? 'no-op' : 'document-replace';
-  if (strategy === 'document-replace') {
-    risks.push('document replace can affect comments, anchors, block identity, and collaboration context');
+  if (publishDraftHash === remoteSnapshotHash) {
+    return {
+      target: input.target,
+      profile: input.profile,
+      strategy: 'no-op',
+      safeToWrite: true,
+      remoteChanged,
+      localSourceHash,
+      publishDraftHash,
+      remoteSnapshotHash,
+      requiresCollaborationRiskConfirmation: false,
+      requiresUntrackedRemoteConfirmation: false,
+      risks,
+      warnings: input.transformWarnings
+    };
   }
+
+  if (input.blockPatch?.safeToWrite === true && !remoteChanged) {
+    if (!input.receipt) {
+      risks.push('untracked remote block-patch requires explicit confirmation');
+    }
+    if (input.blockPatch.requiresCollaborationRiskConfirmation) {
+      risks.push('changed blocks may lose comments, anchors, or block identity when replaced');
+    }
+    return {
+      target: input.target,
+      profile: input.profile,
+      strategy: 'block-patch',
+      safeToWrite: Boolean(input.receipt) && !input.blockPatch.requiresCollaborationRiskConfirmation,
+      remoteChanged,
+      localSourceHash,
+      publishDraftHash,
+      remoteSnapshotHash,
+      requiresCollaborationRiskConfirmation: input.blockPatch.requiresCollaborationRiskConfirmation,
+      requiresUntrackedRemoteConfirmation: !input.receipt,
+      blockPatch: {
+        operations: input.blockPatch.operations,
+        requiresCollaborationRiskConfirmation: input.blockPatch.requiresCollaborationRiskConfirmation,
+        fallbackReason: input.blockPatch.fallbackReason,
+        warnings: input.blockPatch.warnings
+      },
+      risks,
+      warnings: input.transformWarnings
+    };
+  }
+
+  if (input.blockPatch && !input.blockPatch.safeToWrite && input.blockPatch.fallbackReason) {
+    risks.push(`block-patch unavailable: ${input.blockPatch.fallbackReason}`);
+  }
+
+  const strategy: PublishStrategy = 'document-replace';
+  risks.push('document replace can affect comments, anchors, block identity, and collaboration context');
 
   return {
     target: input.target,
     profile: input.profile,
     strategy,
-    safeToWrite: strategy === 'no-op',
+    safeToWrite: false,
     remoteChanged,
     localSourceHash,
     publishDraftHash,
     remoteSnapshotHash,
+    requiresCollaborationRiskConfirmation: false,
+    requiresUntrackedRemoteConfirmation: false,
     risks,
     warnings: input.transformWarnings
   };

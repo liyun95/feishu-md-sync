@@ -64,6 +64,30 @@ describe('publish CLI', () => {
     expect(result.stderr).toContain('Invalid --profile cloud. Expected zilliz, milvus, or none.');
   });
 
+  it('rejects unknown publish strategies before doing IO', async () => {
+    const result = await runCli([
+      'publish',
+      'missing.md',
+      '--target',
+      'doccn123456789012345678901234',
+      '--strategy',
+      'merge'
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Invalid --strategy merge. Expected auto, block-patch, or document-replace.');
+  });
+
+  it('documents block-patch confirmation flags in publish help', async () => {
+    const result = await runCli(['publish', '--help']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('auto | block-patch |');
+    expect(result.stdout).toContain('document-replace');
+    expect(result.stdout).toContain('--confirm-collaboration-risk');
+    expect(result.stdout).toContain('--confirm-untracked-remote');
+  });
+
   it('dry-runs new document creation for a Drive folder URL without lark-cli IO', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-publish-cli-'));
     const file = join(dir, 'doc.md');
