@@ -12,8 +12,8 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 | --- | --- |
 | Pull a Feishu document into local Markdown before editing | `feishu-baseline-sync` skill or `md2feishu pull` |
 | Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` skill or `md2feishu publish-new` |
-| Push local Markdown changes back to Feishu | `feishu-push` skill or `md2feishu push` |
-| Inspect a planned write before applying it | `md2feishu push` without `--write` |
+| Push local Markdown changes back to Feishu | `feishu-md-sync publish` |
+| Inspect a planned write before applying it | `feishu-md-sync publish` without `--write` |
 | Resolve local/remote drift | `md2feishu status`, `md2feishu diff`, and `md2feishu merge` |
 | Work on multi-SDK examples, SDK references, or release notes | Use the matching workflow skill first |
 
@@ -67,13 +67,13 @@ diff -u doc.md feishu.remote.md
 npm exec -- md2feishu pull '<feishu-doc>' --output doc.md --overwrite --write-receipt
 ```
 
-Dry-run a push. The CLI chooses block-patch, section-replace, or document-replace from the local and remote state:
+Dry-run a publish. The CLI chooses no-op, block-patch, or guarded document-replace from the local and remote state:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
 ```
 
-For the full dry-run review workflow, strategy meanings, and scoped receipt caveats, see the [Feishu Push guide](https://liyun95.github.io/feishu-md-sync/guide/push).
+For the full strategy meanings and safety gates, see the [Command Reference](https://liyun95.github.io/feishu-md-sync/reference/commands) and [Safety Gates](https://liyun95.github.io/feishu-md-sync/reference/safety-gates).
 
 Dry-run first publication for a file with no Feishu URL yet:
 
@@ -84,7 +84,7 @@ npm exec -- md2feishu publish-new ./doc.md --folder-token <folder-token>
 Write only after reviewing the dry-run:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken --write --yes
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
 ```
 
 Use a heading scope as a guard when only one section should be considered:
@@ -96,7 +96,7 @@ npm exec -- md2feishu push ./doc.md DocToken --scope heading:"Index type overvie
 Allow full document replacement only when the dry-run recommends it and replacement is intentional:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken --strategy document-replace --replace-all --write --yes
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --strategy document-replace --write --confirm-destructive
 ```
 
 For whole-document pushes with important Markdown tables or local images/SVGs, use docs v2 overwrite plus explicit media upload:
@@ -108,9 +108,9 @@ npm exec -- md2feishu push ./doc.md DocToken --write-backend docx-v2-overwrite -
 Supported target forms:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken
-npm exec -- md2feishu push ./doc.md https://example.feishu.cn/docx/DocToken
-npm exec -- md2feishu push ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken
+npm exec -- feishu-md-sync publish ./doc.md --target https://example.feishu.cn/docx/DocToken
+npm exec -- feishu-md-sync publish ./doc.md --target 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
 ```
 
 ## More References

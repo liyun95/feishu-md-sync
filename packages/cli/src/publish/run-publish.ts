@@ -153,6 +153,9 @@ export async function runPublish(input: {
   }
 
   if (plan.strategy === 'document-replace') {
+    if (plan.remoteChanged && input.strategy !== 'document-replace') {
+      throw new Error('remote changed since last publish receipt; refusing to write without --strategy document-replace --confirm-destructive');
+    }
     if (input.strategy !== 'document-replace') {
       throw new Error('document-replace requires --strategy document-replace');
     }

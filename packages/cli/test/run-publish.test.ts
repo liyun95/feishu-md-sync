@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
-import { readPublishReceipt } from '../src/receipts/publish-receipt.js';
+import { hashText, readPublishReceipt, writePublishReceipt } from '../src/receipts/publish-receipt.js';
 import { runPublish } from '../src/publish/run-publish.js';
 
 describe('runPublish', () => {
@@ -299,6 +299,46 @@ describe('runPublish', () => {
       adapter
     })).rejects.toThrow('block-patch readback verification failed');
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
+  });
+
+  it('refuses block-patch writes when the remote changed since the last receipt', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    await writePublishReceipt({
+      cwd: dir,
+      receipt: {
+        version: 1,
+        target: { kind: 'docx', token: 'doc_token' },
+        profile: 'none',
+        localSourceHash: 'old-source',
+        publishDraftHash: 'old-draft',
+        remoteSnapshotHash: hashText('Milvus stores vectors.'),
+        updatedAt: '2026-07-09T00:00:00.000Z'
+      }
+    });
+    const adapter = blockPatchAdapter({
+      beforeMarkdown: 'Teammate changed the remote.',
+      afterMarkdown: 'Milvus stores vector data.',
+      blocks: [
+        { block_id: 'page', block_type: 1, children: ['p1'] },
+        textBlock('p1', 'Teammate changed the remote.')
+      ]
+    });
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    })).rejects.toThrow('remote changed since last publish receipt');
+    expect(adapter.calls).toEqual([]);
   });
 
   it('falls back to document-replace planning when block fetch is unavailable', async () => {

@@ -1,6 +1,6 @@
 # Command Reference
 
-Examples use the installed `md2feishu` binary. Inside a fresh repository checkout, use `npm exec -- md2feishu ...` until you run `npm link`.
+Examples use the installed `feishu-md-sync` binary. `md2feishu` remains a compatibility alias. Inside a fresh repository checkout, use `npm exec -- feishu-md-sync ...` until you run `npm link`.
 
 ## Global Options
 
@@ -18,7 +18,7 @@ Equivalent to:
 md2feishu sync ./doc.md DocToken
 ```
 
-For local Markdown that does not have a Feishu URL yet, use `md2feishu publish-new` first. For existing Feishu documents, prefer `md2feishu push` because it prints a user-facing strategy plan.
+For local Markdown that should be published to an existing Feishu document, Drive folder, or Wiki node, prefer `feishu-md-sync publish`.
 
 ## `workflow`
 
@@ -31,6 +31,56 @@ md2feishu workflow show <workflow-id> --format json
 Workflow recipes are the source of truth for command order, artifacts, write targets, and completion checks. See [Workflows](/guide/workflows).
 
 Shared write protections are listed in [Safety Gates](/reference/safety-gates).
+
+## `publish`
+
+```bash
+feishu-md-sync publish <markdown-file> --target <docx-or-wiki-or-folder> [options]
+```
+
+Options:
+
+- `--target <url-or-token>` - existing docx URL/token, Wiki node URL/token, or Drive folder token.
+- `--profile <profile>` - `zilliz`, `milvus`, or `none`.
+- `--write` - write to Feishu. Omitted means dry-run.
+- `--create` - create a new document under a Drive folder or Wiki parent target.
+- `--strategy <strategy>` - `auto`, `block-patch`, or `document-replace`. Defaults to `auto`.
+- `--confirm-destructive` - required with `--strategy document-replace --write`.
+- `--confirm-collaboration-risk` - required when replacing or deleting existing blocks.
+- `--confirm-untracked-remote` - required before adopting an existing remote document without a publish receipt.
+- `--format <format>` - `pretty` or `json`.
+
+Dry-run an existing document update:
+
+```bash
+feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --format json
+```
+
+Write a non-destructive block patch after reviewing the dry-run:
+
+```bash
+feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
+```
+
+Create a new document under a Drive folder or Wiki parent:
+
+```bash
+feishu-md-sync publish ./doc.md --target FolderOrWikiToken --profile zilliz --create --write
+```
+
+Allow whole-document replacement only when intentional:
+
+```bash
+feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --strategy document-replace --write --confirm-destructive
+```
+
+In `auto`, the planner chooses `no-op`, `block-patch`, or guarded `document-replace`. `block-patch` uses `lark-cli docs` APIs and preserves the document instead of replacing it wholesale when the Markdown block structure is safe. If the remote document changed since the last publish receipt, `publish --write` refuses auto/block-patch writes; review or pull the remote changes, or explicitly choose guarded `document-replace`.
+
+The `zilliz` profile transforms local Milvus-oriented Markdown for Zilliz Cloud publishing, including the shared product-name wrapper:
+
+```html
+<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include>
+```
 
 ## `sync`
 

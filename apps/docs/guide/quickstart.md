@@ -75,16 +75,16 @@ See [Workflows](/guide/workflows) for the full workflow chooser and exact approv
 
 Use direct CLI commands when you need to inspect command behavior or run automation without Codex.
 
-Run a dry-run:
+Run a dry-run for local Markdown to an existing Feishu document:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
 ```
 
 Write after inspecting the plan:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken --write --yes
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
 ```
 
 ## Supported Targets
@@ -92,7 +92,7 @@ npm exec -- md2feishu push ./doc.md DocToken --write --yes
 Use any of these forms:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken
-npm exec -- md2feishu push ./doc.md https://example.feishu.cn/docx/DocToken
-npm exec -- md2feishu push ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken
+npm exec -- feishu-md-sync publish ./doc.md --target https://example.feishu.cn/docx/DocToken
+npm exec -- feishu-md-sync publish ./doc.md --target 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
 ```

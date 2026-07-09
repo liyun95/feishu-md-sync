@@ -2,17 +2,35 @@
 
 | Gate | Applies to | Why |
 | --- | --- | --- |
-| Dry-run default | `publish-new`, `push`, `sync`, `code-blocks apply`, `multisdk apply`, `reference apply`, `release apply` | Prevent accidental writes. |
+| Dry-run default | `publish`, `publish-new`, `push`, `sync`, `code-blocks apply`, `multisdk apply`, `reference apply`, `release apply` | Prevent accidental writes. |
 | `--write` plus confirmation | Feishu and local docs writes | Requires explicit user intent. |
-| Receipt conflict check | whole-document `sync` | Prevent overwriting remote edits. |
+| Receipt conflict check | `publish` block-patch and whole-document `sync` | Prevent overwriting remote edits. |
 | Heading scope uniqueness | `push --scope heading:"..."` | Prevent ambiguous scoped writes. |
 | Replace-all gate | `push --strategy document-replace --replace-all` | Prevent silent full-document replacement. |
 | Docs v2 overwrite gate | `push --write-backend docx-v2-overwrite --replace-all` | Keep native Markdown table rendering and local media upload behind explicit whole-document approval. |
 | Validation evidence | `multisdk apply --write` | Prevent untested snippets from reaching Feishu. |
 | Report hash approval | `release apply --write` | Prevent stale audit approvals. |
 | Human release trigger | `sdk-reference-web-content-release` | Prevent authoring tasks from touching `web-content` prematurely. |
-| Readback audit | `publish-new`, `sync`, `multisdk`, `reference` | Prove remote state matches the plan. |
-| Visual inspection | `publish-new`, `push` | Catch rendered formatting or edit-history issues that hash verification cannot show. |
+| Readback audit | `publish`, `publish-new`, `sync`, `multisdk`, `reference` | Prove remote state matches the plan. |
+| Visual inspection | `publish`, `publish-new`, `push` | Catch rendered formatting or edit-history issues that hash verification cannot show. |
+
+## Publish gates
+
+`publish` is the new local Markdown to Feishu/Lark online document path. It defaults to dry-run and prints the planned strategy before any write:
+
+- `no-op` means the remote already matches the desired published draft.
+- `block-patch` creates, updates, or deletes supported Markdown blocks without replacing the whole document.
+- `document-replace` is a guarded fallback for unsafe block structures or explicit overwrite workflows.
+- `create-document` creates a new doc under a Drive folder or Wiki parent.
+
+`publish --write` refuses unsafe writes unless the matching confirmation flag is present:
+
+- Existing remote without a receipt requires `--confirm-untracked-remote`.
+- Updating or deleting existing blocks requires `--confirm-collaboration-risk`.
+- Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
+- Remote changes since the last publish receipt refuse auto/block-patch writes. Review or pull the remote changes before retrying, or explicitly choose guarded `document-replace`.
+
+Create-only block patches do not require collaboration-risk confirmation because they do not replace existing block identities. Update and delete operations require the confirmation because comments, anchors, or block identity can be affected.
 
 ## Push strategy gates
 
