@@ -304,10 +304,35 @@ md2feishu status <markdown-file> <feishu-doc> [--publish-profile milvus]
 ## `diff`
 
 ```bash
-md2feishu diff <markdown-file> <feishu-doc> [--publish-profile milvus]
+feishu-md-sync diff <markdown-file> --target <docx-or-wiki> [options]
 ```
 
-Shows a best-effort diff between local Markdown and current Feishu content exported as Markdown.
+Options:
+
+- `--target <url-or-token>` - existing docx or Wiki node URL/token.
+- `--profile <profile>` - `zilliz`, `milvus`, or `none`.
+- `--format <format>` - `pretty` or `json`.
+
+Shows what publishing the local Markdown would change in the current remote document. It compares the current remote Markdown export to the local publish draft after applying the selected profile:
+
+```diff
+--- remote-current
++++ publish-draft
+```
+
+`+` lines are content that publish would add or change in Feishu. `-` lines are content that publish would remove or replace from the current remote document.
+
+Diff is read-only. It also includes status metadata, including `clean`, `local-changed`, `remote-changed`, `diverged`, or `untracked`, but it does not refuse to show a diff in risky states.
+
+```bash
+feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
+```
+
+Legacy positional diff remains available for old workflows:
+
+```bash
+md2feishu diff <markdown-file> <feishu-doc> [--publish-profile milvus]
+```
 
 ## `pull`
 

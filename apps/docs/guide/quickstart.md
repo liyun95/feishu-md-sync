@@ -93,6 +93,12 @@ Check publish status:
 npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
 ```
 
+Inspect what publish would change:
+
+```bash
+npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
+```
+
 Write after inspecting the plan:
 
 ```bash

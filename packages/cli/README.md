@@ -66,6 +66,12 @@ Check whether local and remote are ready for publish:
 npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
 ```
 
+Inspect the remote-current to publish-draft diff:
+
+```bash
+npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
+```
+
 Refresh an existing local file only after reviewing the remote copy:
 
 ```bash

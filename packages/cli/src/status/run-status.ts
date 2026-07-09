@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
-import { canonicalMarkdownHash } from '../core/markdown-canonical.js';
+import { canonicalMarkdown, canonicalMarkdownHash } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
   hashText,
   publishReceiptPath,
   readPublishReceipt,
+  type PublishReceipt,
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
 import { applyPublishTransformForProfile } from '../publish/profile-transform.js';
@@ -42,6 +43,21 @@ export type PublishStatusResult = {
   };
 };
 
+export type PublishStatusContext = {
+  cwd: string;
+  target: PublishReceiptTarget;
+  sourcePath: string;
+  profile: PublishProfileName;
+  localSource: string;
+  publishDraft: string;
+  publishDraftCanonical: string;
+  remoteMarkdown: string;
+  remoteCanonical: string;
+  remoteRevision?: string;
+  receipt: PublishReceipt | undefined;
+  transformWarnings: string[];
+};
+
 export async function runStatus(input: {
   cwd: string;
   sourcePath: string;
@@ -49,25 +65,52 @@ export async function runStatus(input: {
   profile: PublishProfileName;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusResult> {
+  return statusFromContext(await loadPublishStatusContext(input));
+}
+
+export async function loadPublishStatusContext(input: {
+  cwd: string;
+  sourcePath: string;
+  target: PublishReceiptTarget;
+  profile: PublishProfileName;
+  adapter: FeishuAdapter;
+}): Promise<PublishStatusContext> {
   const localSource = await readFile(input.sourcePath, 'utf8');
   const transform = applyPublishTransformForProfile(localSource, input.profile);
   const remote = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
 
-  const localSourceHash = hashText(localSource);
-  const publishDraftHash = hashText(transform.markdown);
-  const publishDraftCanonicalHash = canonicalMarkdownHash(transform.markdown);
-  const remoteSnapshotHash = hashText(remote.markdown);
-  const remoteCanonicalHash = canonicalMarkdownHash(remote.markdown);
-  const contentMatchesRemote = publishDraftCanonicalHash === remoteCanonicalHash;
-  const receiptPath = publishReceiptPath({ cwd: input.cwd, target: input.target });
+  return {
+    cwd: input.cwd,
+    target: input.target,
+    sourcePath: input.sourcePath,
+    profile: input.profile,
+    localSource,
+    publishDraft: transform.markdown,
+    publishDraftCanonical: canonicalMarkdown(transform.markdown),
+    remoteMarkdown: remote.markdown,
+    remoteCanonical: canonicalMarkdown(remote.markdown),
+    remoteRevision: remote.revision,
+    receipt,
+    transformWarnings: transform.warnings
+  };
+}
 
-  if (!receipt) {
+export function statusFromContext(context: PublishStatusContext): PublishStatusResult {
+  const localSourceHash = hashText(context.localSource);
+  const publishDraftHash = hashText(context.publishDraft);
+  const publishDraftCanonicalHash = canonicalMarkdownHash(context.publishDraft);
+  const remoteSnapshotHash = hashText(context.remoteMarkdown);
+  const remoteCanonicalHash = canonicalMarkdownHash(context.remoteMarkdown);
+  const contentMatchesRemote = publishDraftCanonicalHash === remoteCanonicalHash;
+  const receiptPath = publishReceiptPath({ cwd: context.cwd, target: context.target });
+
+  if (!context.receipt) {
     const state = 'untracked';
     return {
-      target: input.target,
-      sourcePath: input.sourcePath,
-      profile: input.profile,
+      target: context.target,
+      sourcePath: context.sourcePath,
+      profile: context.profile,
       state,
       localChanged: true,
       remoteChanged: !contentMatchesRemote,
@@ -79,20 +122,20 @@ export async function runStatus(input: {
       publishDraftCanonicalHash,
       remoteSnapshotHash,
       remoteCanonicalHash,
-      remoteRevision: remote.revision,
-      transformWarnings: transform.warnings,
+      remoteRevision: context.remoteRevision,
+      transformWarnings: context.transformWarnings,
       recommendation: recommendationFor({ state, contentMatchesRemote })
     };
   }
 
-  const localChanged = receipt.publishDraftHash !== publishDraftHash;
-  const remoteChanged = receipt.remoteSnapshotHash !== remoteSnapshotHash;
+  const localChanged = context.receipt.publishDraftHash !== publishDraftHash;
+  const remoteChanged = context.receipt.remoteSnapshotHash !== remoteSnapshotHash;
   const state = statusStateFor({ localChanged, remoteChanged });
 
   return {
-    target: input.target,
-    sourcePath: input.sourcePath,
-    profile: input.profile,
+    target: context.target,
+    sourcePath: context.sourcePath,
+    profile: context.profile,
     state,
     localChanged,
     remoteChanged,
@@ -104,8 +147,8 @@ export async function runStatus(input: {
     publishDraftCanonicalHash,
     remoteSnapshotHash,
     remoteCanonicalHash,
-    remoteRevision: remote.revision,
-    transformWarnings: transform.warnings,
+    remoteRevision: context.remoteRevision,
+    transformWarnings: context.transformWarnings,
     recommendation: recommendationFor({ state, contentMatchesRemote })
   };
 }

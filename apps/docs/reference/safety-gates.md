@@ -46,6 +46,10 @@ Create-only block patches do not require collaboration-risk confirmation because
 
 `status --target` is read-only. It reads the local Markdown file, the publish receipt, and the current remote Markdown export. It does not write local files, write receipts, fetch blocks, or plan a block patch. Use `publish` dry-run for the detailed write plan.
 
+## Diff gates
+
+`diff --target` is read-only. It reads the same local/remote state as `status`, then compares `remote-current` to `publish-draft`. It does not write local files, write receipts, fetch blocks, merge, or plan a block patch. Risky states such as `remote-changed` and `diverged` are shown as metadata instead of blocking the diff.
+
 ## Push strategy gates
 
 Push dry-run chooses the write strategy before any Feishu write:
