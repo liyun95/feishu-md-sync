@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,8 @@ const sourceDir = join(packageDir, 'src');
 const tempDir = mkdtempSync(join(tmpdir(), 'feishu-md-sync-package-'));
 
 try {
+  assertNpmNormalizedManifest();
+
   const packOutput = execFileSync(
     'npm',
     ['pack', '--ignore-scripts', '--json', '--pack-destination', tempDir],
@@ -78,4 +80,18 @@ function walk(directory) {
     const path = join(directory, entry.name);
     return entry.isDirectory() ? walk(path) : [path];
   });
+}
+
+function assertNpmNormalizedManifest() {
+  const manifestPath = join(packageDir, 'package.json');
+  const original = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const fixtureDir = join(tempDir, 'manifest');
+  mkdirSync(join(fixtureDir, 'dist', 'cli'), { recursive: true });
+  writeFileSync(join(fixtureDir, 'package.json'), `${JSON.stringify(original, null, 2)}\n`, 'utf8');
+  writeFileSync(join(fixtureDir, 'dist', 'cli', 'index.js'), '#!/usr/bin/env node\n', 'utf8');
+  execFileSync('npm', ['pkg', 'fix'], { cwd: fixtureDir, stdio: 'pipe' });
+  const normalized = JSON.parse(readFileSync(join(fixtureDir, 'package.json'), 'utf8'));
+  if (JSON.stringify(normalized) !== JSON.stringify(original)) {
+    throw new Error('package.json is not npm-normalized; run npm pkg fix and review the changes');
+  }
 }

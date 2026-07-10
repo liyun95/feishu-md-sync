@@ -21,7 +21,7 @@
   },
   "type": "module",
   "bin": {
-    "feishu-md-sync": "./dist/cli/index.js"
+    "feishu-md-sync": "dist/cli/index.js"
   },
   "files": [
     "dist",
