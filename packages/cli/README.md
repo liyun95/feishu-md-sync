@@ -82,6 +82,14 @@ Pull a profile-filtered remote snapshot:
 npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
 ```
 
+After merging remote edits, run a publish write even when the plan is `no-op`:
+
+```bash
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write
+```
+
+For no-op plans this refreshes the local publish receipt and merge base snapshot without changing Feishu content.
+
 Abort an in-place merge:
 
 ```bash

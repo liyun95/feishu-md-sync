@@ -75,6 +75,12 @@ Inspect what publish would change:
 npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
 ```
 
+If `status` reports `remote-changed`, review the remote snapshot before publishing:
+
+```bash
+npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus --write-receipt
+```
+
 ## Merge Remote Edits
 
 Merge Feishu edits back into your local authoring file:
@@ -82,6 +88,14 @@ Merge Feishu edits back into your local authoring file:
 ```bash
 npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
 ```
+
+After a successful merge, run `status` again with the publish profile. If the local publish draft already matches the remote but the receipt is stale, close the loop with a no-op publish write:
+
+```bash
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write
+```
+
+This refreshes the local publish receipt and merge base snapshot without changing Feishu content.
 
 If a merge writes conflict markers, resolve them locally, then run `status`, `diff`, and `publish` again.
 

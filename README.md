@@ -28,6 +28,18 @@ Preview a publish plan:
 feishu-md-sync publish ./doc.md --target <docx-url-or-token> --profile zilliz
 ```
 
+Handle remote edits before publishing:
+
+```bash
+feishu-md-sync status ./doc.md --target <docx-url-or-token> --profile zilliz
+feishu-md-sync diff ./doc.md --target <docx-url-or-token> --profile zilliz
+feishu-md-sync pull --target <docx-url-or-token> --output doc.remote.md --profile milvus --write-receipt
+feishu-md-sync merge ./doc.md --target <docx-url-or-token> --profile milvus
+feishu-md-sync publish ./doc.md --target <docx-url-or-token> --profile zilliz --write
+```
+
+When the merge already makes the local publish draft match the remote document, the final `publish --write` is a no-op remote write: it refreshes the local receipt and merge base snapshot without changing Feishu content.
+
 Preview creating a new document under a Drive folder or Wiki parent:
 
 ```bash

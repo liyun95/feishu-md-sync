@@ -143,4 +143,4 @@ remote content
 feishu-md-sync doctor auth --format json
 ```
 
-Reports which `.env` files were checked or loaded and whether auth variables are present. It never prints secrets.
+Reports which `.env` files were checked or loaded and which `lark-cli` identity will be requested. It never prints secrets.
