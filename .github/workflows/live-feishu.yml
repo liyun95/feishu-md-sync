@@ -22,8 +22,8 @@ jobs:
       - run: npx @larksuite/cli@latest install
       - name: Configure lark-cli bot credentials
         env:
-          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
-          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+          LARK_APP_ID: ${{ secrets.LARK_TEST_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_TEST_APP_SECRET }}
         run: |
           printf "%s" "$LARK_APP_SECRET" | lark-cli config init --app-id "$LARK_APP_ID" --app-secret-stdin --brand feishu
       - run: lark-cli auth status
