@@ -64,6 +64,41 @@ describe('runMerge', () => {
     await expect(readFile(file, 'utf8')).resolves.toContain('<<<<<<< LOCAL');
   });
 
+  it('uses current local file as base when receipt has no base snapshot but local source is unchanged', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-'));
+    const file = join(cwd, 'doc.md');
+    const local = '# Title\n\nMilvus stores vector data.\n';
+    await writeFile(file, local, 'utf8');
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    await writePublishReceipt({
+      cwd,
+      receipt: {
+        version: 1,
+        target,
+        profile: 'zilliz',
+        localSourceHash: hashText(local),
+        publishDraftHash: 'publish',
+        remoteSnapshotHash: 'remote',
+        updatedAt: '2026-07-10T00:00:00.000Z'
+      }
+    });
+
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      target,
+      profile: 'milvus',
+      mode: 'check',
+      adapter: mergeAdapter('# Title\n\n<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vector data.\n\nRemote only.\n')
+    });
+
+    expect(result.state).toBe('merged');
+    expect(result.base).toMatchObject({ source: 'current-local', hash: hashText(local) });
+    expect(result.summary.conflicts).toBe(0);
+    expect(result.warnings).toContain('receipt has no readable local base snapshot; using current local file as merge base because it still matches the last published source');
+    await expect(readFile(file, 'utf8')).resolves.toBe(local);
+  });
+
   it('check mode reports conflict without writing the local file', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-'));
     const file = join(cwd, 'doc.md');

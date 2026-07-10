@@ -21,7 +21,7 @@ export type RunMergeResult = {
   file: string;
   profile: PublishProfileName;
   base?: {
-    source: 'explicit' | 'receipt' | 'none';
+    source: 'explicit' | 'receipt' | 'current-local' | 'none';
     hash?: string;
   };
   remote?: {
@@ -72,7 +72,7 @@ export async function runMerge(input: {
   await assertNoMergeState({ cwd: input.cwd, filePath: input.filePath });
 
   const remote = await resolveRemoteMarkdown(input);
-  const base = await resolveBaseMarkdown(input);
+  const base = await resolveBaseMarkdown({ ...input, localMarkdown: local });
   const merge = base.markdown === undefined
     ? mergeWithoutBase({ local, remote: remote.markdown })
     : mergeLines({ base: base.markdown, local, remote: remote.markdown });
@@ -99,7 +99,7 @@ export async function runMerge(input: {
       conflicts: merge.conflicts,
       changed: merge.changed
     },
-    warnings: remote.warnings
+    warnings: [...base.warnings, ...remote.warnings]
   };
 }
 
@@ -155,9 +155,11 @@ async function resolveBaseMarkdown(input: {
   cwd: string;
   target?: PublishReceiptTarget;
   basePath?: string;
+  localMarkdown: string;
 }): Promise<{
   markdown?: string;
   summary: NonNullable<RunMergeResult['base']>;
+  warnings: string[];
 }> {
   if (input.basePath) {
     const markdown = await readFile(input.basePath, 'utf8');
@@ -166,7 +168,8 @@ async function resolveBaseMarkdown(input: {
       summary: {
         source: 'explicit',
         hash: hashText(markdown)
-      }
+      },
+      warnings: []
     };
   }
 
@@ -180,9 +183,22 @@ async function resolveBaseMarkdown(input: {
           summary: {
             source: 'receipt',
             hash: hashText(markdown)
-          }
+          },
+          warnings: []
         };
       }
+    }
+    if (receipt?.localSourceHash === hashText(input.localMarkdown)) {
+      return {
+        markdown: input.localMarkdown,
+        summary: {
+          source: 'current-local',
+          hash: hashText(input.localMarkdown)
+        },
+        warnings: [
+          'receipt has no readable local base snapshot; using current local file as merge base because it still matches the last published source'
+        ]
+      };
     }
   }
 
@@ -190,6 +206,7 @@ async function resolveBaseMarkdown(input: {
     markdown: undefined,
     summary: {
       source: 'none'
-    }
+    },
+    warnings: []
   };
 }
