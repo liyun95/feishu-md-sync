@@ -45,6 +45,14 @@ try {
     }
   }
 
+  const allowedRootPaths = new Set(['README.md', 'LICENSE', 'NOTICE', 'package.json']);
+  const unexpectedPackedPaths = [...packedPaths]
+    .filter((path) => !path.startsWith('dist/'))
+    .filter((path) => !allowedRootPaths.has(path));
+  if (unexpectedPackedPaths.length > 0) {
+    throw new Error(`package contains unexpected files:\n${unexpectedPackedPaths.join('\n')}`);
+  }
+
   const consumerDir = join(tempDir, 'consumer');
   mkdirSync(consumerDir);
   writeFileSync(join(consumerDir, 'package.json'), '{"private":true}', 'utf8');
@@ -61,15 +69,12 @@ try {
     process.platform === 'win32' ? 'feishu-md-sync.cmd' : 'feishu-md-sync'
   );
   const help = execFileSync(binPath, ['--help'], { cwd: consumerDir, encoding: 'utf8' });
-  for (const command of ['publish', 'status', 'pull', 'diff', 'merge', 'doctor']) {
-    if (!new RegExp(`\\n  ${command}(?:\\s|$)`).test(help)) {
-      throw new Error(`packaged CLI help is missing ${command}`);
-    }
-  }
-  for (const command of ['sync', 'push', 'publish-new', 'workflow', 'harness', 'multisdk', 'reference', 'release', 'code-blocks']) {
-    if (new RegExp(`\\n  ${command}(?:\\s|$)`).test(help)) {
-      throw new Error(`packaged CLI still exposes retired command ${command}`);
-    }
+  const actualCommands = [...help.matchAll(/^  ([a-z][\w-]*)(?:\s|\[|<)/gm)]
+    .map((match) => match[1])
+    .sort();
+  const expectedCommands = ['diff', 'doctor', 'help', 'merge', 'publish', 'pull', 'status'];
+  if (JSON.stringify(actualCommands) !== JSON.stringify(expectedCommands)) {
+    throw new Error(`packaged CLI commands differ: expected ${expectedCommands.join(', ')}, got ${actualCommands.join(', ')}`);
   }
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
