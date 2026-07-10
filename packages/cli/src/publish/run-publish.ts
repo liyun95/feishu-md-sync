@@ -7,6 +7,7 @@ import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
   hashText,
   readPublishReceipt,
+  writeLocalBaseSnapshot,
   writePublishReceipt,
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
@@ -70,6 +71,11 @@ export async function runPublish(input: {
     });
     const createdTarget = { kind: 'docx' as const, token: created.documentId };
     const after = await input.adapter.fetchDocMarkdown({ doc: created.documentId });
+    const localBaseSnapshot = await writeLocalBaseSnapshot({
+      cwd: input.cwd,
+      target: createdTarget,
+      markdown: localSource
+    });
     await writePublishReceipt({
       cwd: input.cwd,
       receipt: {
@@ -80,6 +86,7 @@ export async function runPublish(input: {
         publishDraftHash: plan.publishDraftHash,
         remoteSnapshotHash: hashText(after.markdown),
         remoteRevision: after.revision ?? created.revision,
+        localBaseSnapshot,
         updatedAt: new Date().toISOString()
       }
     });
@@ -137,6 +144,11 @@ export async function runPublish(input: {
     if (canonicalMarkdownHash(after.markdown) !== canonicalMarkdownHash(transform.markdown)) {
       throw new Error('block-patch readback verification failed: remote Markdown differs from publish draft');
     }
+    const localBaseSnapshot = await writeLocalBaseSnapshot({
+      cwd: input.cwd,
+      target: input.target,
+      markdown: localSource
+    });
     await writePublishReceipt({
       cwd: input.cwd,
       receipt: {
@@ -147,6 +159,7 @@ export async function runPublish(input: {
         publishDraftHash: plan.publishDraftHash,
         remoteSnapshotHash: hashText(after.markdown),
         remoteRevision: after.revision,
+        localBaseSnapshot,
         updatedAt: new Date().toISOString()
       }
     });
@@ -165,6 +178,11 @@ export async function runPublish(input: {
     }
     await input.adapter.replaceDocument({ doc: input.target.token, markdown: transform.markdown });
     const after = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
+    const localBaseSnapshot = await writeLocalBaseSnapshot({
+      cwd: input.cwd,
+      target: input.target,
+      markdown: localSource
+    });
     await writePublishReceipt({
       cwd: input.cwd,
       receipt: {
@@ -175,6 +193,7 @@ export async function runPublish(input: {
         publishDraftHash: plan.publishDraftHash,
         remoteSnapshotHash: hashText(after.markdown),
         remoteRevision: after.revision,
+        localBaseSnapshot,
         updatedAt: new Date().toISOString()
       }
     });

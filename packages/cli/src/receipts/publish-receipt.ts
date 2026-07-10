@@ -8,6 +8,11 @@ export type PublishReceiptTarget = {
   token: string;
 };
 
+export type LocalBaseSnapshot = {
+  path: string;
+  hash: string;
+};
+
 export type PublishReceipt = {
   version: 1;
   target: PublishReceiptTarget;
@@ -16,6 +21,7 @@ export type PublishReceipt = {
   publishDraftHash: string;
   remoteSnapshotHash: string;
   remoteRevision?: string;
+  localBaseSnapshot?: LocalBaseSnapshot;
   updatedAt: string;
 };
 
@@ -25,6 +31,14 @@ export function hashText(value: string): string {
 
 export function publishReceiptPath(input: { cwd: string; target: PublishReceiptTarget }): string {
   return join(input.cwd, '.sync', 'feishu-md-sync', `${input.target.kind}-${input.target.token}.json`);
+}
+
+export function baseSnapshotPath(input: { cwd: string; target: PublishReceiptTarget }): string {
+  return join(input.cwd, baseSnapshotRelativePath({ target: input.target }));
+}
+
+export function baseSnapshotRelativePath(input: { target: PublishReceiptTarget }): string {
+  return join('.sync', 'feishu-md-sync', 'bases', `${input.target.kind}-${input.target.token}-local.md`);
 }
 
 export async function readPublishReceipt(input: {
@@ -49,4 +63,30 @@ export async function writePublishReceipt(input: {
   const path = publishReceiptPath({ cwd: input.cwd, target: input.receipt.target });
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(input.receipt, null, 2)}\n`, 'utf8');
+}
+
+export async function writeLocalBaseSnapshot(input: {
+  cwd: string;
+  target: PublishReceiptTarget;
+  markdown: string;
+}): Promise<LocalBaseSnapshot> {
+  const path = baseSnapshotPath({ cwd: input.cwd, target: input.target });
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, input.markdown, 'utf8');
+  return {
+    path: baseSnapshotRelativePath({ target: input.target }),
+    hash: hashText(input.markdown)
+  };
+}
+
+export async function readLocalBaseSnapshot(input: {
+  cwd: string;
+  snapshot: LocalBaseSnapshot;
+}): Promise<string | undefined> {
+  try {
+    return await readFile(join(input.cwd, input.snapshot.path), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
 }

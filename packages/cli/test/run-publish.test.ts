@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
-import { hashText, readPublishReceipt, writePublishReceipt } from '../src/receipts/publish-receipt.js';
+import { hashText, readLocalBaseSnapshot, readPublishReceipt, writePublishReceipt } from '../src/receipts/publish-receipt.js';
 import { runPublish } from '../src/publish/run-publish.js';
 
 describe('runPublish', () => {
@@ -419,6 +419,34 @@ describe('runPublish', () => {
       profile: 'zilliz',
       target: { kind: 'docx', token: 'doc_token' }
     });
+  });
+
+  it('saves local source markdown as merge base after successful publish write', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-publish-base-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
+    const writes: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: writes.at(-1) ?? 'Old remote.', revision: 'rev1' }),
+      replaceDocument: async ({ markdown }) => { writes.push(markdown); }
+    };
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      write: true,
+      create: false,
+      strategy: 'document-replace',
+      confirmDestructive: true,
+      adapter
+    });
+
+    const receipt = await readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } });
+    expect(receipt?.localBaseSnapshot?.hash).toBe(hashText('Milvus stores vector data.'));
+    await expect(readLocalBaseSnapshot({ cwd: dir, snapshot: receipt!.localBaseSnapshot! }))
+      .resolves.toBe('Milvus stores vector data.');
   });
 
   it('honors explicit document-replace even when block planning is available', async () => {

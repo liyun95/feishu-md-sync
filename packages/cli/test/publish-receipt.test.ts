@@ -2,7 +2,15 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { hashText, publishReceiptPath, readPublishReceipt, writePublishReceipt } from '../src/receipts/publish-receipt.js';
+import {
+  baseSnapshotPath,
+  hashText,
+  publishReceiptPath,
+  readLocalBaseSnapshot,
+  readPublishReceipt,
+  writeLocalBaseSnapshot,
+  writePublishReceipt
+} from '../src/receipts/publish-receipt.js';
 
 describe('publish receipt', () => {
   it('hashes text deterministically', () => {
@@ -35,5 +43,24 @@ describe('publish receipt', () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-receipt-'));
 
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'missing' } })).resolves.toBeUndefined();
+  });
+
+  it('stores local authoring markdown outside the receipt JSON', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-base-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const path = baseSnapshotPath({ cwd: dir, target });
+
+    const snapshot = await writeLocalBaseSnapshot({
+      cwd: dir,
+      target,
+      markdown: '# Title\n\nMilvus stores vectors.'
+    });
+
+    expect(snapshot).toEqual({
+      path: '.sync/feishu-md-sync/bases/docx-doc_token-local.md',
+      hash: hashText('# Title\n\nMilvus stores vectors.')
+    });
+    await expect(readFile(path, 'utf8')).resolves.toBe('# Title\n\nMilvus stores vectors.');
+    await expect(readLocalBaseSnapshot({ cwd: dir, snapshot })).resolves.toBe('# Title\n\nMilvus stores vectors.');
   });
 });
