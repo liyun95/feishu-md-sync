@@ -23,32 +23,38 @@ Options:
 Dry-run an existing document update:
 
 ```bash
-feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --format json
+feishu-md-sync publish ./doc.md --target DocToken --format json
 ```
 
-Write a non-destructive block patch after reviewing the dry-run:
+Write to an existing document for the first time after reviewing the dry-run:
 
 ```bash
-feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
+feishu-md-sync publish ./doc.md --target DocToken --write --confirm-untracked-remote
 ```
 
 Create a new document under a Drive folder or Wiki parent:
 
 ```bash
-feishu-md-sync publish ./doc.md --target FolderOrWikiToken --profile zilliz --create --write
+feishu-md-sync publish ./doc.md --target FolderOrWikiToken --create --write
 ```
 
 Allow whole-document replacement only when intentional:
 
 ```bash
-feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --strategy document-replace --write --confirm-destructive
+feishu-md-sync publish ./doc.md --target DocToken --strategy document-replace --write --confirm-destructive
 ```
+
+## Profiles
+
+Omit `--profile` to use the configured default. In a fresh checkout, the default profile is `none`.
 
 The `zilliz` profile transforms local Milvus-oriented Markdown for Zilliz Cloud publishing, including the shared product-name wrapper:
 
 ```html
 <include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include>
 ```
+
+Use `--profile milvus` mainly when pulling or merging Feishu content back into Milvus-shaped local Markdown.
 
 ## `pull`
 
@@ -68,7 +74,7 @@ Options:
 Pull a reviewable remote snapshot:
 
 ```bash
-feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
+feishu-md-sync pull --target DocToken --output doc.remote.md
 ```
 
 `pull` uses `lark-cli docs +fetch --doc-format markdown` for the remote export. The custom layer handles target parsing, profile filtering, overwrite protection, local write verification, and optional receipt writing.
@@ -110,9 +116,9 @@ Options:
 ## `merge`
 
 ```bash
-feishu-md-sync merge <markdown-file> --target <docx-or-wiki> --profile milvus
-feishu-md-sync merge <markdown-file> --remote <remote.md> --profile milvus
-feishu-md-sync merge <markdown-file> --abort --profile milvus
+feishu-md-sync merge <markdown-file> --target <docx-or-wiki>
+feishu-md-sync merge <markdown-file> --remote <remote.md>
+feishu-md-sync merge <markdown-file> --abort
 ```
 
 Options:

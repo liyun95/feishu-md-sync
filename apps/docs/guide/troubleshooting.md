@@ -9,7 +9,7 @@ Run:
 ```bash
 npm exec -- feishu-md-sync status ./doc.md --target DocToken
 npm exec -- feishu-md-sync diff ./doc.md --target DocToken
-npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
+npm exec -- feishu-md-sync merge ./doc.md --target DocToken
 ```
 
 ## `untracked remote: no publish receipt exists for this target`
@@ -19,7 +19,7 @@ The target document has content, but no receipt exists yet.
 Run a dry-run and review the plan. If adopting the remote is intentional, pass the explicit confirmation on write:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-untracked-remote
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --write --confirm-untracked-remote
 ```
 
 ## `Cannot merge because the previous receipt has no source snapshot`

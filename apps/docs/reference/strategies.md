@@ -21,7 +21,6 @@ This strategy is intentionally gated:
 ```bash
 feishu-md-sync publish ./doc.md \
   --target DocToken \
-  --profile zilliz \
   --strategy document-replace \
   --write \
   --confirm-destructive
