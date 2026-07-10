@@ -1,36 +1,72 @@
 # Receipts
 
-Receipts are written only after successful writes.
+Receipts are written only after successful remote writes or explicit pull snapshot requests. They are ignored by git.
 
-Location:
+New-core receipt locations:
 
 ```text
-.sync/feishu/
+.sync/feishu-md-sync/
+.sync/feishu-md-sync/pulls/
+.sync/feishu-md-sync/bases/
 ```
 
-Receipts are ignored by git.
+## Publish Receipts
 
-## Why Receipts Exist
+`publish` receipts are target-oriented. They record the last successful local Markdown to Feishu write and are used to detect remote drift before later block-patch writes.
 
-A receipt stores the last known successful sync state. On later syncs, `md2feishu` compares the current Feishu state to the receipt. If Feishu changed, the CLI refuses default writes.
+Stored data includes:
 
-## Stored Data
+- target kind and token
+- profile
+- local source hash
+- publish draft hash
+- remote snapshot hash
+- remote revision when available
+- local base snapshot path and hash
+- update timestamp
 
-Receipts include:
+## Local Base Snapshots
 
-- source path
-- source hash
-- source snapshot
-- Feishu document ID
-- Feishu state hash
-- best-effort Feishu Markdown snapshot
-- block counts
-- write result
-- verification result
-- timestamp
+After a successful `publish --write`, the CLI stores the local source Markdown used for that publish under:
 
-## Resolved Merge Files
+```text
+.sync/feishu-md-sync/bases/<target-kind>-<target-token>-local.md
+```
 
-When syncing `doc.merged.md`, the CLI checks whether it can map back to `doc.md`.
+The publish receipt stores only the snapshot path and hash:
 
-If the original receipt exists, the CLI reuses it, writes the resolved content to Feishu, verifies readback, updates `doc.md`, and updates the original receipt.
+```json
+{
+  "localBaseSnapshot": {
+    "path": ".sync/feishu-md-sync/bases/docx-DocToken-local.md",
+    "hash": "..."
+  }
+}
+```
+
+`merge` uses this local authoring snapshot as the three-way merge base when available:
+
+```text
+base:   last successfully published local source
+local:  current local Markdown file
+remote: current Feishu Markdown after pull-side profile filtering
+```
+
+If the base snapshot file is missing, `merge` falls back to conservative conflict regions. `merge` itself never updates the base snapshot; the next successful `publish --write` updates it.
+
+## Pull Receipts
+
+Pull snapshot receipts are output-oriented. They record that one local `*.remote.md` snapshot came from one remote document revision.
+
+Stored data includes:
+
+- `kind: "pull-snapshot"`
+- target docx or Wiki token
+- output path
+- profile
+- remote revision when available
+- raw official Markdown export hash
+- profile-filtered output hash
+- pull timestamp
+
+Pull receipts do not mean the canonical local source file is synchronized, and they do not affect publish remote drift checks.

@@ -2,31 +2,52 @@
 
 | Gate | Applies to | Why |
 | --- | --- | --- |
-| Dry-run default | `publish-new`, `push`, `sync`, `code-blocks apply`, `multisdk apply`, `reference apply`, `release apply` | Prevent accidental writes. |
-| `--write` plus confirmation | Feishu and local docs writes | Requires explicit user intent. |
-| Receipt conflict check | whole-document `sync` | Prevent overwriting remote edits. |
-| Heading scope uniqueness | `push --scope heading:"..."` | Prevent ambiguous scoped writes. |
-| Replace-all gate | `push --strategy document-replace --replace-all` | Prevent silent full-document replacement. |
-| Validation evidence | `multisdk apply --write` | Prevent untested snippets from reaching Feishu. |
-| Report hash approval | `release apply --write` | Prevent stale audit approvals. |
-| Human release trigger | `sdk-reference-web-content-release` | Prevent authoring tasks from touching `web-content` prematurely. |
-| Readback audit | `publish-new`, `sync`, `multisdk`, `reference` | Prove remote state matches the plan. |
-| Visual inspection | `publish-new`, `push` | Catch rendered formatting or edit-history issues that hash verification cannot show. |
+| Dry-run default | `publish` | Prevent accidental Feishu writes. |
+| `--write` | `publish` | Requires explicit remote write intent. |
+| Destructive confirmation | `publish --strategy document-replace` | Prevent silent whole-document replacement. |
+| Collaboration-risk confirmation | `publish` block updates/deletes | Make comment, anchor, and block identity risk explicit. |
+| Untracked-remote confirmation | `publish` against an existing remote without receipt | Prevent accidental adoption or overwrite of a document the CLI has not tracked before. |
+| Pull overwrite gate | `pull` | Prevent a remote snapshot from replacing an existing local file without `--overwrite`. |
+| Merge abort state | `merge` | Allow local recovery after in-place merge writes. |
+| Readback verification | `publish` writes | Prove Feishu content matches the intended publish draft after writing. |
 
-## Push strategy gates
+## Publish Gates
 
-Push dry-run chooses the write strategy before any Feishu write:
+`publish` defaults to dry-run and prints the planned strategy before any write:
 
-- `block-patch` is low risk and updates, creates, or deletes small block ranges when safe.
-- `section-replace` is medium risk and must name the heading section and block counts before approval.
-- `document-replace` is high risk and is refused unless `--replace-all` is explicit.
+- `no-op` means the remote already matches the desired published draft.
+- `block-patch` creates, updates, or deletes supported Markdown blocks without replacing the whole document.
+- `document-replace` is a guarded fallback for unsafe block structures or explicit overwrite workflows.
+- `create-document` creates a new doc under a Drive folder or Wiki parent.
 
-Push refuses or escalates unsafe block-level writes when:
+`publish --write` refuses unsafe writes unless the matching confirmation flag is present:
 
-- A requested heading scope is missing or duplicated locally.
-- A requested heading scope is missing or duplicated remotely.
-- The desired scoped content expands far beyond the current remote scope.
-- Local rendering sees raw escaped Feishu Markdown that should have been normalized during pull.
-- A block type or nested structure cannot be updated in place and the fallback range is too large for an automatic block write.
+- Existing remote without a receipt requires `--confirm-untracked-remote`.
+- Updating or deleting existing blocks requires `--confirm-collaboration-risk`.
+- Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
+- Remote changes since the last publish receipt refuse auto/block-patch writes. Use `status`, `diff`, and `merge` before retrying, or explicitly choose guarded `document-replace`.
 
-Scoped push writes can pass readback verification without updating the whole-document receipt. If a later `status` reports `diverged`, inspect the scoped write output and readback evidence before treating it as a failed push.
+## Pull Gates
+
+`pull` writes a local remote snapshot. It does not write to Feishu, does not merge, and does not replace the canonical local source by default.
+
+- `--output` is required.
+- Existing output files are refused unless `--overwrite` is present.
+- `--write-receipt` writes an independent pull snapshot receipt under `.sync/feishu-md-sync/pulls/`.
+- Pull receipts do not affect publish receipts.
+
+## Status And Diff Gates
+
+`status` and `diff` are read-only. They read local Markdown, publish receipt state, and current remote Markdown through `lark-cli`. They do not write files, write receipts, fetch blocks, or plan a block patch.
+
+Use `publish` dry-run for the detailed write plan.
+
+## Merge Gates
+
+`merge` writes only local files.
+
+- It refuses to run when the local file already contains unresolved conflict markers.
+- It refuses to start a new in-place merge when a merge state already exists for the file.
+- It writes abort state before modifying the local file.
+- `merge --abort` restores the pre-merge local file and removes that abort state.
+- Conflicts exit with code `1` and write standard `LOCAL/REMOTE` conflict markers.

@@ -1,119 +1,100 @@
 # feishu-md-sync
 
-`feishu-md-sync` provides the `md2feishu` CLI for Feishu documentation workflows.
-
-Most team users should start with the workflow skills in the main documentation. Use the CLI directly when you need to debug a workflow, inspect a dry-run, automate a command, or maintain the tool.
+`feishu-md-sync` is a Markdown sync bridge for local authoring and Feishu/Lark online documents. It uses the official `lark-cli` for Feishu document IO and keeps project-specific behavior in a small workflow layer.
 
 Docs site: <https://liyun95.github.io/feishu-md-sync/>
 
-## What You Can Do
+## Main Commands
 
-| Need | Recommended entry |
+| Need | Command |
 | --- | --- |
-| Pull a Feishu document into local Markdown before editing | `feishu-baseline-sync` skill or `md2feishu pull` |
-| Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` skill or `md2feishu publish-new` |
-| Push local Markdown changes back to Feishu | `feishu-push` skill or `md2feishu push` |
-| Inspect a planned write before applying it | `md2feishu push` without `--write` |
-| Resolve local/remote drift | `md2feishu status`, `md2feishu diff`, and `md2feishu merge` |
-| Work on multi-SDK examples, SDK references, or release notes | Use the matching workflow skill first |
+| Publish local Markdown to Feishu | `feishu-md-sync publish` |
+| Create a new Feishu document from Markdown | `feishu-md-sync publish --create` |
+| Pull a remote Markdown snapshot | `feishu-md-sync pull` |
+| Check local/remote state | `feishu-md-sync status` |
+| Inspect publish diff | `feishu-md-sync diff` |
+| Merge remote edits into local Markdown | `feishu-md-sync merge` |
 
-The CLI is dry-run-first. Commands that write to Feishu require `--write` and either interactive confirmation or `--yes`.
+The CLI is dry-run-first for remote writes. `publish` writes to Feishu only with `--write`; destructive replacement also requires `--strategy document-replace --confirm-destructive`.
 
-## Run From This Repository
+## Setup
+
+Install dependencies and build:
 
 ```bash
 npm install
 npm run build
-npm exec -- md2feishu workflow list
 ```
 
-Show the workflow recipe before running lower-level commands:
+Authenticate `lark-cli` and make sure your Feishu app or user has access to the target document:
 
 ```bash
-npm exec -- md2feishu workflow show baseline-sync
-npm exec -- md2feishu workflow show publish-new
-npm exec -- md2feishu workflow show push
+lark-cli auth status
 ```
 
-## Configure Feishu Access
-
-From the repository root:
+Inspect local auth loading without printing secrets:
 
 ```bash
-cp .env.example .env
+npm exec -- feishu-md-sync doctor auth --format json
 ```
 
-Fill in `APP_ID` and `APP_SECRET`, then verify that the CLI can load them:
+## Common Flow
+
+Check status:
 
 ```bash
-npm exec -- md2feishu doctor auth --format json
+npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
 ```
 
-The Feishu app also needs API permissions and document access. See the [Configuration guide](https://liyun95.github.io/feishu-md-sync/guide/configuration).
-
-## Direct CLI Examples
-
-Pull the current Feishu document into Markdown:
+Inspect what publish would change:
 
 ```bash
-npm exec -- md2feishu pull '<feishu-doc>' --output feishu.remote.md --write-receipt
+npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
 ```
 
-Refresh an existing local file only after reviewing the remote copy:
+Merge remote edits back into the local Milvus-shaped authoring file:
 
 ```bash
-npm exec -- md2feishu pull '<feishu-doc>' --output feishu.remote.md
-diff -u doc.md feishu.remote.md
-npm exec -- md2feishu pull '<feishu-doc>' --output doc.md --overwrite --write-receipt
+npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
 ```
 
-Dry-run a push. The CLI chooses block-patch, section-replace, or document-replace from the local and remote state:
+Dry-run a publish:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
 ```
 
-For the full dry-run review workflow, strategy meanings, and scoped receipt caveats, see the [Feishu Push guide](https://liyun95.github.io/feishu-md-sync/guide/push).
-
-Dry-run first publication for a file with no Feishu URL yet:
+Write after reviewing the plan:
 
 ```bash
-npm exec -- md2feishu publish-new ./doc.md --folder-token <folder-token>
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
 ```
 
-Write only after reviewing the dry-run:
+Create a new document under a Drive folder or Wiki parent:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken --write --yes
+npm exec -- feishu-md-sync publish ./doc.md --target FolderOrWikiToken --create --profile zilliz --write
 ```
 
-Use a heading scope as a guard when only one section should be considered:
+Pull a profile-filtered remote snapshot:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken --scope heading:"Index type overview"
+npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
 ```
 
-Allow full document replacement only when the dry-run recommends it and replacement is intentional:
+After merging remote edits, run a publish write even when the plan is `no-op`:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken --strategy document-replace --replace-all --write --yes
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write
 ```
 
-Supported target forms:
+For no-op plans this refreshes the local publish receipt and merge base snapshot without changing Feishu content.
+
+Abort an in-place merge:
 
 ```bash
-npm exec -- md2feishu push ./doc.md DocToken
-npm exec -- md2feishu push ./doc.md https://example.feishu.cn/docx/DocToken
-npm exec -- md2feishu push ./doc.md 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
+npm exec -- feishu-md-sync merge ./doc.md --abort --profile milvus
 ```
-
-## More References
-
-- [Quickstart](https://liyun95.github.io/feishu-md-sync/guide/quickstart)
-- [Choose a Workflow](https://liyun95.github.io/feishu-md-sync/guide/workflows)
-- [Command Reference](https://liyun95.github.io/feishu-md-sync/reference/commands)
-- [Safety Gates](https://liyun95.github.io/feishu-md-sync/reference/safety-gates)
-- [Troubleshooting](https://liyun95.github.io/feishu-md-sync/guide/troubleshooting)
 
 ## Development
 

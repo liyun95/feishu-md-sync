@@ -18,9 +18,7 @@ describe('CLI env loading', () => {
     const otherCwd = join(repo, 'scratch');
     await mkdir(otherCwd, { recursive: true });
     await writeFile(join(repo, '.env'), [
-      'APP_ID=repo_app',
-      'APP_SECRET=repo_secret',
-      'FEISHU_HOST=https://repo.feishu.test'
+      'FEISHU_MD_SYNC_LARK_AS=bot'
     ].join('\n'), 'utf8');
     const env: NodeJS.ProcessEnv = {};
 
@@ -31,22 +29,18 @@ describe('CLI env loading', () => {
       moduleUrl: pathToFileURL(join(repo, 'packages/cli/src/cli/index.ts')).href
     });
 
-    expect(env.APP_ID).toBe('repo_app');
-    expect(env.APP_SECRET).toBe('repo_secret');
-    expect(env.FEISHU_HOST).toBe('https://repo.feishu.test');
+    expect(env.FEISHU_MD_SYNC_LARK_AS).toBe('bot');
     expect(report.loadedFiles).toContain(join(repo, '.env'));
   });
 
-  it('lets --env-file override discovered dotenv files and reports auth without secrets', async () => {
+  it('lets --env-file override discovered dotenv files and reports lark-cli auth hints', async () => {
     const repo = await repoFixture();
     await writeFile(join(repo, '.env'), [
-      'APP_ID=repo_app',
-      'APP_SECRET=repo_secret'
+      'FEISHU_MD_SYNC_LARK_AS=bot'
     ].join('\n'), 'utf8');
     const explicitEnv = join(repo, 'custom.env');
     await writeFile(explicitEnv, [
-      'APP_ID=explicit_app',
-      'APP_SECRET=explicit_secret'
+      'FEISHU_MD_SYNC_LARK_AS=user'
     ].join('\n'), 'utf8');
     const env: NodeJS.ProcessEnv = {};
 
@@ -58,12 +52,10 @@ describe('CLI env loading', () => {
     });
     const authReport = buildAuthDoctorReport(envReport, env);
 
-    expect(env.APP_ID).toBe('explicit_app');
-    expect(env.APP_SECRET).toBe('explicit_secret');
+    expect(env.FEISHU_MD_SYNC_LARK_AS).toBe('user');
     expect(envReport.explicitEnvFile).toBe(explicitEnv);
-    expect(authReport.appId.present).toBe(true);
-    expect(authReport.appSecret.present).toBe(true);
-    expect(JSON.stringify(authReport)).not.toContain('explicit_secret');
+    expect(authReport.larkCli.identity).toBe('user');
+    expect(authReport.larkCli.command).toBe('lark-cli auth status');
   });
 });
 

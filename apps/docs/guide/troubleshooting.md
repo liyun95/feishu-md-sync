@@ -7,26 +7,26 @@ The remote document changed after your last successful sync.
 Run:
 
 ```bash
-npm exec -- md2feishu status ./doc.md DocToken
-npm exec -- md2feishu diff ./doc.md DocToken
-npm exec -- md2feishu merge ./doc.md DocToken
+npm exec -- feishu-md-sync status ./doc.md --target DocToken
+npm exec -- feishu-md-sync diff ./doc.md --target DocToken
+npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
 ```
 
-## `Initial write would replace existing Feishu content`
+## `untracked remote: no publish receipt exists for this target`
 
 The target document has content, but no receipt exists yet.
 
-If replacing the document is intentional:
+Run a dry-run and review the plan. If adopting the remote is intentional, pass the explicit confirmation on write:
 
 ```bash
-npm exec -- md2feishu sync ./doc.md DocToken --write --yes --force-initial-overwrite
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-untracked-remote
 ```
 
 ## `Cannot merge because the previous receipt has no source snapshot`
 
-Merge needs a successful baseline sync that stored source snapshots.
+Merge works best from a successful publish receipt that stored the last local source snapshot.
 
-Run a successful baseline sync first, then retry merge.
+Run `pull` to inspect the current remote and resolve manually, or publish once after review so future merges have a base snapshot.
 
 ## `Verification mismatch after write`
 
@@ -38,7 +38,7 @@ Do not retry destructive writes blindly. Inspect the Feishu document and rerun a
 
 Check:
 
-- `APP_ID`
-- `APP_SECRET`
+- `lark-cli auth status`
+- `FEISHU_MD_SYNC_LARK_AS`, when set
 - Feishu app permissions
 - whether the app can access the target docx or wiki document

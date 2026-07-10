@@ -1,6 +1,6 @@
 # Markdown Support
 
-`md2feishu` supports a practical subset of Markdown.
+`feishu-md-sync` supports a practical subset of Markdown through Feishu's official Markdown import/export and a small local conversion layer for block patch planning.
 
 ## Supported Blocks
 
@@ -10,7 +10,7 @@
 - Ordered lists
 - Fenced code blocks
 - Tables
-- Feishu callouts on pull, rendered as `:::note` admonitions
+- Tables through Feishu Markdown import/export
 
 ## Supported Inline Formatting
 
@@ -19,16 +19,16 @@
 - Bold text
 - `==highlight==` markers
 
-## Official Feishu Markdown export
+## Official Feishu Markdown Export
 
-When `--markdown-engine auto` can use Feishu's official Markdown export, `pull` normalizes Feishu's escaped Markdown before writing the local file. This prevents raw sequences such as `\.` or `\&\#39;` from being written back as visible text when the local renderer is used as a fallback.
+`pull`, `status`, `diff`, and `merge --target` use `lark-cli docs +fetch --doc-format markdown`.
 
-For `push --scope heading:"..."`, `auto` keeps official export/readback but uses the local renderer for scoped desired blocks when stable block-level planning is needed. This avoids unsafe block ordering from Markdown convert while still writing through Feishu's native Docx block APIs.
+`publish` uses `lark-cli docs +update/+create` for remote writes. In `auto`, it attempts a safe block patch when the document shape is supported, otherwise it falls back to a guarded `document-replace` plan.
 
 ## Known Limitations
 
 - Feishu to Markdown export is best-effort.
-- Unsupported Feishu block types are omitted with an HTML comment.
-- `:::note` admonitions are currently emitted by pull only; Markdown-to-Feishu callout creation is not yet implemented.
+- Unsupported Feishu block types may not round-trip through Markdown.
+- Local image upload is not part of the new-core publish surface yet.
 - Paragraph wrapping may not round-trip byte-for-byte.
 - The merge algorithm is deterministic and line-based, not semantic Markdown merge.

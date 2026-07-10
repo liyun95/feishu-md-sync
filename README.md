@@ -1,65 +1,68 @@
-# feishu-md-sync
+# Feishu Markdown Sync
 
-Feishu documentation workflows for Codex and the `md2feishu` CLI.
+Feishu Markdown Sync is a sync bridge between local Markdown and Feishu/Lark online documents. It focuses on product documentation workflows where local Markdown is authored in a Milvus-shaped source form, transformed for Zilliz Cloud publishing, reviewed as a dry run, and written only when explicit safety gates are satisfied.
 
-Use this repo when a Feishu document needs to be pulled into Markdown, pushed back from local Markdown, filled with multi-SDK examples, or moved through SDK reference and release-note workflows. The recommended team path is Skill-first: install the Codex workflow skills, then ask Codex to run the workflow that matches the task.
+The primary product surface is the `feishu-md-sync` CLI: `publish`, `pull`, `status`, `diff`, and `merge`.
 
 Docs site: <https://liyun95.github.io/feishu-md-sync/>
 
 ## Quickstart
 
-From the repository root:
+Install dependencies and build the CLI:
 
 ```bash
 npm install
 npm run build
-scripts/install-codex-skills.sh
 ```
 
-This installs the workflow skills:
-
-- `feishu-baseline-sync`
-- `feishu-publish-new`
-- `feishu-push`
-- `feishu-multisdk-examples`
-- `feishu-sdk-reference-authoring`
-- `feishu-sdk-reference-release`
-- `feishu-release-notes`
-
-After installation, ask Codex to use the matching skill instead of memorizing command sequences.
-
-## Choose a workflow
-
-| Task | Skill | Workflow recipe |
-| --- | --- | --- |
-| Pull Feishu into Markdown before editing | `feishu-baseline-sync` | `md2feishu workflow show baseline-sync` |
-| Publish local Markdown as a new Feishu doc | `feishu-publish-new` | `md2feishu workflow show publish-new` |
-| Push local Markdown changes to Feishu | `feishu-push` | `md2feishu workflow show push` |
-| Complete multi-SDK examples | `feishu-multisdk-examples` | `md2feishu workflow show multisdk-examples` |
-| Author SDK reference changes on Feishu | `feishu-sdk-reference-authoring` | `md2feishu workflow show sdk-reference-authoring` |
-| Release audited SDK references to `web-content` | `feishu-sdk-reference-release` | `md2feishu workflow show sdk-reference-web-content-release` |
-| Audit release notes | `feishu-release-notes` | `md2feishu workflow show release-notes` |
-
-SDK reference authoring stops after Feishu write and audit. Moving audited reference docs into `web-content` is a separate human-triggered release workflow.
-
-## Direct CLI fallback
-
-Use direct CLI commands when debugging, automating, or maintaining the tool:
+Install and authenticate the official Lark CLI:
 
 ```bash
-npm exec -- md2feishu workflow list
-npm exec -- md2feishu workflow show baseline-sync
-npm exec -- md2feishu --help
+npx @larksuite/cli@latest install
+lark-cli auth status
 ```
 
-For real Feishu calls, copy the example environment file and fill in your app credentials:
+Preview a publish plan:
 
 ```bash
-cp .env.example .env
-npm exec -- md2feishu doctor auth --format json
+feishu-md-sync publish ./doc.md --target <docx-url-or-token> --profile zilliz
 ```
 
-Detailed CLI usage lives in [`packages/cli/README.md`](./packages/cli/README.md). Feishu app permissions are documented in the [Configuration guide](https://liyun95.github.io/feishu-md-sync/guide/configuration).
+Handle remote edits before publishing:
+
+```bash
+feishu-md-sync status ./doc.md --target <docx-url-or-token> --profile zilliz
+feishu-md-sync diff ./doc.md --target <docx-url-or-token> --profile zilliz
+feishu-md-sync pull --target <docx-url-or-token> --output doc.remote.md --profile milvus --write-receipt
+feishu-md-sync merge ./doc.md --target <docx-url-or-token> --profile milvus
+feishu-md-sync publish ./doc.md --target <docx-url-or-token> --profile zilliz --write
+```
+
+When the merge already makes the local publish draft match the remote document, the final `publish --write` is a no-op remote write: it refreshes the local receipt and merge base snapshot without changing Feishu content.
+
+Preview creating a new document under a Drive folder or Wiki parent:
+
+```bash
+feishu-md-sync publish ./doc.md --target <wiki-parent-url> --create --profile zilliz
+```
+
+Execute guarded whole-document replacement only when you intentionally accept the risk:
+
+```bash
+feishu-md-sync publish ./doc.md --target <docx-url-or-token> --profile zilliz --write --strategy document-replace --confirm-destructive
+```
+
+## Safety Model
+
+Commands are dry-run by default. `--write` allows remote writes, but it does not allow destructive strategies by itself.
+
+Existing-document whole replacement requires all of these gates:
+
+- `--write`
+- `--strategy document-replace`
+- `--confirm-destructive`
+
+This protects comments, anchors, block identity, and teammate edits from accidental replacement. When the document shape is safe, `publish` can use block-level patching instead of whole-document replacement.
 
 ## Develop
 

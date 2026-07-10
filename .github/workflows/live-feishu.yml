@@ -1,0 +1,30 @@
+name: live-feishu
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  live-feishu:
+    runs-on: ubuntu-latest
+    env:
+      FEISHU_MD_SYNC_LIVE: "1"
+      FEISHU_MD_SYNC_TEST_DOC: ${{ secrets.FEISHU_MD_SYNC_TEST_DOC }}
+      FEISHU_MD_SYNC_LARK_AS: bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx @larksuite/cli@latest install
+      - name: Configure lark-cli bot credentials
+        env:
+          LARK_APP_ID: ${{ secrets.LARK_TEST_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_TEST_APP_SECRET }}
+        run: |
+          printf "%s" "$LARK_APP_SECRET" | lark-cli config init --app-id "$LARK_APP_ID" --app-secret-stdin --brand feishu
+      - run: lark-cli auth status
+      - run: npm run test:live:feishu
