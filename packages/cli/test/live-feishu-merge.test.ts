@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { parseFeishuTarget } from '../src/core/doc-id.js';
 
 const runLive = process.env.FEISHU_MD_SYNC_LIVE === '1';
+const cli = new URL('../src/cli/index.ts', import.meta.url).pathname;
+const tsxLoader = new URL('../../../node_modules/tsx/dist/esm/index.mjs', import.meta.url).pathname;
 
 describe.skipIf(!runLive)('live Feishu merge', () => {
   it('uses a live test doc as remote setup and merges fetched changes into a local file', async () => {
@@ -15,7 +17,7 @@ describe.skipIf(!runLive)('live Feishu merge', () => {
 
     await writeFile(file, '# lark-cli-test\n\nMilvus stores vector data.\n', 'utf8');
 
-    const seed = await runCli([
+    const seed = await runCli(dir, [
       'publish',
       file,
       '--target',
@@ -35,7 +37,7 @@ describe.skipIf(!runLive)('live Feishu merge', () => {
     await writeFile(file, '# lark-cli-test\n\nMilvus stores vector data.\n\nLocal live merge line.\n', 'utf8');
     await overwriteRemoteMarkdown(target, '# lark-cli-test\n\n<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vector data.\n\nRemote live merge line.');
 
-    const merge = await runCli([
+    const merge = await runCli(dir, [
       'merge',
       file,
       '--target',
@@ -95,10 +97,10 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function runCli(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
+function runCli(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
   return new Promise((resolve) => {
-    execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
-      cwd: new URL('..', import.meta.url),
+    execFile(process.execPath, ['--import', tsxLoader, cli, ...args], {
+      cwd,
       env: process.env,
       timeout: 25_000
     }, (error, stdout, stderr) => {
