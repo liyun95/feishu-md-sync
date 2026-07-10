@@ -1,6 +1,6 @@
 # Configuration
 
-`md2feishu` reads Feishu credentials from environment variables or a local `.env` file.
+`feishu-md-sync` uses the official `lark-cli` for Feishu IO. Authenticate `lark-cli` first, then use `.env` only for repository-local CLI defaults.
 
 ## Create `.env`
 
@@ -10,16 +10,13 @@ From the repository root:
 cp .env.example .env
 ```
 
-Fill in the Feishu app credentials:
+Set the identity only when you need to force bot or user mode:
 
 ```bash
-APP_ID=cli_xxx
-APP_SECRET=xxx
-FEISHU_HOST=https://open.feishu.cn
-FEISHU_WEB_BASE_URL=https://example.feishu.cn
+FEISHU_MD_SYNC_LARK_AS=bot
 ```
 
-`APP_ID` and `APP_SECRET` are required. `FEISHU_HOST` is optional and defaults to `https://open.feishu.cn`. `FEISHU_WEB_BASE_URL` is optional and lets app-owned document creation print browser URLs when the Feishu create API returns only a document id.
+Leave `FEISHU_MD_SYNC_LARK_AS` unset to use `lark-cli`'s default identity.
 
 `.env` is ignored by git. Do not commit real credentials.
 
@@ -31,17 +28,27 @@ The CLI loads `.env` files from:
 2. The current working directory.
 3. The CLI package checkout and its workspace root, when detectable.
 
-This means commands such as `npm --prefix /path/to/feishu-md-sync exec -- md2feishu ...` can still load `/path/to/feishu-md-sync/.env` even when invoked from another directory.
+This means commands such as `npm --prefix /path/to/feishu-md-sync exec -- feishu-md-sync ...` can still load `/path/to/feishu-md-sync/.env` even when invoked from another directory.
 
-Use `doctor auth` to confirm what was loaded without printing secrets:
+Use `doctor auth` to confirm what was loaded and which `lark-cli` identity will be requested:
 
 ```bash
-npm exec -- md2feishu doctor auth --format json
+npm exec -- feishu-md-sync doctor auth --format json
 ```
+
+## Authenticate `lark-cli`
+
+Check the official CLI directly:
+
+```bash
+lark-cli auth status
+```
+
+If you use a bot identity, make sure `lark-cli` is configured for that app and that the app has access to the target document or parent location.
 
 ## Permissions
 
-For normal pull and push workflows, request these Feishu app API permissions. This list assumes the default official Markdown path and write-capable workflows.
+For normal pull, status, diff, merge, and publish workflows, request these Feishu app API permissions. This list assumes the official Markdown path and write-capable publish workflows.
 
 | Permission name in Feishu | Needed for |
 | --- | --- |
@@ -56,19 +63,14 @@ Workflow-specific features may need additional permissions:
 
 | Workflow need | Additional permission |
 | --- | --- |
-| Read or write SDK reference Bitable audit records | `查看、评论、编辑和管理多维表格` |
 | List docs in a Drive folder | `获取云空间文件夹下的云文档清单` |
 | Publish a new docx into a Drive folder | `创建及编辑新版文档`, plus folder edit access |
 | Move a newly created docx into wiki | Wiki node management permission for moving cloud docs into wiki |
-| Create folders for SDK reference outputs | `创建云空间文件夹` |
-| Copy reference documents | `复制云文档` |
-| Move reference documents or folders | `移动云空间文件夹和云文档` |
 
 API permissions are not enough by themselves. The app also needs resource access:
 
 - For a docx target, add the app as a collaborator on the document. Use read access for pull-only workflows and edit access for write workflows.
 - For a wiki target, the app needs node read access to resolve the wiki node, plus edit access to the underlying docx document when writing.
 - For Drive folder operations, the app needs access to the folder. Creating, copying, or moving files requires edit access to the target folder.
-- For first publication, configure `FEISHU_PUBLISH_FOLDER_TOKEN` for Drive publication or staging. For wiki publication, also configure `FEISHU_PUBLISH_SPACE_ID` and `FEISHU_PUBLISH_PARENT_NODE_TOKEN`.
-- To create app-owned docx documents without a folder destination, set `FEISHU_PUBLISH_APP_OWNED=true` or pass `--app-owned`.
+- For first publication, pass `publish --create --target <folder-or-wiki-parent>`.
 - After changing app API permissions, publish or reinstall the app as required by the Feishu developer console so the new permissions take effect.

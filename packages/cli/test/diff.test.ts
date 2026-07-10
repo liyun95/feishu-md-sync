@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { unifiedDiff } from '../src/sync/diff.js';
+import { unifiedDiff } from '../src/core/diff.js';
 
 describe('unifiedDiff', () => {
   it('prints removed and added lines', () => {

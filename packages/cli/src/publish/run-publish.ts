@@ -12,10 +12,10 @@ import {
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
 import { canonicalMarkdownHash } from '../core/markdown-canonical.js';
-import { findPageBlock, renderableDirectChildBlocks } from '../sync/block-state.js';
+import { findPageBlock, renderableDirectChildBlocks } from './block-state.js';
 import { planPublishBlockPatch, type PublishBlockPatchPlan } from './block-patch-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
-import { resolvePublishTitle } from '../sync/publish-new-plan.js';
+import { resolvePublishTitle } from './title.js';
 import { applyPublishTransformForProfile } from './profile-transform.js';
 
 export type RunPublishResult = {

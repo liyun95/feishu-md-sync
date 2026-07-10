@@ -14,7 +14,7 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<CliResult>
   return new Promise((resolve) => {
     execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
       cwd: new URL('..', import.meta.url),
-      env: { ...process.env, APP_ID: '', APP_SECRET: '', ...env }
+      env: { ...process.env, FEISHU_MD_SYNC_LARK_AS: '', ...env }
     }, (error, stdout, stderr) => {
       resolve({
         stdout,

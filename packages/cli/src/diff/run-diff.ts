@@ -1,7 +1,7 @@
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
-import { unifiedDiff } from '../sync/diff.js';
+import { unifiedDiff } from '../core/diff.js';
 import { loadPublishStatusContext, statusFromContext, type PublishStatusResult } from '../status/run-status.js';
 
 export type RunDiffResult = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { comparableDirectChildBlocks, directChildBlocks, findPageBlock, renderableDirectChildBlocks } from '../src/sync/block-state.js';
+import { comparableDirectChildBlocks, directChildBlocks, findPageBlock, renderableDirectChildBlocks } from '../src/publish/block-state.js';
 
 describe('block-state helpers', () => {
   it('throws when a page block cannot be found', () => {

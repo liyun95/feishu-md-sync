@@ -17,7 +17,7 @@ function runCli(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): Promi
   return new Promise((resolve) => {
     execFile(process.execPath, ['--import', tsxLoader, cli, ...args], {
       cwd,
-      env: { ...process.env, APP_ID: '', APP_SECRET: '', ...env }
+      env: { ...process.env, FEISHU_MD_SYNC_LARK_AS: '', ...env }
     }, (error, stdout, stderr) => {
       resolve({
         stdout,

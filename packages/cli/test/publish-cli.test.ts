@@ -14,7 +14,7 @@ function runCli(args: string[]): Promise<CliResult> {
   return new Promise((resolve) => {
     execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
       cwd: new URL('..', import.meta.url),
-      env: { ...process.env, APP_ID: '', APP_SECRET: '' }
+      env: { ...process.env, FEISHU_MD_SYNC_LARK_AS: '' }
     }, (error, stdout, stderr) => {
       resolve({
         stdout,

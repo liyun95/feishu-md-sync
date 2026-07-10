@@ -21,7 +21,7 @@ const doctor = program
 
 doctor
   .command('auth')
-  .description('show where auth environment variables were loaded from without printing secrets')
+  .description('show lark-cli auth hints and loaded .env files')
   .option('--format <format>', 'output format: pretty | json', 'pretty')
   .action(async (opts: FormatCommandOptions) => {
     printFormatted(buildAuthDoctorReport(envLoadReport), opts.format);

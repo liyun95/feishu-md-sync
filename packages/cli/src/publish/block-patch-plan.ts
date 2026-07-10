@@ -1,7 +1,7 @@
 import { sha256, stableStringify } from '../core/hash.js';
 import type { FeishuBlock } from '../feishu/types.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
-import { isTextLikeBlockPairUpdateable } from '../sync/block-update.js';
+import { isTextLikeBlockPairUpdateable } from './block-update.js';
 
 export type PublishBlockPatchOperation =
   | {

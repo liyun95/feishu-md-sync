@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTextLikeBlockUpdateRequest, isTextLikeBlockPairUpdateable } from '../src/sync/block-update.js';
+import { buildTextLikeBlockUpdateRequest, isTextLikeBlockPairUpdateable } from '../src/publish/block-update.js';
 
 describe('block update planning', () => {
   it('builds a paragraph update request that preserves the remote block id', () => {

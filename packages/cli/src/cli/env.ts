@@ -23,17 +23,13 @@ export type AuthDoctorReport = {
     loaded: boolean;
     explicit: boolean;
   }>;
-  appId: {
-    present: boolean;
-    preview?: string;
+  larkCli: {
+    command: string;
+    identity: 'auto' | 'bot' | 'user';
+    identityEnv?: string;
+    warning?: string;
   };
-  appSecret: {
-    present: boolean;
-  };
-  feishuHost: string;
 };
-
-const DEFAULT_FEISHU_HOST = 'https://open.feishu.cn';
 
 export function loadCliEnv(options: CliEnvLoadOptions = {}): CliEnvLoadReport {
   const argv = options.argv ?? process.argv;
@@ -75,20 +71,22 @@ export function buildAuthDoctorReport(
   report: CliEnvLoadReport,
   env: NodeJS.ProcessEnv = process.env
 ): AuthDoctorReport {
+  const identityEnv = env.FEISHU_MD_SYNC_LARK_AS;
+  const identity = identityEnv === 'bot' || identityEnv === 'user' ? identityEnv : 'auto';
   return {
     envFiles: report.attemptedFiles.map((file) => ({
       path: file,
       loaded: report.loadedFiles.includes(file),
       explicit: file === report.explicitEnvFile
     })),
-    appId: {
-      present: Boolean(env.APP_ID),
-      preview: env.APP_ID ? maskValue(env.APP_ID) : undefined
-    },
-    appSecret: {
-      present: Boolean(env.APP_SECRET)
-    },
-    feishuHost: env.FEISHU_HOST ?? DEFAULT_FEISHU_HOST
+    larkCli: {
+      command: 'lark-cli auth status',
+      identity,
+      identityEnv,
+      warning: identityEnv && identity === 'auto'
+        ? 'FEISHU_MD_SYNC_LARK_AS must be "bot" or "user"; falling back to lark-cli default identity.'
+        : undefined
+    }
   };
 }
 
@@ -153,9 +151,4 @@ function isWorkspaceRoot(packagePath: string): boolean {
   } catch {
     return false;
   }
-}
-
-function maskValue(value: string): string {
-  if (value.length <= 8) return `${value.slice(0, 2)}...`;
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
