@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:live:feishu": "vitest run test/live-feishu-publish.test.ts",
+    "test:live:feishu": "vitest run test/live-feishu-publish.test.ts test/live-feishu-merge.test.ts",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/cli/index.ts"

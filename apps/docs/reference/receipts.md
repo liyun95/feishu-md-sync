@@ -25,6 +25,8 @@ New-core `publish` receipts are target-oriented. They record the last successful
 
 New-core `pull` receipts are output-oriented. They record that one local `*.remote.md` snapshot came from one remote document revision. They do not mean the canonical local source file is synchronized, and they do not affect `publish` remote drift checks.
 
+New-core `merge` does not write receipts. It may read the publish receipt to find a local base snapshot.
+
 ## Legacy Sync Stored Data
 
 Legacy sync receipts include:
@@ -52,6 +54,35 @@ Pull snapshot receipts include:
 - raw official Markdown export hash
 - profile-filtered output hash
 - pull timestamp
+
+## New-Core Publish Base Snapshots
+
+After a successful `publish --write`, the CLI stores the local source Markdown used for that publish under:
+
+```text
+.sync/feishu-md-sync/bases/<target-kind>-<target-token>-local.md
+```
+
+The publish receipt stores only the snapshot path and hash:
+
+```json
+{
+  "localBaseSnapshot": {
+    "path": ".sync/feishu-md-sync/bases/docx-DocToken-local.md",
+    "hash": "..."
+  }
+}
+```
+
+`merge` uses this local authoring snapshot as the three-way merge base when available:
+
+```text
+base:   last successfully published local source
+local:  current local Markdown file
+remote: current Feishu Markdown after pull-side profile filtering
+```
+
+If the base snapshot file is missing, `merge` falls back to conservative conflict regions. `merge` itself never updates the base snapshot; the next successful `publish --write` updates it.
 
 ## Resolved Merge Files
 

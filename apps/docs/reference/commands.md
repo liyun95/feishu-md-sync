@@ -128,6 +128,71 @@ Profile filtering interprets Feishu include/exclude tags for `milvus` and `zilli
 
 Use `--profile none` to keep those tags unchanged.
 
+## `merge`
+
+```bash
+feishu-md-sync merge <markdown-file> --target <docx-or-wiki> --profile milvus
+feishu-md-sync merge <markdown-file> --remote <remote.md> --profile milvus
+feishu-md-sync merge <markdown-file> --abort --profile milvus
+```
+
+`merge` merges remote Markdown changes into the local source file. It is a local working-tree operation: it may fetch Feishu through `lark-cli docs +fetch`, but it never writes Feishu, publish receipts, or base snapshots.
+
+Options:
+
+- `--target <url-or-token>` - fetch remote Markdown from an existing docx or Wiki target.
+- `--remote <file>` - use an existing remote snapshot Markdown file.
+- `--base <file>` - explicit three-way merge base.
+- `--profile <profile>` - local authoring profile: `milvus`, `zilliz`, or `none`.
+- `--check` - report whether merge would be clean, merged, or conflicted without writing.
+- `--dry-run` - print merge metadata without writing.
+- `--abort` - restore the local file from the previous merge state.
+- `--save-remote <file>` - save the fetched remote snapshot when using `--target`.
+- `--format <format>` - `pretty` or `json`.
+
+Merge directly from Feishu into the local Milvus-shaped source file:
+
+```bash
+feishu-md-sync merge ./doc.md --target DocToken --profile milvus
+```
+
+Merge from a pulled remote snapshot:
+
+```bash
+feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus --overwrite
+feishu-md-sync merge ./doc.md --remote doc.remote.md --profile milvus
+```
+
+Check before writing:
+
+```bash
+feishu-md-sync merge ./doc.md --target DocToken --profile milvus --check --format json
+```
+
+If a conflict is produced, the command writes standard conflict markers and exits `1`:
+
+```md
+<<<<<<< LOCAL
+local content
+=======
+remote content
+>>>>>>> REMOTE
+```
+
+Abort an in-place merge:
+
+```bash
+feishu-md-sync merge ./doc.md --abort --profile milvus
+```
+
+The legacy positional merge form still exists:
+
+```bash
+md2feishu merge <markdown-file> <feishu-doc>
+```
+
+It writes a separate `.merged.md` file and depends on legacy sync receipts. Prefer the new `feishu-md-sync merge --target ...` flow for new work.
+
 ## `sync`
 
 ```bash

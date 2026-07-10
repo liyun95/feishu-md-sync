@@ -15,7 +15,7 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 | Push local Markdown changes back to Feishu | `feishu-md-sync publish` |
 | Inspect a planned write before applying it | `feishu-md-sync publish` without `--write` |
 | Check publish readiness | `feishu-md-sync status` |
-| Resolve local/remote drift | `feishu-md-sync pull`, then review or use legacy `md2feishu diff` / `md2feishu merge` |
+| Resolve local/remote drift | `feishu-md-sync status`, `feishu-md-sync diff`, then `feishu-md-sync merge` |
 | Work on multi-SDK examples, SDK references, or release notes | Use the matching workflow skill first |
 
 The CLI is dry-run-first. Commands that write to Feishu require `--write` and either interactive confirmation or `--yes`.
@@ -70,6 +70,28 @@ Inspect the remote-current to publish-draft diff:
 
 ```bash
 npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
+```
+
+Merge remote edits back into the local authoring file:
+
+```bash
+npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
+```
+
+`merge` writes only local files. It fetches the remote Markdown, applies pull-side profile filtering, and uses the local base snapshot saved by the last successful `publish --write` when available. If it cannot safely merge a region, it writes standard conflict markers and exits `1`:
+
+```md
+<<<<<<< LOCAL
+local content
+=======
+remote content
+>>>>>>> REMOTE
+```
+
+Abort the last in-place merge for a file:
+
+```bash
+npm exec -- feishu-md-sync merge ./doc.md --abort --profile milvus
 ```
 
 Refresh an existing local file only after reviewing the remote copy:

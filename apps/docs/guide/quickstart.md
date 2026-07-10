@@ -99,10 +99,25 @@ Inspect what publish would change:
 npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
 ```
 
+Merge Feishu edits back into your local authoring file:
+
+```bash
+npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
+```
+
 Write after inspecting the plan:
 
 ```bash
 npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
+```
+
+When both local and Feishu changed since the last publish, use this loop:
+
+```bash
+npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
+npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
+npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
 ```
 
 ## Supported Targets
