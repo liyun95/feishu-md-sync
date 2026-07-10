@@ -2,7 +2,55 @@
 
 `feishu-md-sync` uses the official `lark-cli` for Feishu IO. Authenticate `lark-cli` first, then use `.env` only for repository-local CLI defaults.
 
-## Create `.env`
+## Default Local Setup
+
+For local interactive use, let the official CLI handle authentication:
+
+```bash
+npx @larksuite/cli@latest install
+lark-cli auth login --domain docs,wiki,drive
+lark-cli auth status --verify
+```
+
+In this mode, leave `FEISHU_MD_SYNC_LARK_AS` unset. `feishu-md-sync` will let `lark-cli` use its default identity.
+
+## Bot Setup
+
+Use bot mode when commands should run as a Feishu app instead of an interactive user. This is common for CI and agent-driven workflows.
+
+First configure the app credentials in `lark-cli`:
+
+```bash
+export LARK_APP_ID='<your-app-id>'
+read -rsp 'LARK_APP_SECRET: ' LARK_APP_SECRET; echo
+printf "%s" "$LARK_APP_SECRET" | lark-cli config init --app-id "$LARK_APP_ID" --app-secret-stdin --brand feishu
+unset LARK_APP_SECRET
+```
+
+Then force `feishu-md-sync` to request the bot identity:
+
+```bash
+export FEISHU_MD_SYNC_LARK_AS=bot
+```
+
+`FEISHU_MD_SYNC_LARK_AS` is an identity selector passed to `lark-cli`; it is not an App ID.
+
+API permissions are not enough by themselves. Add the app or bot to the target Feishu resource:
+
+- For an existing docx target, add the app as a collaborator on the document.
+- For a wiki target, make sure the app can resolve the wiki node and edit the underlying document when writing.
+- For a Drive folder or Wiki parent used with `publish --create`, grant edit access to the parent location.
+
+Check both layers:
+
+```bash
+lark-cli auth status --verify
+npm exec -- feishu-md-sync doctor auth --format json
+```
+
+## Repository `.env`
+
+Use `.env` only for local defaults such as the identity selector. Do not put App Secrets in this project's `.env`; App ID and App Secret belong to `lark-cli`.
 
 From the repository root:
 
@@ -10,13 +58,11 @@ From the repository root:
 cp .env.example .env
 ```
 
-Set the identity only when you need to force bot or user mode:
+Example:
 
 ```bash
 FEISHU_MD_SYNC_LARK_AS=bot
 ```
-
-Leave `FEISHU_MD_SYNC_LARK_AS` unset to use `lark-cli`'s default identity.
 
 `.env` is ignored by git. Do not commit real credentials.
 
@@ -36,15 +82,34 @@ Use `doctor auth` to confirm what was loaded and which `lark-cli` identity will 
 npm exec -- feishu-md-sync doctor auth --format json
 ```
 
-## Authenticate `lark-cli`
+## GitHub Actions Setup
 
-Check the official CLI directly:
+Use a dedicated test bot for live CI. Do not reuse production app credentials for tests.
 
-```bash
-lark-cli auth status
+Recommended repository secrets:
+
+```text
+LARK_TEST_APP_ID
+LARK_TEST_APP_SECRET
+FEISHU_MD_SYNC_TEST_DOC
 ```
 
-If you use a bot identity, make sure `lark-cli` is configured for that app and that the app has access to the target document or parent location.
+In the workflow, map the test secrets to the environment variable names expected by `lark-cli` only inside the credential setup step:
+
+```yaml
+- name: Configure lark-cli bot credentials
+  env:
+    LARK_APP_ID: ${{ secrets.LARK_TEST_APP_ID }}
+    LARK_APP_SECRET: ${{ secrets.LARK_TEST_APP_SECRET }}
+  run: |
+    printf "%s" "$LARK_APP_SECRET" | lark-cli config init --app-id "$LARK_APP_ID" --app-secret-stdin --brand feishu
+```
+
+Set `FEISHU_MD_SYNC_LARK_AS=bot` for live Feishu tests.
+
+Avoid generic repository secrets such as `LARK_APP_SECRET`; they make it too easy to mix test and production identities.
+
+If you later add production automation, use separate names such as `LARK_PROD_APP_ID` and `LARK_PROD_APP_SECRET`, ideally behind a protected GitHub environment. This project does not currently ship a production auto-publish workflow.
 
 ## Permissions
 
