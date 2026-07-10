@@ -45,7 +45,7 @@ Check both layers:
 
 ```bash
 lark-cli auth status --verify
-npm exec -- feishu-md-sync doctor auth --format json
+feishu-md-sync doctor auth --format json
 ```
 
 ## Repository `.env`
@@ -79,7 +79,7 @@ This means commands such as `npm --prefix /path/to/feishu-md-sync exec -- feishu
 Use `doctor auth` to confirm what was loaded and which `lark-cli` identity will be requested:
 
 ```bash
-npm exec -- feishu-md-sync doctor auth --format json
+feishu-md-sync doctor auth --format json
 ```
 
 ## GitHub Actions Setup

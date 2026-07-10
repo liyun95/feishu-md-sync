@@ -1,6 +1,6 @@
 # Command Reference
 
-Examples use the installed `feishu-md-sync` binary. Inside a repository checkout, use `npm exec -- feishu-md-sync ...` until you run `npm link`.
+Examples use the installed `feishu-md-sync` binary. When developing from source, use `npm run dev -- <command> ...`.
 
 ## `publish`
 
@@ -46,7 +46,7 @@ feishu-md-sync publish ./doc.md --target DocToken --strategy document-replace --
 
 ## Profiles
 
-Omit `--profile` to use the configured default. In a fresh checkout, the default profile is `none`.
+Omit `--profile` to use the configured default. In a fresh setup, the default profile is `none`.
 
 The `zilliz` profile transforms local Milvus-oriented Markdown for Zilliz Cloud publishing, including the shared product-name wrapper:
 

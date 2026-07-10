@@ -25,13 +25,13 @@ features:
 ## Main Loop
 
 ```bash
-npm exec -- feishu-md-sync status ./doc.md --target DocToken
-npm exec -- feishu-md-sync diff ./doc.md --target DocToken
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken --write --confirm-untracked-remote
+feishu-md-sync status ./doc.md --target DocToken
+feishu-md-sync diff ./doc.md --target DocToken
+feishu-md-sync publish ./doc.md --target DocToken
+feishu-md-sync publish ./doc.md --target DocToken --write --confirm-untracked-remote
 ```
 
-The first command with `publish` is a dry-run. The second writes after review and confirms that this checkout is adopting an existing remote document for the first time.
+The first command with `publish` is a dry-run. The second writes after review and confirms that the current working directory is adopting an existing remote document for the first time.
 
 ## Commands
 
