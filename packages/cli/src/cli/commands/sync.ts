@@ -19,6 +19,7 @@ import { publishNewHelpAfter, publishNewJson, publishNewSummaryLines } from '../
 import { runPull } from '../../pull/run-pull.js';
 import { runStatus } from '../../status/run-status.js';
 import { diffSummaryLines, runDiff } from '../../diff/run-diff.js';
+import { runMerge, type RunMergeMode } from '../../merge/run-merge.js';
 import { unifiedDiff } from '../../sync/diff.js';
 import { buildMergeInstructions, defaultMergedPath, threeWayMerge } from '../../sync/merge.js';
 import { pullRemoteMarkdown, pullRemoteMarkdownWithState } from '../../sync/pull.js';
@@ -106,6 +107,21 @@ type PullCommandOptions = BaseCommandOptions & {
   markdownEngine?: string;
   overwrite?: boolean;
   writeReceipt?: boolean;
+  receiptDir?: string;
+};
+
+type MergeCommandOptions = BaseCommandOptions & {
+  target?: string;
+  remote?: string;
+  base?: string;
+  profile?: string;
+  check?: boolean;
+  dryRun?: boolean;
+  abort?: boolean;
+  saveRemote?: string;
+  output?: string;
+  format?: string;
+  markdownEngine?: string;
   receiptDir?: string;
 };
 
@@ -463,15 +479,47 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
 
   program
     .command('merge')
-    .description('merge local Markdown with current Feishu content into a .merged.md file')
+    .description('merge remote Feishu/Lark Markdown changes into a local Markdown file; positional <feishu-doc> is legacy')
     .argument('<markdown-file>', 'local Markdown file')
-    .argument('<feishu-doc>', 'Feishu docx ID or URL')
-    .option('-o, --output <file>', 'merged output path; defaults to <name>.merged.md next to local file')
+    .argument('[feishu-doc]', 'legacy Feishu docx ID or URL')
+    .option('--target <url-or-token>', 'new-core Feishu/Lark docx or wiki URL/token to fetch before merging')
+    .option('--remote <file>', 'new-core local remote snapshot Markdown file')
+    .option('--base <file>', 'new-core explicit merge base Markdown file')
+    .option('--profile <profile>', 'new-core local authoring profile: milvus | zilliz | none')
+    .option('--check', 'new-core check whether merge would conflict without writing')
+    .option('--dry-run', 'new-core show merge metadata without writing')
+    .option('--abort', 'new-core restore the local file from the previous merge state')
+    .option('--save-remote <file>', 'new-core save fetched remote snapshot when using --target')
+    .option('-o, --output <file>', 'legacy merged output path; defaults to <name>.merged.md next to local file')
+    .option('--format <format>', 'output format for new-core mode: pretty | json', 'pretty')
     .option('--host <url>', 'Feishu API host', process.env.FEISHU_HOST ?? 'https://open.feishu.cn')
     .option('--timeout-ms <number>', 'Feishu API timeout in milliseconds', parseIntOption, 20_000)
     .option('--markdown-engine <engine>', 'Markdown conversion engine: auto | official | local', 'auto')
     .option('--receipt-dir <dir>', 'write/read sync receipts directly in this directory')
-    .action(async (markdownFile: string, feishuDoc: string, opts: PullCommandOptions) => {
+    .action(async (markdownFile: string, feishuDoc: string | undefined, opts: MergeCommandOptions) => {
+      if (isNewCoreMergeRequest(opts)) {
+        if (feishuDoc) throw new Error('Use either new-core merge options or legacy <feishu-doc>, not both.');
+        const config = await loadSyncConfig({ cwd: process.cwd() });
+        const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
+        const target = opts.target ? parseFeishuTarget(opts.target) : undefined;
+        if (target?.kind === 'folder') throw new Error('merge --target does not support Drive folder targets.');
+        const result = await runMerge({
+          cwd: process.cwd(),
+          filePath: path.resolve(process.cwd(), markdownFile),
+          target,
+          remotePath: opts.remote ? path.resolve(process.cwd(), opts.remote) : undefined,
+          basePath: opts.base ? path.resolve(process.cwd(), opts.base) : undefined,
+          saveRemotePath: opts.saveRemote ? path.resolve(process.cwd(), opts.saveRemote) : undefined,
+          profile,
+          mode: resolveMergeMode(opts),
+          adapter: new LarkCliAdapter()
+        });
+        printFormatted(result, opts.format);
+        if (result.state === 'conflict') process.exitCode = 1;
+        return;
+      }
+
+      if (!feishuDoc) throw new Error('merge requires --target, --remote, --abort, or legacy <feishu-doc>.');
       const normalized = normalizePullOptions(program, opts);
       const client = context.createFeishuClient({ host: normalized.host, timeoutMs: normalized.timeoutMs });
       const documentId = await resolveDocumentId(client, feishuDoc);
@@ -501,6 +549,19 @@ export function registerSyncCommands(program: Command, context: CliContext): voi
         process.exitCode = 1;
       }
     });
+}
+
+function isNewCoreMergeRequest(opts: MergeCommandOptions): boolean {
+  return Boolean(opts.target || opts.remote || opts.base || opts.profile || opts.check || opts.dryRun || opts.abort || opts.saveRemote);
+}
+
+function resolveMergeMode(opts: MergeCommandOptions): RunMergeMode {
+  const selected = [opts.check, opts.dryRun, opts.abort].filter(Boolean).length;
+  if (selected > 1) throw new Error('Choose only one of --check, --dry-run, or --abort.');
+  if (opts.abort) return 'abort';
+  if (opts.check) return 'check';
+  if (opts.dryRun) return 'dry-run';
+  return 'write';
 }
 
 function normalizeBaseOptions(program: Command, opts: BaseCommandOptions): Required<BaseCommandOptions> {
