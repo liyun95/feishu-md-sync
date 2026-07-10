@@ -126,6 +126,28 @@ describe('runStatus', () => {
     expect(result.recommendation.action).toBe('resolve-divergence');
   });
 
+  it('recommends publish dry-run when local and remote match but the receipt is stale', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, 'Merged content.', 'utf8');
+    await seedPublishReceipt(dir, 'Old draft.', 'Old draft.');
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: statusAdapter('Merged content.')
+    });
+
+    expect(result.state).toBe('diverged');
+    expect(result.contentMatchesRemote).toBe(true);
+    expect(result.recommendation).toEqual({
+      action: 'publish-dry-run',
+      reason: 'content matches remote, but the publish receipt is stale'
+    });
+  });
+
   it('compares the transformed zilliz publish draft with the remote content', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-status-'));
     const file = join(dir, 'doc.md');

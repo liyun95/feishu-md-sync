@@ -170,6 +170,12 @@ function recommendationFor(input: {
       reason: 'publish would be a no-op'
     };
   }
+  if (input.contentMatchesRemote) {
+    return {
+      action: 'publish-dry-run',
+      reason: 'content matches remote, but the publish receipt is stale'
+    };
+  }
   if (input.state === 'local-changed') {
     return {
       action: 'publish-dry-run',

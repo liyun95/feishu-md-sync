@@ -122,7 +122,21 @@ export async function runPublish(input: {
     blockPatch
   });
 
-  if (!input.write || plan.strategy === 'no-op') return { mode: 'dry-run', plan };
+  if (!input.write) return { mode: 'dry-run', plan };
+
+  if (plan.strategy === 'no-op') {
+    await recordPublishReceipt({
+      cwd: input.cwd,
+      target: input.target,
+      profile: input.profile,
+      localSource,
+      localSourceHash: plan.localSourceHash,
+      publishDraftHash: plan.publishDraftHash,
+      remoteMarkdown: remote.markdown,
+      remoteRevision: remote.revision
+    });
+    return { mode: 'write', plan };
+  }
 
   if (plan.strategy === 'block-patch') {
     if (input.strategy !== 'auto' && input.strategy !== 'block-patch') {
@@ -144,24 +158,15 @@ export async function runPublish(input: {
     if (canonicalMarkdownHash(after.markdown) !== canonicalMarkdownHash(transform.markdown)) {
       throw new Error('block-patch readback verification failed: remote Markdown differs from publish draft');
     }
-    const localBaseSnapshot = await writeLocalBaseSnapshot({
+    await recordPublishReceipt({
       cwd: input.cwd,
       target: input.target,
-      markdown: localSource
-    });
-    await writePublishReceipt({
-      cwd: input.cwd,
-      receipt: {
-        version: 1,
-        target: input.target,
-        profile: input.profile,
-        localSourceHash: plan.localSourceHash,
-        publishDraftHash: plan.publishDraftHash,
-        remoteSnapshotHash: hashText(after.markdown),
-        remoteRevision: after.revision,
-        localBaseSnapshot,
-        updatedAt: new Date().toISOString()
-      }
+      profile: input.profile,
+      localSource,
+      localSourceHash: plan.localSourceHash,
+      publishDraftHash: plan.publishDraftHash,
+      remoteMarkdown: after.markdown,
+      remoteRevision: after.revision
     });
     return { mode: 'write', plan };
   }
@@ -178,29 +183,51 @@ export async function runPublish(input: {
     }
     await input.adapter.replaceDocument({ doc: input.target.token, markdown: transform.markdown });
     const after = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
-    const localBaseSnapshot = await writeLocalBaseSnapshot({
+    await recordPublishReceipt({
       cwd: input.cwd,
       target: input.target,
-      markdown: localSource
-    });
-    await writePublishReceipt({
-      cwd: input.cwd,
-      receipt: {
-        version: 1,
-        target: input.target,
-        profile: input.profile,
-        localSourceHash: plan.localSourceHash,
-        publishDraftHash: plan.publishDraftHash,
-        remoteSnapshotHash: hashText(after.markdown),
-        remoteRevision: after.revision,
-        localBaseSnapshot,
-        updatedAt: new Date().toISOString()
-      }
+      profile: input.profile,
+      localSource,
+      localSourceHash: plan.localSourceHash,
+      publishDraftHash: plan.publishDraftHash,
+      remoteMarkdown: after.markdown,
+      remoteRevision: after.revision
     });
     return { mode: 'write', plan };
   }
 
   throw new Error(`Write strategy ${plan.strategy} is not implemented in the first slice.`);
+}
+
+async function recordPublishReceipt(input: {
+  cwd: string;
+  target: PublishReceiptTarget;
+  profile: PublishProfileName;
+  localSource: string;
+  localSourceHash: string;
+  publishDraftHash: string;
+  remoteMarkdown: string;
+  remoteRevision?: string;
+}): Promise<void> {
+  const localBaseSnapshot = await writeLocalBaseSnapshot({
+    cwd: input.cwd,
+    target: input.target,
+    markdown: input.localSource
+  });
+  await writePublishReceipt({
+    cwd: input.cwd,
+    receipt: {
+      version: 1,
+      target: input.target,
+      profile: input.profile,
+      localSourceHash: input.localSourceHash,
+      publishDraftHash: input.publishDraftHash,
+      remoteSnapshotHash: hashText(input.remoteMarkdown),
+      remoteRevision: input.remoteRevision,
+      localBaseSnapshot,
+      updatedAt: new Date().toISOString()
+    }
+  });
 }
 
 async function applyBlockPatch(input: {
