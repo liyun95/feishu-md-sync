@@ -13,6 +13,7 @@
     "test": "npm run test --workspace=feishu-md-sync",
     "test:live:feishu": "npm run test:live:feishu --workspace=feishu-md-sync",
     "test:coverage": "npm run test:coverage --workspace=feishu-md-sync",
+    "test:package": "npm run test:package --workspace=feishu-md-sync",
     "typecheck": "npm run typecheck --workspace=feishu-md-sync",
     "dev": "npm run dev --workspace=feishu-md-sync --",
     "docs:dev": "npm run dev --workspace=@feishu-md-sync/docs --",

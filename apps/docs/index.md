@@ -16,8 +16,8 @@ hero:
 features:
   - title: Official Feishu IO
     details: Uses lark-cli for document fetch, update, create, and block operations.
-  - title: Local authoring shape
-    details: Keep Milvus-oriented Markdown locally, then publish Zilliz Cloud-shaped Feishu drafts.
+  - title: Dry-run-first writes
+    details: Preview publish plans before remote writes, then cross explicit gates for untracked, collaboration-risk, or destructive changes.
   - title: Collaboration aware
     details: Status, diff, merge, receipts, and explicit write gates make remote edits visible before publishing.
 ---

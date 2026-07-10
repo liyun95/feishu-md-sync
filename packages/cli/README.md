@@ -1,8 +1,27 @@
 # feishu-md-sync
 
-`feishu-md-sync` is a Markdown sync bridge for local authoring and Feishu/Lark online documents. It uses the official `lark-cli` for Feishu document IO and keeps project-specific behavior in a small workflow layer.
+`feishu-md-sync` is a dry-run-first sync bridge between local Markdown and Feishu/Lark online documents. It uses the official `lark-cli` for authentication and Feishu document IO, then adds profiles, receipts, safety gates, status, diff, pull, merge, and publish UX.
 
 Docs site: <https://liyun95.github.io/feishu-md-sync/>
+
+## Install
+
+Install and authenticate the official Lark CLI:
+
+```bash
+npx @larksuite/cli@latest install
+lark-cli auth login --domain docs,wiki,drive
+lark-cli auth status --verify
+```
+
+Install `feishu-md-sync` globally:
+
+```bash
+npm install --global feishu-md-sync
+feishu-md-sync --help
+```
+
+The selected `lark-cli` identity must have access to the target document, Drive folder, or Wiki parent.
 
 ## Main Commands
 
@@ -15,93 +34,74 @@ Docs site: <https://liyun95.github.io/feishu-md-sync/>
 | Inspect publish diff | `feishu-md-sync diff` |
 | Merge remote edits into local Markdown | `feishu-md-sync merge` |
 
-The CLI is dry-run-first for remote writes. `publish` writes to Feishu only with `--write`; destructive replacement also requires `--strategy document-replace --confirm-destructive`.
+## Common Flow
 
-## Setup
-
-Install dependencies and build:
+The default profile is `none`. Start with a read-only status check and diff:
 
 ```bash
-npm install
-npm run build
+feishu-md-sync status ./doc.md --target DocToken
+feishu-md-sync diff ./doc.md --target DocToken
 ```
 
-Authenticate `lark-cli` and make sure your Feishu app or user has access to the target document:
+Preview a publish without writing to Feishu:
 
 ```bash
-lark-cli auth status
+feishu-md-sync publish ./doc.md --target DocToken
+```
+
+Write to an existing remote document for the first time after reviewing the plan:
+
+```bash
+feishu-md-sync publish ./doc.md --target DocToken --write --confirm-untracked-remote
+feishu-md-sync status ./doc.md --target DocToken
+```
+
+If the remote document changed, pull a reviewable snapshot and merge it locally:
+
+```bash
+feishu-md-sync pull --target DocToken --output doc.remote.md --write-receipt
+feishu-md-sync merge ./doc.md --target DocToken
+feishu-md-sync publish ./doc.md --target DocToken --write
+```
+
+When the merge already makes the publish draft match Feishu, the final write is a no-op remote update that refreshes the local receipt and merge base.
+
+Create a new document under a Drive folder or Wiki parent:
+
+```bash
+feishu-md-sync publish ./doc.md --target FolderOrWikiToken --create --write
 ```
 
 Inspect local auth loading without printing secrets:
 
 ```bash
-npm exec -- feishu-md-sync doctor auth --format json
+feishu-md-sync doctor auth --format json
 ```
 
-## Common Flow
+## Profiles
 
-Check status:
+Omit `--profile` or use `--profile none` for general Markdown sync.
 
-```bash
-npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
-```
+Use `--profile zilliz` when local Markdown uses Milvus wording but the Feishu document is a Zilliz Cloud publishing draft. Use `--profile milvus` mainly when pulling or merging that content back into the local Milvus-shaped source.
 
-Inspect what publish would change:
+## Safety Model
 
-```bash
-npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
-```
-
-Merge remote edits back into the local Milvus-shaped authoring file:
-
-```bash
-npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
-```
-
-Dry-run a publish:
-
-```bash
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
-```
-
-Write after reviewing the plan:
-
-```bash
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
-```
-
-Create a new document under a Drive folder or Wiki parent:
-
-```bash
-npm exec -- feishu-md-sync publish ./doc.md --target FolderOrWikiToken --create --profile zilliz --write
-```
-
-Pull a profile-filtered remote snapshot:
-
-```bash
-npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
-```
-
-After merging remote edits, run a publish write even when the plan is `no-op`:
-
-```bash
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write
-```
-
-For no-op plans this refreshes the local publish receipt and merge base snapshot without changing Feishu content.
-
-Abort an in-place merge:
-
-```bash
-npm exec -- feishu-md-sync merge ./doc.md --abort --profile milvus
-```
+- Remote writes require `publish --write`.
+- The first write to an existing untracked document also requires `--confirm-untracked-remote`.
+- Block-patch updates or deletions that may affect comments, anchors, or block identity require `--confirm-collaboration-risk`.
+- Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
+- `status` and `diff` are read-only; `merge` writes only local files and supports `--abort`.
 
 ## Development
 
+From a repository checkout:
+
 ```bash
+npm install
+npm run build
 npm run typecheck
 npm test
-npm run build
+npm run test:package
 ```
 
 Generated outputs such as `dist/` and `coverage/` should not be committed.
