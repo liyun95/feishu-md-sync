@@ -1,6 +1,6 @@
 # Feishu Markdown Sync
 
-Feishu Markdown Sync is a sync bridge between local Markdown and Feishu/Lark online documents. It focuses on product documentation workflows where local Markdown is authored in a Milvus-shaped source form, transformed for Zilliz Cloud publishing, reviewed as a dry run, and written only when explicit safety gates are satisfied.
+Feishu Markdown Sync is a dry-run-first sync bridge between local Markdown and Feishu/Lark online documents. The official `lark-cli` owns Feishu authentication and document IO; `feishu-md-sync` adds local profiles, receipts, safety gates, status, diff, pull, merge, and publish UX.
 
 The primary product surface is the `feishu-md-sync` CLI: `publish`, `pull`, `status`, `diff`, and `merge`.
 
@@ -29,6 +29,12 @@ Preview a publish plan:
 
 ```bash
 npm exec -- feishu-md-sync publish ./doc.md --target <docx-url-or-token>
+```
+
+Write to an existing remote document for the first time after reviewing the plan:
+
+```bash
+npm exec -- feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write --confirm-untracked-remote
 ```
 
 Handle remote edits before publishing:
@@ -84,4 +90,4 @@ Generated outputs such as `packages/cli/dist/`, `packages/cli/coverage/`, `apps/
 
 ## License
 
-MIT. See [`packages/cli/NOTICE`](./packages/cli/NOTICE).
+MIT. See [`packages/cli/LICENSE`](./packages/cli/LICENSE) and [`packages/cli/NOTICE`](./packages/cli/NOTICE).
