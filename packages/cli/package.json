@@ -1,7 +1,24 @@
 {
   "name": "feishu-md-sync",
   "version": "0.1.0",
-  "description": "Sync one local Markdown file to an existing Feishu document with dry-run-first conflict checks.",
+  "description": "Dry-run-first sync between local Markdown and Feishu/Lark documents using the official lark-cli.",
+  "keywords": [
+    "feishu",
+    "lark",
+    "markdown",
+    "sync",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liyun95/feishu-md-sync.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://liyun95.github.io/feishu-md-sync/",
+  "bugs": {
+    "url": "https://github.com/liyun95/feishu-md-sync/issues"
+  },
   "type": "module",
   "bin": {
     "feishu-md-sync": "./dist/cli/index.js"
@@ -9,8 +26,13 @@
   "files": [
     "dist",
     "README.md",
+    "LICENSE",
     "NOTICE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
     "build": "npm run clean && tsc -p tsconfig.json",
