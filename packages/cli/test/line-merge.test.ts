@@ -59,6 +59,21 @@ describe('line merge', () => {
     expect(result.markdown).toBe('A\n<<<<<<< LOCAL\nB local\n=======\nB remote\n>>>>>>> REMOTE\nC\n');
   });
 
+  it('combines same-position insertions while avoiding duplicate shared prefixes', () => {
+    const result = mergeLines({
+      base: 'A\n',
+      local: 'A\n\nLocal paragraph.\n',
+      remote: 'A\n\nRemote paragraph.\n'
+    });
+
+    expect(result).toEqual({
+      markdown: 'A\n\nLocal paragraph.\nRemote paragraph.\n',
+      state: 'merged',
+      conflicts: 0,
+      changed: true
+    });
+  });
+
   it('without base only wraps different regions in LOCAL/REMOTE markers', () => {
     const result = mergeWithoutBase({
       local: '# Title\n\nLocal paragraph.\n\nSame.\n',

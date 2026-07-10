@@ -72,6 +72,10 @@ export function mergeLines(input: { base: string; local: string; remote: string 
       output.push(...localLines);
       continue;
     }
+    if (overlap.baseStart === overlap.baseEnd) {
+      output.push(...combineSamePositionInsertions(localLines, remoteLines));
+      continue;
+    }
 
     output.push(...conflictLines(localLines, remoteLines));
     conflicts += 1;
@@ -179,6 +183,18 @@ function ensureTrailingNewline(lines: string[]): string[] {
   const last = lines.at(-1);
   if (last?.endsWith('\n')) return lines;
   return [...lines.slice(0, -1), `${last}\n`];
+}
+
+function combineSamePositionInsertions(local: string[], remote: string[]): string[] {
+  let prefix = 0;
+  while (prefix < local.length && prefix < remote.length && local[prefix] === remote[prefix]) {
+    prefix += 1;
+  }
+  return [
+    ...local.slice(0, prefix),
+    ...local.slice(prefix),
+    ...remote.slice(prefix)
+  ];
 }
 
 function isStrictlyBefore(left: LineChange, right: LineChange): boolean {
