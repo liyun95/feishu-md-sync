@@ -37,6 +37,7 @@ This branch adds:
 - normal CI coverage for the packaged artifact
 - a protected GitHub Release workflow for npm publication
 - README and landing-page language aligned with the default `none` onboarding path
+- removal of tracked `docs/superpowers/` plans/specs; future skill artifacts stay under ignored `.superpowers/`
 
 The cleaned artifact contains 74 files: 70 generated JavaScript/declaration files plus `package.json`, `README.md`, `LICENSE`, and `NOTICE`.
 
