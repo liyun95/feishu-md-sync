@@ -12,11 +12,13 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node scripts/clean-dist.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:live:feishu": "vitest run test/live-feishu-publish.test.ts && vitest run test/live-feishu-merge.test.ts",
     "test:coverage": "vitest run --coverage",
-    "test:package": "node scripts/package-smoke.mjs",
+    "test:package": "npm run build && node scripts/package-smoke.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/cli/index.ts"
   },
