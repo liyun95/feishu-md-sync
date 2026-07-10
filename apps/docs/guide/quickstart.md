@@ -1,93 +1,69 @@
 # Quickstart
 
-`md2feishu` is the CLI behind a set of Codex workflow skills for Feishu documentation work.
+`feishu-md-sync` is a CLI for syncing local Markdown with Feishu/Lark online documents. It uses the official `lark-cli` for Feishu IO and keeps custom behavior in the local workflow layer.
 
-For normal team usage, install the workflow skills and ask Codex to run the workflow by task name. The CLI stays available when you need exact command control for debugging, automation, or maintenance.
-
-## Get the repository
+## Install
 
 Clone the repo and install from its root:
 
 ```bash
 git clone https://github.com/liyun95/feishu-md-sync.git
 cd feishu-md-sync
-```
-
-## Install workflow skills
-
-```bash
 npm install
 npm run build
-scripts/install-codex-skills.sh
 ```
 
-This installs the workflow skills used by Codex:
+## Configure Feishu Access
 
-| Skill | What it is for |
-| --- | --- |
-| [`feishu-baseline-sync`](/agent/skills/feishu-baseline-sync) | Pull a remote Feishu document into local Markdown before editing. |
-| [`feishu-publish-new`](/agent/skills/feishu-publish-new) | Publish local Markdown that has no Feishu URL yet. |
-| [`feishu-push`](/agent/skills/feishu-push) | Push local Markdown changes back to Feishu after a dry-run strategy review. |
-| [`feishu-multisdk-examples`](/agent/skills/feishu-multisdk-examples) | Complete and validate Java, JavaScript, Go, or REST examples from a source example. |
-| [`feishu-sdk-reference-authoring`](/agent/skills/feishu-sdk-reference-authoring) | Write and audit SDK reference changes in Feishu. |
-| [`feishu-sdk-reference-release`](/agent/skills/feishu-sdk-reference-release) | Release audited SDK reference content into `web-content` after a human starts release. |
-| [`feishu-release-notes`](/agent/skills/feishu-release-notes) | Audit release notes and apply approved local docs changes. |
-
-After installation, ask Codex to use the matching workflow skill instead of memorizing command sequences.
-
-## Configure Feishu access
-
-Before the first pull or write, copy the example environment file and fill in your Feishu app credentials:
+Authenticate `lark-cli` and make sure the selected identity can access the target document:
 
 ```bash
-cp .env.example .env
+lark-cli auth status
 ```
+
+If you use a bot identity, configure it in the same environment where commands run:
 
 ```bash
-APP_ID=cli_xxx
-APP_SECRET=xxx
-FEISHU_HOST=https://open.feishu.cn
+export FEISHU_MD_SYNC_LARK_AS=bot
 ```
 
-Then confirm the CLI can load the credentials:
+Confirm local auth configuration without printing secrets:
 
 ```bash
-npm exec -- md2feishu doctor auth --format json
+npm exec -- feishu-md-sync doctor auth --format json
 ```
 
-The Feishu app also needs API permissions and access to the target document. See [Configuration](/guide/configuration) for the minimum permission list and resource access notes.
+## Publish Existing Markdown
 
-## Choose a workflow
-
-| When you need to... | Use this skill | What the workflow does |
-| --- | --- | --- |
-| Pull a remote Feishu document into local Markdown before making edits | `feishu-baseline-sync` | Exports the current Feishu content to a local baseline file. It does not write back to Feishu. |
-| Publish local Markdown that has no Feishu URL yet | `feishu-publish-new` | Dry-runs title, destination, duplicate-title checks, then creates a new Feishu docx only after approval. |
-| Push local Markdown changes back to the remote Feishu document | `feishu-push` | Dry-runs the push, chooses block-patch, section-replace, or document-replace, then writes only after approval. |
-| Complete missing SDK examples across languages | `feishu-multisdk-examples` | Generates, validates, and applies language-scoped code-block updates for selected SDKs. |
-| Write SDK reference changes in Feishu | `feishu-sdk-reference-authoring` | Plans, writes, and audits Feishu reference content. It stops after the Feishu audit. |
-| Move audited SDK reference content into `web-content` | `feishu-sdk-reference-release` | Starts only after a human asks for release, then prepares the external docs repository handoff. |
-| Audit release notes before docs apply | `feishu-release-notes` | Checks SDK tags, Variables usage, and user-doc links before applying approved local docs changes. |
-
-See [Workflows](/guide/workflows) for the full workflow chooser and exact approval points.
-
-## Direct CLI fallback
-
-Use direct CLI commands when you need to inspect command behavior or run automation without Codex.
-
-Run a dry-run for local Markdown to an existing Feishu document:
+Dry-run first:
 
 ```bash
 npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
 ```
 
-Pull a remote snapshot before resolving remote edits:
+Write after reviewing the plan:
 
 ```bash
-npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
 ```
 
-Check publish status:
+Use guarded whole-document replacement only when intentional:
+
+```bash
+npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --strategy document-replace --write --confirm-destructive
+```
+
+## Create A New Feishu Document
+
+Create under a Drive folder or Wiki parent:
+
+```bash
+npm exec -- feishu-md-sync publish ./doc.md --target FolderOrWikiToken --create --profile zilliz --write
+```
+
+## Inspect Remote Drift
+
+Check current state:
 
 ```bash
 npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
@@ -99,25 +75,28 @@ Inspect what publish would change:
 npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
 ```
 
+## Merge Remote Edits
+
 Merge Feishu edits back into your local authoring file:
 
 ```bash
 npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
 ```
 
-Write after inspecting the plan:
+If a merge writes conflict markers, resolve them locally, then run `status`, `diff`, and `publish` again.
+
+Abort the last in-place merge:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz --write --confirm-collaboration-risk
+npm exec -- feishu-md-sync merge ./doc.md --abort --profile milvus
 ```
 
-When both local and Feishu changed since the last publish, use this loop:
+## Pull A Remote Snapshot
+
+Save a reviewable remote snapshot without changing the local source file:
 
 ```bash
-npm exec -- feishu-md-sync status ./doc.md --target DocToken --profile zilliz
-npm exec -- feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
-npm exec -- feishu-md-sync merge ./doc.md --target DocToken --profile milvus
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
+npm exec -- feishu-md-sync pull --target DocToken --output doc.remote.md --profile milvus
 ```
 
 ## Supported Targets

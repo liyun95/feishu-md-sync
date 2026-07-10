@@ -45,7 +45,7 @@ describe('pull CLI', () => {
     ]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('new-core pull requires --output <file>.');
+    expect(result.stderr).toContain("required option '-o, --output <file>' not specified");
   });
 
   it('pulls through lark-cli and writes a profile-transformed snapshot', async () => {

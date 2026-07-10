@@ -1,8 +1,8 @@
 # Feishu Markdown Sync
 
-Feishu Markdown Sync is a sync bridge between local Markdown and Feishu/Lark online documents. The new core focuses on product documentation publishing: local Markdown is transformed into a Feishu/Lark publish draft, planned as a dry run, and written only when explicit safety gates are satisfied.
+Feishu Markdown Sync is a sync bridge between local Markdown and Feishu/Lark online documents. It focuses on product documentation workflows where local Markdown is authored in a Milvus-shaped source form, transformed for Zilliz Cloud publishing, reviewed as a dry run, and written only when explicit safety gates are satisfied.
 
-The first new-core slice supports publishing local Markdown to an existing Feishu/Lark online document with the `zilliz` profile. Historical workflow automation remains in the repository during migration, but the primary product surface is `feishu-md-sync publish`.
+The primary product surface is the `feishu-md-sync` CLI: `publish`, `pull`, `status`, `diff`, and `merge`.
 
 Docs site: <https://liyun95.github.io/feishu-md-sync/>
 
@@ -31,7 +31,6 @@ feishu-md-sync publish ./doc.md --target <docx-url-or-token> --profile zilliz
 Preview creating a new document under a Drive folder or Wiki parent:
 
 ```bash
-feishu-md-sync publish ./doc.md --target <folder-url> --profile zilliz
 feishu-md-sync publish ./doc.md --target <wiki-parent-url> --create --profile zilliz
 ```
 
@@ -51,7 +50,7 @@ Existing-document whole replacement requires all of these gates:
 - `--strategy document-replace`
 - `--confirm-destructive`
 
-This protects comments, anchors, block identity, and teammate edits from accidental replacement. Fine-grained block and section writes are planned follow-up work for the new core.
+This protects comments, anchors, block identity, and teammate edits from accidental replacement. When the document shape is safe, `publish` can use block-level patching instead of whole-document replacement.
 
 ## Develop
 

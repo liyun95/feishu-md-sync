@@ -2,56 +2,51 @@
 layout: home
 
 hero:
-  name: md2feishu
-  text: Feishu docs workflows for Codex and CLI
-  tagline: Pull, edit, review, and publish Feishu documentation with workflow skills first and safe CLI commands underneath.
+  name: feishu-md-sync
+  text: Local Markdown and Feishu docs in one loop
+  tagline: Publish, pull, inspect, and merge Feishu/Lark document changes with dry-run-first CLI commands.
   actions:
     - theme: brand
       text: Start with Quickstart
       link: /guide/quickstart
     - theme: alt
-      text: Choose a Workflow
-      link: /guide/workflows
-    - theme: alt
       text: Command Reference
       link: /reference/commands
 
 features:
-  - title: Skill-first workflow
-    details: Install Codex workflow skills and ask the agent to run the task by name.
-  - title: Safe by default
-    details: Write operations use dry-runs, receipts, explicit approvals, and readback checks.
-  - title: Human release boundary
-    details: SDK reference authoring ends in Feishu; publishing to web-content starts only after a human release request.
+  - title: Official Feishu IO
+    details: Uses lark-cli for document fetch, update, create, and block operations.
+  - title: Local authoring shape
+    details: Keep Milvus-oriented Markdown locally, then publish Zilliz Cloud-shaped Feishu drafts.
+  - title: Collaboration aware
+    details: Status, diff, merge, receipts, and explicit write gates make remote edits visible before publishing.
 ---
 
-## Choose by task
-
-| I want to... | Start with |
-| --- | --- |
-| Pull a Feishu doc into local Markdown before editing | [Baseline Sync](/guide/baseline-sync) |
-| Publish local Markdown that has no Feishu URL yet | [Publish New](/guide/publish-new) |
-| Push local Markdown changes back to Feishu | [Feishu Push](/guide/push) |
-| Complete Java, JavaScript, Go, or REST examples from a Python source example | [Multi-SDK Examples](/guide/multisdk-workflow) |
-| Write and audit SDK reference changes in Feishu | [SDK Reference Authoring](/guide/sdk-reference-workflow) |
-| Release audited SDK reference content into `web-content` | [SDK Reference Release](/guide/sdk-reference-release-workflow) |
-| Audit and apply release-note updates | [Release Notes](/guide/release-workflow) |
-
-## Recommended path
-
-Install the workflow skills, then ask Codex to use the skill that matches the task:
+## Main Loop
 
 ```bash
-npm install
-npm run build
-scripts/install-codex-skills.sh
+feishu-md-sync status ./doc.md --target DocToken --profile zilliz
+feishu-md-sync diff ./doc.md --target DocToken --profile zilliz
+feishu-md-sync merge ./doc.md --target DocToken --profile milvus
+feishu-md-sync publish ./doc.md --target DocToken --profile zilliz
 ```
 
-The skills load workflow recipes from the CLI. You can still use the CLI directly when you need exact command control or automation.
+Add `--write` to `publish` only after reviewing the plan.
 
-## Safety model
+## Commands
 
-- Commands plan before writing unless a workflow explicitly reaches an approved write step.
-- Feishu writes require `--write` and confirmation or `--yes`.
-- Receipts and readback checks protect against accidental remote overwrites.
-- Release workflows that touch external docs repositories require explicit human release intent.
+| Command | Purpose |
+| --- | --- |
+| `publish` | Dry-run or write local Markdown to Feishu. |
+| `pull` | Save a remote Markdown snapshot locally. |
+| `status` | Check local, remote, and receipt state. |
+| `diff` | Compare current remote content to the local publish draft. |
+| `merge` | Merge remote edits into the local Markdown file. |
+
+## Safety Model
+
+- Remote writes are opt-in through `publish --write`.
+- Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
+- Block updates that may affect collaboration context require `--confirm-collaboration-risk`.
+- Existing untracked remote documents require `--confirm-untracked-remote`.
+- `merge` writes only local files and supports `--abort`.

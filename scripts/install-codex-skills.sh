@@ -23,9 +23,6 @@ USAGE
 done
 
 workflow_skills=(
-  feishu-baseline-sync
-  feishu-publish-new
-  feishu-push
   feishu-multisdk-examples
   feishu-sdk-reference-authoring
   feishu-sdk-reference-release
@@ -33,6 +30,10 @@ workflow_skills=(
 )
 
 retired_workflow_skills=(
+  feishu-baseline-sync
+  feishu-publish-new
+  feishu-push
+  feishu-reviewed-section-sync
   feishu-section-sync
 )
 

@@ -26,16 +26,16 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<CliResult>
 }
 
 describe('status CLI', () => {
-  it('documents new-core target mode and legacy positional status', async () => {
+  it('documents the new-core target mode only', async () => {
     const result = await runCli(['status', '--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--target <url-or-token>');
     expect(result.stdout).toContain('--profile <profile>');
-    expect(result.stdout).toContain('legacy Feishu docx ID or URL');
+    expect(result.stdout).not.toContain('legacy Feishu docx ID or URL');
   });
 
-  it('rejects status without new-core target or legacy doc argument', async () => {
+  it('rejects status without --target before lark-cli IO', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-status-cli-'));
     const file = join(dir, 'doc.md');
     await writeFile(file, 'Milvus stores vectors.', 'utf8');
@@ -43,7 +43,7 @@ describe('status CLI', () => {
     const result = await runCli(['status', file]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('status requires --target <doc> or legacy <feishu-doc>.');
+    expect(result.stderr).toContain("required option '--target <url-or-token>' not specified");
   });
 
   it('checks new-core publish status through lark-cli markdown fetch', async () => {

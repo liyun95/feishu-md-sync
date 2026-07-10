@@ -29,7 +29,7 @@ function runCli(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): Promi
 }
 
 describe('merge CLI', () => {
-  it('documents new-core merge options and legacy positional merge', async () => {
+  it('documents new-core merge options only', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-cli-'));
 
     const result = await runCli(cwd, ['merge', '--help']);
@@ -38,7 +38,7 @@ describe('merge CLI', () => {
     expect(result.stdout).toContain('--target <url-or-token>');
     expect(result.stdout).toContain('--remote <file>');
     expect(result.stdout).toContain('--abort');
-    expect(result.stdout).toContain('legacy Feishu docx ID or URL');
+    expect(result.stdout).not.toContain('legacy Feishu docx ID or URL');
   });
 
   it('writes conflict JSON and exits 1 when merge conflicts', async () => {
