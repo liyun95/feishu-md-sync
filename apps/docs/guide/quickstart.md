@@ -29,12 +29,20 @@ lark-cli auth status
 
 ## Install `feishu-md-sync`
 
-Install the published CLI:
+With Node.js 20 or newer, install the published CLI:
 
 ```bash
-npm install --global feishu-md-sync
+npm install --global feishu-md-sync@latest
 feishu-md-sync --help
 ```
+
+For a one-off run without a global install:
+
+```bash
+npx --yes feishu-md-sync@latest --help
+```
+
+The commands below assume a global installation so they can use `feishu-md-sync` directly.
 
 To develop the CLI itself from source, clone the repository and follow the root README's `Develop` section.
 

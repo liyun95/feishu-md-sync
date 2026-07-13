@@ -43,7 +43,7 @@ The cleaned artifact contains 74 files: 70 generated JavaScript/declaration file
 
 - GitHub Release: <https://github.com/liyun95/feishu-md-sync/releases/tag/v0.1.0>
 - npm package: <https://www.npmjs.com/package/feishu-md-sync>
-- Primary installation: `npm install --global feishu-md-sync`
+- Primary installation: `npm install --global feishu-md-sync@latest`
 - Registry install and `--help` were verified from a clean temporary directory.
 
 The first publish used the protected `npm` GitHub environment and a short-lived bootstrap token. Configure npm Trusted Publishing for `release.yml` and then delete `NPM_PUBLISH_TOKEN` so future releases use OIDC only.

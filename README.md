@@ -16,12 +16,14 @@ lark-cli auth login --domain docs,wiki,drive
 lark-cli auth status
 ```
 
-Install the published CLI:
+Install the published CLI with Node.js 20 or newer:
 
 ```bash
-npm install --global feishu-md-sync
+npm install --global feishu-md-sync@latest
 feishu-md-sync --help
 ```
+
+For a one-off run without a global install, use `npx --yes feishu-md-sync@latest --help`.
 
 The selected `lark-cli` identity must have access to the target document, Drive folder, or Wiki parent.
 

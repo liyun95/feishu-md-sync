@@ -22,6 +22,15 @@ features:
     details: Status, diff, merge, receipts, and explicit write gates make remote edits visible before publishing.
 ---
 
+## Install
+
+Requires Node.js 20 or newer:
+
+```bash
+npm install --global feishu-md-sync@latest
+feishu-md-sync --help
+```
+
 ## Main Loop
 
 ```bash
