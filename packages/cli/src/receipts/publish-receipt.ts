@@ -13,7 +13,12 @@ export type LocalBaseSnapshot = {
   hash: string;
 };
 
-export type PublishReceipt = {
+export type SnapshotReference = {
+  path: string;
+  hash: string;
+};
+
+export type PublishReceiptV1 = {
   version: 1;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
@@ -24,6 +29,22 @@ export type PublishReceipt = {
   localBaseSnapshot?: LocalBaseSnapshot;
   updatedAt: string;
 };
+
+export type PublishReceiptV2 = {
+  version: 2;
+  target: PublishReceiptTarget;
+  resolvedDocumentId: string;
+  profile: PublishProfileName;
+  localSourceHash: string;
+  publishDraftHash: string;
+  remoteSnapshotHash: string;
+  remoteRevision?: string;
+  localBaseSnapshot: LocalBaseSnapshot;
+  remoteSemanticSnapshot: SnapshotReference;
+  updatedAt: string;
+};
+
+export type PublishReceipt = PublishReceiptV1 | PublishReceiptV2;
 
 export function hashText(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -89,4 +110,11 @@ export async function readLocalBaseSnapshot(input: {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+export function canUpgradeLegacyReceipt(input: {
+  receipt: PublishReceiptV1;
+  currentRemoteMarkdown: string;
+}): boolean {
+  return input.receipt.remoteSnapshotHash === hashText(input.currentRemoteMarkdown);
 }

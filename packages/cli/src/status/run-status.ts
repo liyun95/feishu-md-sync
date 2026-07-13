@@ -10,6 +10,8 @@ import {
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
 import { applyPublishTransformForProfile } from '../publish/profile-transform.js';
+import { analyzeExistingPublish } from '../publish/run-publish.js';
+import type { SemanticLocator } from '../semantic/types.js';
 
 export type PublishStatusState = 'untracked' | 'clean' | 'local-changed' | 'remote-changed' | 'diverged';
 
@@ -37,6 +39,12 @@ export type PublishStatusResult = {
   remoteCanonicalHash: string;
   remoteRevision?: string;
   transformWarnings: string[];
+  scopeSummary: {
+    localChanged: SemanticLocator[];
+    remoteChanged: SemanticLocator[];
+    overlappingConflicts: SemanticLocator[];
+    unrelatedRemoteChanges: SemanticLocator[];
+  };
   recommendation: {
     action: PublishStatusRecommendationAction;
     reason: string;
@@ -65,7 +73,31 @@ export async function runStatus(input: {
   profile: PublishProfileName;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusResult> {
-  return statusFromContext(await loadPublishStatusContext(input));
+  const context = await loadPublishStatusContext(input);
+  const result = statusFromContext(context);
+  if (!shouldAnalyzeScopes(context)) return result;
+
+  try {
+    const analysis = await analyzeExistingPublish({
+      cwd: input.cwd,
+      file: input.sourcePath,
+      target: input.target,
+      profile: input.profile,
+      strategy: 'auto',
+      adapter: input.adapter,
+      localSource: context.localSource
+    });
+    const scopeSummary = analysis.plan.scopedPatch?.scopeSummary ?? emptyScopeSummary();
+    const recommendation = result.state === 'diverged' && scopeSummary.overlappingConflicts.length === 0
+      ? {
+        action: 'publish-dry-run' as const,
+        reason: 'local and remote changes are in disjoint scopes'
+      }
+      : result.recommendation;
+    return { ...result, scopeSummary, recommendation };
+  } catch {
+    return result;
+  }
 }
 
 export async function loadPublishStatusContext(input: {
@@ -124,6 +156,7 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
       remoteCanonicalHash,
       remoteRevision: context.remoteRevision,
       transformWarnings: context.transformWarnings,
+      scopeSummary: emptyScopeSummary(),
       recommendation: recommendationFor({ state, contentMatchesRemote })
     };
   }
@@ -149,7 +182,21 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     remoteCanonicalHash,
     remoteRevision: context.remoteRevision,
     transformWarnings: context.transformWarnings,
+    scopeSummary: emptyScopeSummary(),
     recommendation: recommendationFor({ state, contentMatchesRemote })
+  };
+}
+
+function shouldAnalyzeScopes(context: PublishStatusContext): boolean {
+  return context.localSource.includes('<table') || context.receipt?.version === 2;
+}
+
+function emptyScopeSummary(): PublishStatusResult['scopeSummary'] {
+  return {
+    localChanged: [],
+    remoteChanged: [],
+    overlappingConflicts: [],
+    unrelatedRemoteChanges: []
   };
 }
 

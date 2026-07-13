@@ -17,7 +17,8 @@
 
 - `no-op` means the remote already matches the desired published draft.
 - `block-patch` creates, updates, or deletes supported Markdown blocks without replacing the whole document.
-- `document-replace` is a guarded fallback for unsafe block structures or explicit overwrite workflows.
+- `blocked` means scoped planning found an unsupported, ambiguous, or conflicting change.
+- `document-replace` is available only as an explicit overwrite workflow.
 - `create-document` creates a new doc under a Drive folder or Wiki parent.
 
 `publish --write` refuses unsafe writes unless the matching confirmation flag is present:
@@ -25,7 +26,8 @@
 - Existing remote without a receipt requires `--confirm-untracked-remote`.
 - Updating or deleting existing blocks requires `--confirm-collaboration-risk`.
 - Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
-- Remote changes since the last publish receipt refuse auto/block-patch writes. Use `status`, `diff`, and `merge` before retrying, or explicitly choose guarded `document-replace`.
+- A remote change inside the same managed text or table scope blocks the write.
+- A remote change outside locally changed scopes produces a warning but does not block the disjoint scoped write.
 
 ## Pull Gates
 
@@ -38,7 +40,7 @@
 
 ## Status And Diff Gates
 
-`status` and `diff` are read-only. They read local Markdown, publish receipt state, and current remote Markdown through `lark-cli`. They do not write files, write receipts, fetch blocks, or plan a block patch.
+`status` and `diff` are read-only. For HTML tables and semantic receipts, they also fetch Docx blocks to report scope-aware conflicts and row-level changes. They never write files, remote content, or receipts.
 
 Use `publish` dry-run for the detailed write plan.
 

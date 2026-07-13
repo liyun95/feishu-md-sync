@@ -115,6 +115,8 @@ If you later add production automation, use separate names such as `LARK_PROD_AP
 
 For normal pull, status, diff, merge, and publish workflows, request these Feishu app API permissions. This list assumes the official Markdown path and write-capable publish workflows.
 
+Scope-aware status, diff, and table publishing read Docx blocks. Wiki targets are resolved to their underlying Docx object before those block operations.
+
 | Permission name in Feishu | Needed for |
 | --- | --- |
 | `创建及编辑新版文档` | Read document blocks and create, update, or delete docx blocks during approved writes. |

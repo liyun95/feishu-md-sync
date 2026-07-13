@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
+import { markdownToFeishuBlocks } from '../src/markdown/blocks.js';
 import { hashText, readLocalBaseSnapshot, readPublishReceipt, writePublishReceipt } from '../src/receipts/publish-receipt.js';
 import { runPublish } from '../src/publish/run-publish.js';
 
@@ -30,7 +31,7 @@ describe('runPublish', () => {
     });
 
     expect(result.mode).toBe('dry-run');
-    expect(result.plan.strategy).toBe('document-replace');
+    expect(result.plan.strategy).toBe('blocked');
     expect(writes).toEqual([]);
   });
 
@@ -71,11 +72,11 @@ describe('runPublish', () => {
     expect(result.plan.strategy).toBe('block-patch');
     expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
     expect(result.plan.requiresUntrackedRemoteConfirmation).toBe(true);
-    expect(result.plan.blockPatch?.operations).toEqual([{
+    expect(result.plan.scopedPatch?.operations).toEqual([{
       kind: 'update',
       remoteBlockId: 'p1',
-      path: [0],
-      blockType: 2
+      locator: { sectionPath: [], kind: 'text', ordinal: 0 },
+      desiredMarkdown: 'Milvus stores vector data.'
     }]);
   });
 
@@ -107,11 +108,47 @@ describe('runPublish', () => {
     });
 
     expect(result.plan.strategy).toBe('block-patch');
-    expect(result.plan.blockPatch?.operations).toEqual([{
+    expect(result.plan.scopedPatch?.operations).toEqual([{
       kind: 'update',
       remoteBlockId: 'p1',
-      path: [0],
-      blockType: 2
+      locator: { sectionPath: [], kind: 'text', ordinal: 0 },
+      desiredMarkdown: 'Milvus stores vector data.'
+    }]);
+  });
+
+  it('finds the leading title after YAML frontmatter', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '---\ntitle: GPU_CAGRA\n---\n\n# GPU_CAGRA\n\nMilvus stores vector data.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '# GPU_CAGRA\n\nMilvus stores vectors.' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['p1'] },
+          textBlock('p1', 'Milvus stores vectors.')
+        ]
+      }),
+      replaceDocument: async () => {}
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toEqual([{
+      kind: 'update',
+      remoteBlockId: 'p1',
+      locator: { sectionPath: [], kind: 'text', ordinal: 0 },
+      desiredMarkdown: 'Milvus stores vector data.'
     }]);
   });
 
@@ -137,12 +174,13 @@ describe('runPublish', () => {
       create: false,
       strategy: 'auto',
       confirmDestructive: false,
+      confirmUntrackedRemote: true,
       adapter
     });
 
     expect(result.mode).toBe('write');
     expect(result.plan.strategy).toBe('no-op');
-    expect(result.plan.blockPatch?.operations).toEqual([]);
+    expect(result.plan.scopedPatch?.operations).toEqual([]);
     expect(adapter.calls).toEqual([]);
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toMatchObject({
       profile: 'none',
@@ -212,6 +250,82 @@ describe('runPublish', () => {
       profile: 'none',
       target: { kind: 'docx', token: 'doc_token' }
     });
+  });
+
+  it('blocks code block body updates until language-preserving IO is available', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '```python\nprint("new")\n```', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '```python\nprint("old")\n```' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+          codeBlock('code1', 'print("old")', 49)
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.scopedPatch?.operations).toEqual([]);
+    expect(result.plan.scopedPatch?.blockers).toContainEqual(expect.objectContaining({
+      code: 'unsupported-local-change',
+      message: 'code block updates are unsupported until language-preserving IO is available'
+    }));
+  });
+
+  it('adopts a missing remote code language when the body is unchanged', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '```python\nprint("same")\n```', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '```python\nprint("same")\n```' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+          codeBlock('code1', 'print("same")')
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('no-op');
+    expect(result.plan.scopedPatch?.operations).toEqual([]);
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.warnings).toContain('adopting text representation difference at text:[]:0');
   });
 
   it('writes a block-patch create with the planned insert anchor', async () => {
@@ -301,7 +415,116 @@ describe('runPublish', () => {
       confirmCollaborationRisk: true,
       confirmUntrackedRemote: true,
       adapter
-    })).rejects.toThrow('block-patch readback verification failed');
+    })).rejects.toThrow('scoped readback verification failed');
+    await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
+  });
+
+  it('replaces only a matched HTML table and records a version 2 receipt', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-table-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, htmlParameterTable([
+      ['ef', 'Accuracy trade-off.'],
+      ['num_random_samplings', 'Initial random seed iterations.']
+    ]), 'utf8');
+    const adapter = tablePatchAdapter({
+      before: [['ef', 'Accuracy trade-off.']],
+      after: [
+        ['ef', 'Accuracy trade-off.'],
+        ['num_random_samplings', 'Initial random seed iterations.']
+      ]
+    });
+
+    const dryRun = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(dryRun.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({
+      kind: 'table-replace',
+      diff: expect.objectContaining({ additions: [{ key: 'num_random_samplings', index: 1 }], updates: [], blockers: [] })
+    }));
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(adapter.calls[0]).toMatch(/^replace:table1:xml:<table>/);
+    await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toMatchObject({
+      version: 2,
+      resolvedDocumentId: 'doc_token'
+    });
+  });
+
+  it('reports a partial write and preserves the prior receipt when a later table write fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-partial-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, `New paragraph.\n\n${htmlParameterTable([
+      ['ef', 'Accuracy trade-off.'],
+      ['num_random_samplings', 'Initial random seed iterations.']
+    ])}`, 'utf8');
+    const beforeTable = feishuTableBlocks([['ef', 'Accuracy trade-off.']], 'table1');
+    let textWritten = false;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Old paragraph.\n\n| Parameter | Description |\n|-|-|\n| `ef` | Accuracy trade-off. |' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['p1', 'table1'] },
+          textBlock('p1', textWritten ? 'New paragraph.' : 'Old paragraph.'),
+          ...beforeTable
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ format }) => {
+        if (format === 'xml') throw new Error('network failed');
+        textWritten = true;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    let thrown: unknown;
+    try {
+      await runPublish({
+        cwd: dir,
+        file: markdownPath,
+        target: { kind: 'docx', token: 'doc_token' },
+        profile: 'none',
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmUntrackedRemote: true,
+        confirmCollaborationRisk: true,
+        adapter
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({ kind: 'update' })],
+      failedOperation: expect.objectContaining({ kind: 'table-replace' }),
+      receiptWritten: false
+    });
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
   });
 
@@ -345,7 +568,7 @@ describe('runPublish', () => {
     expect(adapter.calls).toEqual([]);
   });
 
-  it('falls back to document-replace planning when block fetch is unavailable', async () => {
+  it('blocks auto planning when block fetch is unavailable', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, 'Milvus stores vector data.', 'utf8');
@@ -369,11 +592,11 @@ describe('runPublish', () => {
       adapter
     });
 
-    expect(result.plan.strategy).toBe('document-replace');
+    expect(result.plan.strategy).toBe('blocked');
     expect(result.plan.warnings).toContain('block-patch planning unavailable: missing docx block permission');
   });
 
-  it('refuses document replace without explicit destructive strategy', async () => {
+  it('refuses auto writes when scoped planning is blocked', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, 'Milvus stores vectors.', 'utf8');
@@ -392,7 +615,7 @@ describe('runPublish', () => {
       strategy: 'auto',
       confirmDestructive: false,
       adapter
-    })).rejects.toThrow('document-replace requires --strategy document-replace');
+    })).rejects.toThrow('Scoped publish is blocked');
   });
 
   it('writes guarded document replace and records a receipt', async () => {
@@ -482,7 +705,7 @@ describe('runPublish', () => {
 
     expect(result.mode).toBe('write');
     expect(result.plan.strategy).toBe('document-replace');
-    expect(blockFetches).toBe(0);
+    expect(blockFetches).toBe(1);
     expect(writes).toEqual(['Milvus stores vector data.']);
   });
 
@@ -594,6 +817,17 @@ function textBlock(blockId: string, text: string): { block_id: string; block_typ
   };
 }
 
+function codeBlock(blockId: string, content: string, language?: number) {
+  return {
+    block_id: blockId,
+    block_type: 14,
+    code: {
+      elements: [{ text_run: { content, text_element_style: {} } }],
+      style: language === undefined ? {} : { language }
+    }
+  };
+}
+
 function blockPatchAdapter(input: {
   beforeMarkdown: string;
   afterMarkdown: string;
@@ -607,10 +841,12 @@ function blockPatchAdapter(input: {
       markdown: written ? input.afterMarkdown : input.beforeMarkdown,
       revision: written ? 'after' : 'before'
     }),
-    fetchDocBlocks: async () => ({ blocks: input.blocks }),
+    fetchDocBlocks: async () => ({
+      blocks: written ? blocksForMarkdown(input.afterMarkdown, input.blocks) : input.blocks
+    }),
     replaceDocument: async () => {},
-    replaceBlock: async ({ blockId, markdown }) => {
-      calls.push(`replace:${blockId}:${markdown}`);
+    replaceBlock: async ({ blockId, content }) => {
+      calls.push(`replace:${blockId}:${content}`);
       written = true;
     },
     insertBlocksAfter: async ({ blockId, markdown }) => {
@@ -622,4 +858,80 @@ function blockPatchAdapter(input: {
       written = true;
     }
   };
+}
+
+function blocksForMarkdown(markdown: string, previous: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks']) {
+  const page = previous.find((block) => block.block_type === 1);
+  const parsed = markdownToFeishuBlocks(markdown);
+  const body = parsed[0]?.block_type === 3 ? parsed.slice(1) : parsed;
+  const withIds = body.map((block, index) => ({ ...block, block_id: `after-${index}` }));
+  return [
+    { ...(page ?? { block_id: 'page', block_type: 1 }), children: withIds.map((block) => block.block_id as string) },
+    ...withIds
+  ];
+}
+
+function htmlParameterTable(rows: Array<[string, string]>): string {
+  return `<table>\n  <tr><th><p>Parameter</p></th><th><p>Description</p></th></tr>\n${rows.map(([key, description]) => {
+    return `  <tr><td><p><code>${key}</code></p></td><td><p>${description}</p></td></tr>`;
+  }).join('\n')}\n</table>`;
+}
+
+function tablePatchAdapter(input: {
+  before: Array<[string, string]>;
+  after: Array<[string, string]>;
+}): FeishuAdapter & { calls: string[] } {
+  let written = false;
+  const calls: string[] = [];
+  return {
+    calls,
+    fetchDocMarkdown: async () => ({
+      markdown: markdownParameterTable(written ? input.after : input.before),
+      revision: written ? 'after' : 'before'
+    }),
+    fetchDocBlocks: async () => ({ blocks: [
+      { block_id: 'doc_token', block_type: 1, children: [written ? 'table2' : 'table1'] },
+      ...feishuTableBlocks(written ? input.after : input.before, written ? 'table2' : 'table1')
+    ] }),
+    replaceDocument: async () => {},
+    replaceBlock: async ({ blockId, content, format }) => {
+      calls.push(`replace:${blockId}:${format}:${content}`);
+      written = true;
+    },
+    insertBlocksAfter: async () => {},
+    deleteBlocks: async () => {},
+    createDocument: async () => ({ documentId: 'created' })
+  };
+}
+
+function markdownParameterTable(rows: Array<[string, string]>): string {
+  return `| Parameter | Description |\n|-|-|\n${rows.map(([key, description]) => `| \`${key}\` | ${description} |`).join('\n')}`;
+}
+
+function feishuTableBlocks(rows: Array<[string, string]>, tableId: string) {
+  const values = [['Parameter', 'Description'] as [string, string], ...rows];
+  const cellIds = values.flatMap((_, row) => [`${tableId}-c${row}-0`, `${tableId}-c${row}-1`]);
+  const blocks: Array<Record<string, unknown>> = [{
+    block_id: tableId,
+    block_type: 31,
+    table: { property: { row_size: values.length, column_size: 2 }, cells: cellIds }
+  }];
+  values.forEach(([first, second], row) => {
+    [first, second].forEach((value, column) => {
+      const cellId = `${tableId}-c${row}-${column}`;
+      const textId = `${cellId}-p`;
+      blocks.push({ block_id: cellId, block_type: 32, children: [textId] });
+      blocks.push({
+        block_id: textId,
+        block_type: 2,
+        text: {
+          elements: [{ text_run: {
+            content: value,
+            text_element_style: column === 0 && row > 0 ? { inline_code: true } : {}
+          } }]
+        }
+      });
+    });
+  });
+  return blocks as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
 }

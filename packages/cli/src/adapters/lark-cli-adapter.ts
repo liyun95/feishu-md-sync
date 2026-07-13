@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import type { FeishuBlock } from '../feishu/types.js';
+import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type { CreatedDocument, FeishuAdapter, RemoteBlocks, RemoteMarkdown } from './feishu-adapter.js';
 
 export type LarkCliExecResult = {
@@ -17,6 +18,28 @@ export class LarkCliAdapter implements FeishuAdapter {
   constructor(input: { exec?: LarkCliExecutor; identity?: LarkCliIdentity } = {}) {
     this.exec = input.exec ?? runLarkCli;
     this.identity = input.identity ?? larkCliIdentityFromEnv();
+  }
+
+  async resolveDocumentId(input: { target: PublishReceiptTarget }): Promise<string> {
+    if (input.target.kind === 'docx') return input.target.token;
+    if (input.target.kind === 'folder') {
+      throw new Error('Folder targets do not resolve to an existing document.');
+    }
+    const result = await this.exec(withIdentity([
+      'api',
+      'GET',
+      '/open-apis/wiki/v2/spaces/get_node',
+      '--params',
+      JSON.stringify({ token: input.target.token }),
+      '--format',
+      'json'
+    ], this.identity));
+    const parsed = parseLarkCliJson(result);
+    const node = wikiNodeFromData(parsed.data);
+    if (node?.obj_type !== 'docx' || typeof node.obj_token !== 'string') {
+      throw new Error(`Wiki node ${input.target.token} does not resolve to a Docx document.`);
+    }
+    return node.obj_token;
   }
 
   async fetchDocMarkdown(input: { doc: string }): Promise<RemoteMarkdown> {
@@ -85,21 +108,28 @@ export class LarkCliAdapter implements FeishuAdapter {
     ], this.identity)));
   }
 
-  async replaceBlock(input: { doc: string; blockId: string; markdown: string }): Promise<void> {
-    await this.updateMarkdownBlock({
+  async replaceBlock(input: {
+    doc: string;
+    blockId: string;
+    content: string;
+    format: 'markdown' | 'xml';
+  }): Promise<void> {
+    await this.updateBlock({
       doc: input.doc,
       command: 'block_replace',
       blockId: input.blockId,
-      markdown: input.markdown
+      content: input.content,
+      format: input.format
     });
   }
 
   async insertBlocksAfter(input: { doc: string; blockId: string; markdown: string }): Promise<void> {
-    await this.updateMarkdownBlock({
+    await this.updateBlock({
       doc: input.doc,
       command: 'block_insert_after',
       blockId: input.blockId,
-      markdown: input.markdown
+      content: input.markdown,
+      format: 'markdown'
     });
   }
 
@@ -150,11 +180,12 @@ export class LarkCliAdapter implements FeishuAdapter {
     };
   }
 
-  private async updateMarkdownBlock(input: {
+  private async updateBlock(input: {
     doc: string;
     command: 'block_replace' | 'block_insert_after';
     blockId: string;
-    markdown: string;
+    content: string;
+    format: 'markdown' | 'xml';
   }): Promise<void> {
     parseLarkCliJson(await this.exec(withIdentity([
       'docs',
@@ -166,13 +197,21 @@ export class LarkCliAdapter implements FeishuAdapter {
       '--block-id',
       input.blockId,
       '--doc-format',
-      'markdown',
+      input.format,
       '--content',
-      input.markdown,
+      input.content,
       '--format',
       'json'
     ], this.identity)));
   }
+}
+
+function wikiNodeFromData(data: unknown): Record<string, unknown> | undefined {
+  if (!data || typeof data !== 'object' || !('node' in data)) return undefined;
+  const node = (data as { node?: unknown }).node;
+  return node && typeof node === 'object' && !Array.isArray(node)
+    ? node as Record<string, unknown>
+    : undefined;
 }
 
 function withIdentity(args: string[], identity: LarkCliIdentity): string[] {

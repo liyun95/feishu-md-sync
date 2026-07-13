@@ -75,6 +75,8 @@ Existing-document whole replacement requires all of these gates:
 
 This protects comments, anchors, block identity, and teammate edits from accidental replacement. When the document shape is safe, `publish` can use block-level patching instead of whole-document replacement.
 
+Scoped publishing also recognizes reconstructable HTML tables. It reports row additions and updates, combines them with text-block changes, and replaces only the matched table block after `--confirm-collaboration-risk`. Unsupported or conflicting changes produce `strategy: blocked`; `auto` never falls back to whole-document replacement.
+
 ## Develop
 
 Root scripts delegate to the CLI and docs workspaces:

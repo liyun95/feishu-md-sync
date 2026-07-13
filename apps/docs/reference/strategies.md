@@ -12,9 +12,17 @@ The CLI can update the document through supported block-level operations.
 
 `block-patch` may create, update, or delete supported Markdown blocks. Updating or deleting existing blocks requires `--confirm-collaboration-risk` because comments, anchors, or block identity can be affected.
 
+It can also include `table-replace` operations. Table plans identify the section, table ordinal, added row keys, and updated cells before replacing only the matched table block.
+
+## `blocked`
+
+`auto` returns `blocked` when any local change is unsupported, ambiguous, or conflicts with a remote edit in the same managed scope. Supported operations may still be shown for review, but no write starts until every blocker is resolved.
+
+`blocked` does not fall back to `document-replace` automatically.
+
 ## `document-replace`
 
-The CLI would replace the whole document body.
+The CLI would replace the whole document body. This is an explicit escape hatch, not an automatic fallback.
 
 This strategy is intentionally gated:
 

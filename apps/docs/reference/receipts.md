@@ -14,6 +14,8 @@ New-core receipt locations:
 
 `publish` receipts are target-oriented. They record the last successful local Markdown to Feishu write and are used to detect remote drift before later block-patch writes.
 
+Version 2 receipts also record the resolved Docx identity and a verified remote semantic snapshot. This lets the planner distinguish a conflicting edit inside the target table from an unrelated remote edit elsewhere in the document.
+
 Stored data includes:
 
 - target kind and token
@@ -23,6 +25,8 @@ Stored data includes:
 - remote snapshot hash
 - remote revision when available
 - local base snapshot path and hash
+- resolved Docx document ID
+- remote semantic snapshot path and hash
 - update timestamp
 
 ## Local Base Snapshots
@@ -53,6 +57,21 @@ remote: current Feishu Markdown after pull-side profile filtering
 ```
 
 If the base snapshot file is missing, `merge` falls back to conservative conflict regions. `merge` itself never updates the base snapshot; the next successful `publish --write` updates it.
+
+The remote semantic baseline is stored alongside the local base:
+
+```text
+.sync/feishu-md-sync/bases/<target-kind>-<target-token>-remote-semantic.json
+```
+
+Execution-only Feishu block IDs are removed before this snapshot is written. A legacy version 1 receipt is upgraded only when its recorded remote raw hash still matches the current remote document.
+
+To adopt an existing document that is already synchronized, use a confirmed no-op publish:
+
+```bash
+feishu-md-sync publish ./doc.md --target <wiki-or-docx-url>
+feishu-md-sync publish ./doc.md --target <wiki-or-docx-url> --write --confirm-untracked-remote
+```
 
 ## Pull Receipts
 

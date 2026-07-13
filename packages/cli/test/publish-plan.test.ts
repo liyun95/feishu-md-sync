@@ -19,7 +19,7 @@ describe('publish plan', () => {
     expect(plan.remoteChanged).toBe(false);
   });
 
-  it('recommends guarded document replace when desired draft differs', () => {
+  it('blocks auto planning instead of falling back to document replace', () => {
     const plan = buildPublishPlan({
       target: { kind: 'docx', token: 'doc_token' },
       profile: 'zilliz',
@@ -30,9 +30,25 @@ describe('publish plan', () => {
       transformWarnings: []
     });
 
-    expect(plan.strategy).toBe('document-replace');
+    expect(plan.strategy).toBe('blocked');
     expect(plan.safeToWrite).toBe(false);
     expect(plan.risks).toContain('untracked remote: no publish receipt exists for this target');
+    expect(plan.risks).toContain('scoped publish is blocked; auto will not fall back to document replacement');
+  });
+
+  it('plans document replacement only when explicitly forced', () => {
+    const plan = buildPublishPlan({
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      localSource: 'Local.',
+      publishDraft: 'Local.',
+      remoteMarkdown: 'Remote.',
+      receipt: undefined,
+      transformWarnings: [],
+      forceDocumentReplace: true
+    });
+
+    expect(plan.strategy).toBe('document-replace');
     expect(plan.risks).toContain('document replace can affect comments, anchors, block identity, and collaboration context');
   });
 
