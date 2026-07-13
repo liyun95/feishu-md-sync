@@ -35,7 +35,7 @@
   },
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/ensure-bin-executable.mjs",
     "prepack": "npm run build",
     "test": "vitest run",
     "test:live:feishu": "vitest run test/live-feishu-publish.test.ts && vitest run test/live-feishu-merge.test.ts",

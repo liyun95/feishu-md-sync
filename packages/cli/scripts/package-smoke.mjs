@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ const sourceDir = join(packageDir, 'src');
 const tempDir = mkdtempSync(join(tmpdir(), 'feishu-md-sync-package-'));
 
 try {
+  assertLocalBinExecutable();
   assertNpmNormalizedManifest();
 
   const packOutput = execFileSync(
@@ -85,6 +86,14 @@ function walk(directory) {
     const path = join(directory, entry.name);
     return entry.isDirectory() ? walk(path) : [path];
   });
+}
+
+function assertLocalBinExecutable() {
+  if (process.platform === 'win32') return;
+  const binPath = join(packageDir, 'dist', 'cli', 'index.js');
+  if ((statSync(binPath).mode & 0o111) === 0) {
+    throw new Error('local CLI entrypoint is not executable after build');
+  }
 }
 
 function assertNpmNormalizedManifest() {
