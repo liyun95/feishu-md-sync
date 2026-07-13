@@ -68,6 +68,21 @@ describe('scoped patch plan', () => {
     expect(plan.blockers).toEqual([]);
     expect(plan.operations).toEqual([]);
   });
+
+  it('blocks whole-table deletion instead of emitting a generic block delete', () => {
+    const localBase = document(text('Keep.', 0), table([row('ef', 'Old')], false));
+    const localCurrent = document(text('Keep.', 0));
+    const remoteBase = document(text('Keep.', 0, 'p1'), table([row('ef', 'Old')], true));
+    const remoteCurrent = document(text('Keep.', 0, 'p1'), table([row('ef', 'Old')], true));
+
+    const plan = planScopedPatch({ parentBlockId: 'page', localBase, localCurrent, remoteBase, remoteCurrent, tracked: true });
+
+    expect(plan.operations).toEqual([]);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'unsupported-local-change',
+      message: expect.stringContaining('source table deletion is unsupported')
+    }));
+  });
 });
 
 function document(...nodes: SemanticDocument['nodes']): SemanticDocument {

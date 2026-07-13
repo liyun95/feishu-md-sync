@@ -97,6 +97,26 @@ export function planScopedPatch(input: {
     }
   }
 
+  if (input.tracked && input.localBase) {
+    const currentKeys = new Set(input.localCurrent.nodes.map((node) => locatorKey(node.locator)));
+    for (const baselineNode of input.localBase.nodes) {
+      if (currentKeys.has(locatorKey(baselineNode.locator))) continue;
+      if (baselineNode.kind === 'table') {
+        blockers.push({
+          code: 'unsupported-local-change',
+          locator: baselineNode.locator,
+          message: `source table deletion is unsupported: ${tableIdentity(baselineNode)}`
+        });
+      } else if (baselineNode.kind === 'opaque') {
+        blockers.push({
+          code: 'unsupported-local-change',
+          locator: baselineNode.locator,
+          message: `unsupported local opaque deletion: ${baselineNode.description}`
+        });
+      }
+    }
+  }
+
   const textPlanning = planTextScopes({ ...input, localChanged, remoteChanged, blockers, warnings });
   const operations: ScopedPatchOperation[] = [...textPlanning.operations];
   if (textPlanning.fallbackReason) {
@@ -277,9 +297,10 @@ function planTextScopes(input: {
       }];
     }
     const entry = remoteEntries[operation.startIndex];
+    if (!entry || entry.node.kind !== 'text') return [];
     return [{
       kind: 'delete',
-      locator: entry?.node.locator ?? { sectionPath: [], kind: 'text', ordinal: operation.startIndex },
+      locator: entry.node.locator,
       parentBlockId: operation.parentBlockId,
       blockIds: operation.blockIds
     }];
