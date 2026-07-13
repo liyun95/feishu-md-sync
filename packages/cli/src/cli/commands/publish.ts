@@ -4,7 +4,7 @@ import { LarkCliAdapter } from '../../adapters/lark-cli-adapter.js';
 import { loadSyncConfig, resolvePublishProfile } from '../../config/sync-config.js';
 import { parseFeishuTarget } from '../../core/doc-id.js';
 import { runPublish } from '../../publish/run-publish.js';
-import { printFormatted } from '../output.js';
+import { printFormatted, setFailedExitCode } from '../output.js';
 
 type PublishCommandOptions = {
   target?: string;
@@ -57,6 +57,7 @@ export function registerPublishCommand(program: Command): void {
       });
 
       printFormatted(result, opts.format);
+      setFailedExitCode(result.mode === 'dry-run' && result.plan.strategy === 'blocked');
     });
 }
 

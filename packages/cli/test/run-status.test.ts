@@ -167,7 +167,48 @@ describe('runStatus', () => {
     expect(result.publishDraftHash).not.toBe(result.remoteSnapshotHash);
     expect(result.publishDraftCanonicalHash).toBe(result.remoteCanonicalHash);
   });
+
+  it('reports table scopes for untracked HTML table changes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-table-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '<table><tr><th>Parameter</th><th>Description</th></tr><tr><td><code>ef</code></td><td>New value.</td></tr></table>', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '| Parameter | Description |\n|-|-|\n| `ef` | Old value. |' }),
+      fetchDocBlocks: async () => ({ blocks: statusTableBlocks('Old value.') }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter
+    });
+
+    expect(result.scopeSummary.localChanged).toContainEqual({
+      sectionPath: [],
+      kind: 'table',
+      ordinal: 0
+    });
+  });
 });
+
+function statusTableBlocks(description: string) {
+  return [
+    { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+    { block_id: 'table1', block_type: 31, table: { property: { row_size: 2, column_size: 2 }, cells: ['c1', 'c2', 'c3', 'c4'] } },
+    { block_id: 'c1', block_type: 32, children: ['p1'] },
+    { block_id: 'p1', block_type: 2, text: { elements: [{ text_run: { content: 'Parameter', text_element_style: {} } }] } },
+    { block_id: 'c2', block_type: 32, children: ['p2'] },
+    { block_id: 'p2', block_type: 2, text: { elements: [{ text_run: { content: 'Description', text_element_style: {} } }] } },
+    { block_id: 'c3', block_type: 32, children: ['p3'] },
+    { block_id: 'p3', block_type: 2, text: { elements: [{ text_run: { content: 'ef', text_element_style: { inline_code: true } } }] } },
+    { block_id: 'c4', block_type: 32, children: ['p4'] },
+    { block_id: 'p4', block_type: 2, text: { elements: [{ text_run: { content: description, text_element_style: {} } }] } }
+  ];
+}
 
 function statusAdapter(markdown: string): FeishuAdapter & { blockFetches: number } {
   return {

@@ -412,7 +412,13 @@ function blockedScopedPatch(message: string): ScopedPatchPlan {
     operations: [],
     blockers: [{ code: 'remote-scope-conflict', message }],
     warnings: [],
-    requiresCollaborationRiskConfirmation: false
+    requiresCollaborationRiskConfirmation: false,
+    scopeSummary: {
+      localChanged: [],
+      remoteChanged: [],
+      overlappingConflicts: [],
+      unrelatedRemoteChanges: []
+    }
   };
 }
 

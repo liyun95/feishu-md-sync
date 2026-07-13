@@ -94,6 +94,27 @@ describe('runDiff', () => {
     expect(result.diff).toContain('-Remote teammate sentence.');
     expect(result.diff).toContain('+New local sentence.');
   });
+
+  it('reports HTML table row additions as structured scoped diffs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-table-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, htmlTable([
+      ['ef', 'Accuracy trade-off.'],
+      ['num_random_samplings', 'Initial random seed iterations.']
+    ]), 'utf8');
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: tableAdapter([['ef', 'Accuracy trade-off.']])
+    });
+
+    expect(result.scoped.tables).toEqual([expect.objectContaining({
+      additions: [{ key: 'num_random_samplings', index: 1 }]
+    })]);
+  });
 });
 
 function diffAdapter(markdown: string): FeishuAdapter {
@@ -102,4 +123,40 @@ function diffAdapter(markdown: string): FeishuAdapter {
     replaceDocument: async () => {},
     createDocument: async () => ({ documentId: 'created' })
   };
+}
+
+function tableAdapter(rows: Array<[string, string]>): FeishuAdapter {
+  return {
+    fetchDocMarkdown: async () => ({ markdown: '| Parameter | Description |\n|-|-|\n| `ef` | Accuracy trade-off. |' }),
+    fetchDocBlocks: async () => ({ blocks: tableBlocks(rows) }),
+    replaceDocument: async () => {},
+    createDocument: async () => ({ documentId: 'created' })
+  };
+}
+
+function htmlTable(rows: Array<[string, string]>): string {
+  return `<table><tr><th>Parameter</th><th>Description</th></tr>${rows.map(([key, value]) => {
+    return `<tr><td><code>${key}</code></td><td>${value}</td></tr>`;
+  }).join('')}</table>`;
+}
+
+function tableBlocks(rows: Array<[string, string]>) {
+  const values = [['Parameter', 'Description'] as [string, string], ...rows];
+  const cellIds = values.flatMap((_, row) => [`c${row}-0`, `c${row}-1`]);
+  const blocks: Array<Record<string, unknown>> = [
+    { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+    { block_id: 'table1', block_type: 31, table: { property: { row_size: values.length, column_size: 2 }, cells: cellIds } }
+  ];
+  values.forEach(([first, second], row) => {
+    [first, second].forEach((value, column) => {
+      const cellId = `c${row}-${column}`;
+      blocks.push({ block_id: cellId, block_type: 32, children: [`${cellId}-p`] });
+      blocks.push({
+        block_id: `${cellId}-p`,
+        block_type: 2,
+        text: { elements: [{ text_run: { content: value, text_element_style: column === 0 && row > 0 ? { inline_code: true } : {} } }] }
+      });
+    });
+  });
+  return blocks as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
 }

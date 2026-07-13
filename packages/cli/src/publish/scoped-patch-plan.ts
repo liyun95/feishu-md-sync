@@ -61,6 +61,12 @@ export type ScopedPatchPlan = {
   blockers: ScopedPatchBlocker[];
   warnings: string[];
   requiresCollaborationRiskConfirmation: boolean;
+  scopeSummary: {
+    localChanged: SemanticLocator[];
+    remoteChanged: SemanticLocator[];
+    overlappingConflicts: SemanticLocator[];
+    unrelatedRemoteChanges: SemanticLocator[];
+  };
 };
 
 export function planScopedPatch(input: {
@@ -74,7 +80,9 @@ export function planScopedPatch(input: {
   const blockers: ScopedPatchBlocker[] = [];
   const warnings: string[] = [];
   const localChanged = changedLocatorKeys(input.localBase, input.localCurrent, input.tracked);
-  const remoteChanged = changedLocatorKeys(input.remoteBase, input.remoteCurrent, input.tracked);
+  const remoteChanged = input.tracked
+    ? changedLocatorKeys(input.remoteBase, input.remoteCurrent, true)
+    : new Set<string>();
 
   for (const node of input.localCurrent.nodes) {
     if (node.kind !== 'opaque') continue;
@@ -177,7 +185,18 @@ export function planScopedPatch(input: {
     warnings: uniqueWarnings,
     requiresCollaborationRiskConfirmation: operations.some((operation) => {
       return operation.kind === 'update' || operation.kind === 'delete' || operation.kind === 'table-replace';
-    })
+    }),
+    scopeSummary: {
+      localChanged: locatorsForKeys(input.localCurrent, localChanged),
+      remoteChanged: locatorsForKeys(input.remoteCurrent, remoteChanged),
+      overlappingConflicts: blockers.flatMap((blocker) => {
+        return blocker.code === 'remote-scope-conflict' && blocker.locator ? [blocker.locator] : [];
+      }),
+      unrelatedRemoteChanges: locatorsForKeys(
+        input.remoteCurrent,
+        new Set([...remoteChanged].filter((key) => !localChanged.has(key)))
+      )
+    }
   };
 }
 
@@ -344,4 +363,8 @@ function visibleText(markdown: string): string {
 
 function isTable(node: SemanticNode): node is SemanticTable {
   return node.kind === 'table';
+}
+
+function locatorsForKeys(document: SemanticDocument, keys: Set<string>): SemanticLocator[] {
+  return document.nodes.flatMap((node) => keys.has(locatorKey(node.locator)) ? [node.locator] : []);
 }
