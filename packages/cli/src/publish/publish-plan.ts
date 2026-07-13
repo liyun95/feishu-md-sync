@@ -1,6 +1,7 @@
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type { PublishBlockPatchPlan } from './block-patch-plan.js';
+import type { ScopedPatchPlan } from './scoped-patch-plan.js';
 
 export type PublishStrategy = 'no-op' | 'block-patch' | 'blocked' | 'section-replace' | 'document-replace' | 'create-document';
 
@@ -21,6 +22,7 @@ export type PublishPlan = {
     fallbackReason?: string;
     warnings: string[];
   };
+  scopedPatch?: ScopedPatchPlan;
   risks: string[];
   warnings: string[];
 };
@@ -36,6 +38,7 @@ export function buildPublishPlan(input: {
   createDocument?: boolean;
   forceDocumentReplace?: boolean;
   blockPatch?: PublishBlockPatchPlan;
+  scopedPatch?: ScopedPatchPlan;
 }): PublishPlan {
   const localSourceHash = hashText(input.localSource);
   const publishDraftHash = hashText(input.publishDraft);
@@ -78,6 +81,67 @@ export function buildPublishPlan(input: {
       requiresUntrackedRemoteConfirmation: false,
       risks,
       warnings: input.transformWarnings
+    };
+  }
+
+  if (input.scopedPatch) {
+    const warnings = [...input.transformWarnings, ...input.scopedPatch.warnings];
+    if (input.scopedPatch.blockers.length > 0) {
+      risks.push(...input.scopedPatch.blockers.map((blocker) => blocker.message));
+      risks.push('scoped publish is blocked; auto will not fall back to document replacement');
+      return {
+        target: input.target,
+        profile: input.profile,
+        strategy: 'blocked',
+        safeToWrite: false,
+        remoteChanged,
+        localSourceHash,
+        publishDraftHash,
+        remoteSnapshotHash,
+        requiresCollaborationRiskConfirmation: input.scopedPatch.requiresCollaborationRiskConfirmation,
+        requiresUntrackedRemoteConfirmation: !input.receipt,
+        scopedPatch: input.scopedPatch,
+        risks,
+        warnings
+      };
+    }
+
+    if (input.scopedPatch.operations.length === 0) {
+      return {
+        target: input.target,
+        profile: input.profile,
+        strategy: 'no-op',
+        safeToWrite: Boolean(input.receipt),
+        remoteChanged,
+        localSourceHash,
+        publishDraftHash,
+        remoteSnapshotHash,
+        requiresCollaborationRiskConfirmation: false,
+        requiresUntrackedRemoteConfirmation: !input.receipt,
+        scopedPatch: input.scopedPatch,
+        risks,
+        warnings
+      };
+    }
+
+    if (!input.receipt) risks.push('untracked remote block-patch requires explicit confirmation');
+    if (input.scopedPatch.requiresCollaborationRiskConfirmation) {
+      risks.push('changed blocks may lose comments, anchors, or block identity when replaced');
+    }
+    return {
+      target: input.target,
+      profile: input.profile,
+      strategy: 'block-patch',
+      safeToWrite: Boolean(input.receipt) && !input.scopedPatch.requiresCollaborationRiskConfirmation,
+      remoteChanged,
+      localSourceHash,
+      publishDraftHash,
+      remoteSnapshotHash,
+      requiresCollaborationRiskConfirmation: input.scopedPatch.requiresCollaborationRiskConfirmation,
+      requiresUntrackedRemoteConfirmation: !input.receipt,
+      scopedPatch: input.scopedPatch,
+      risks,
+      warnings
     };
   }
 
