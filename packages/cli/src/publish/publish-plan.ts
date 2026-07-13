@@ -2,7 +2,7 @@ import type { PublishProfileName } from '../profiles/publish-profile.js';
 import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type { PublishBlockPatchPlan } from './block-patch-plan.js';
 
-export type PublishStrategy = 'no-op' | 'block-patch' | 'section-replace' | 'document-replace' | 'create-document';
+export type PublishStrategy = 'no-op' | 'block-patch' | 'blocked' | 'section-replace' | 'document-replace' | 'create-document';
 
 export type PublishPlan = {
   target: PublishReceiptTarget;
@@ -34,6 +34,7 @@ export function buildPublishPlan(input: {
   receipt: PublishReceipt | undefined;
   transformWarnings: string[];
   createDocument?: boolean;
+  forceDocumentReplace?: boolean;
   blockPatch?: PublishBlockPatchPlan;
 }): PublishPlan {
   const localSourceHash = hashText(input.localSource);
@@ -61,6 +62,24 @@ export function buildPublishPlan(input: {
 
   if (!input.receipt) risks.push('untracked remote: no publish receipt exists for this target');
   if (remoteChanged) risks.push('remote changed since last publish receipt');
+
+  if (input.forceDocumentReplace) {
+    risks.push('document replace can affect comments, anchors, block identity, and collaboration context');
+    return {
+      target: input.target,
+      profile: input.profile,
+      strategy: 'document-replace',
+      safeToWrite: false,
+      remoteChanged,
+      localSourceHash,
+      publishDraftHash,
+      remoteSnapshotHash,
+      requiresCollaborationRiskConfirmation: false,
+      requiresUntrackedRemoteConfirmation: false,
+      risks,
+      warnings: input.transformWarnings
+    };
+  }
 
   if (publishDraftHash === remoteSnapshotHash) {
     return {
@@ -135,8 +154,8 @@ export function buildPublishPlan(input: {
     risks.push(`block-patch unavailable: ${input.blockPatch.fallbackReason}`);
   }
 
-  const strategy: PublishStrategy = 'document-replace';
-  risks.push('document replace can affect comments, anchors, block identity, and collaboration context');
+  const strategy: PublishStrategy = 'blocked';
+  risks.push('scoped publish is blocked; auto will not fall back to document replacement');
 
   return {
     target: input.target,

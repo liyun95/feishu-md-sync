@@ -119,6 +119,7 @@ export async function runPublish(input: {
     remoteMarkdown: remote.markdown,
     receipt,
     transformWarnings: transform.warnings,
+    forceDocumentReplace: input.strategy === 'document-replace',
     blockPatch
   });
 
