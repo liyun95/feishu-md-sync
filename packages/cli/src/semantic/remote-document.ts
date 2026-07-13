@@ -77,7 +77,7 @@ export function remoteSemanticDocument(blocks: FeishuBlock[], documentId: string
 
 function remoteAsset(block: FeishuBlock, locator: SemanticLocator): SemanticNode {
   const representation = block.block_type === 43 ? 'whiteboard' : 'image';
-  const value = asRecord(block[representation]);
+  const value = asRecord(block[representation]) ?? (representation === 'whiteboard' ? asRecord(block.board) : undefined);
   const token = typeof value?.token === 'string' ? value.token : undefined;
   return {
     kind: 'asset',

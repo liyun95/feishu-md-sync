@@ -1,7 +1,7 @@
 import { sha256, stableStringify } from '../core/hash.js';
 
 export function canonicalWhiteboardRaw(raw: unknown): string {
-  return stableStringify(raw);
+  return stableStringify(normalizeWhiteboardRaw(raw));
 }
 
 export function whiteboardRemoteStateHash(raw: unknown): string {
@@ -37,4 +37,23 @@ function collectStrings(value: unknown): string[] {
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeWhiteboardRaw(value: unknown, key?: string): unknown {
+  if (Array.isArray(value)) {
+    const normalized = value.map((item) => normalizeWhiteboardRaw(item));
+    if (key === 'nodes' && normalized.every(isIdentifiedNode)) {
+      return normalized.sort((left, right) => left.id.localeCompare(right.id));
+    }
+    return normalized;
+  }
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([childKey, child]) => {
+    return [childKey, normalizeWhiteboardRaw(child, childKey)];
+  }));
+}
+
+function isIdentifiedNode(value: unknown): value is { id: string } {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
+    typeof (value as { id?: unknown }).id === 'string');
 }

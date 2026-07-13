@@ -623,10 +623,10 @@ async function applyWhiteboardPlan(input: {
   previousEntries: WhiteboardReceiptEntry[];
   completedOperations: PublishWriteOperationSummary[];
 }): Promise<WhiteboardReceiptEntry[]> {
-  const replaceImageWithWhiteboard = input.adapter.replaceImageWithWhiteboard;
-  const queryWhiteboard = input.adapter.queryWhiteboard;
-  const updateWhiteboard = input.adapter.updateWhiteboard;
-  const fetchDocBlocks = input.adapter.fetchDocBlocks;
+  const replaceImageWithWhiteboard = input.adapter.replaceImageWithWhiteboard?.bind(input.adapter);
+  const queryWhiteboard = input.adapter.queryWhiteboard?.bind(input.adapter);
+  const updateWhiteboard = input.adapter.updateWhiteboard?.bind(input.adapter);
+  const fetchDocBlocks = input.adapter.fetchDocBlocks?.bind(input.adapter);
   if (!replaceImageWithWhiteboard || !queryWhiteboard || !updateWhiteboard || !fetchDocBlocks) {
     throw new Error('Configured Feishu adapter does not support verified Whiteboard writes.');
   }
@@ -656,7 +656,7 @@ async function applyWhiteboardPlan(input: {
         await updateWhiteboard({
           whiteboardToken,
           svg: asset.svgSource,
-          idempotencyToken: `fms-${asset.svgHash.slice(0, 32)}`
+          idempotencyToken: `fms-${semanticHash({ whiteboardToken, svgHash: asset.svgHash }).slice(0, 32)}`
         });
       }
 

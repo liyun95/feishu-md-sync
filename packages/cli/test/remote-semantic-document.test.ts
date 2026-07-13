@@ -118,6 +118,20 @@ describe('remote semantic document', () => {
       locator: { sectionPath: ['Architecture'], kind: 'asset', ordinal: 1 }
     }));
   });
+
+  it('reads the board token field returned by the Docx blocks API', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['wb1'] },
+      { block_id: 'wb1', block_type: 43, board: { token: 'wb_token' } }
+    ], 'doc_token');
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'asset',
+      representation: 'whiteboard',
+      remoteBlockId: 'wb1',
+      remoteToken: 'wb_token'
+    }));
+  });
 });
 
 function tableBlocks(mergeInfo: unknown[]): FeishuBlock[] {
