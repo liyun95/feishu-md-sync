@@ -11,7 +11,8 @@ import {
   writeLocalBaseSnapshot,
   writePublishReceipt,
   type PublishReceipt,
-  type PublishReceiptTarget
+  type PublishReceiptTarget,
+  type WhiteboardReceiptEntry
 } from '../receipts/publish-receipt.js';
 import { readRemoteSemanticSnapshot, writeRemoteSemanticSnapshot } from '../receipts/semantic-snapshot.js';
 import { localSemanticDocument } from '../semantic/local-document.js';
@@ -19,10 +20,14 @@ import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import { semanticHash, stripExecutionMetadata } from '../semantic/normalize.js';
 import type { SemanticDocument, SemanticLocator, SemanticNode, SemanticTable, SemanticTextBlock } from '../semantic/types.js';
 import { discoverLocalWhiteboardAssets, normalizeAssetKey, type LocalWhiteboardAsset } from '../whiteboards/local-assets.js';
-import { whiteboardRemoteStateHash } from '../whiteboards/remote-state.js';
-import { planWhiteboardPublish, type WhiteboardPlan } from '../whiteboards/whiteboard-plan.js';
+import { verifyWhiteboardReadback, whiteboardRemoteStateHash } from '../whiteboards/remote-state.js';
+import {
+  planWhiteboardPublish,
+  type WhiteboardOperation,
+  type WhiteboardPlan
+} from '../whiteboards/whiteboard-plan.js';
 import { findPageBlock } from './block-state.js';
-import { PartialWriteError } from './partial-write-error.js';
+import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
 import { applyPublishTransformForProfile } from './profile-transform.js';
 import { planScopedPatch, type ScopedPatchOperation, type ScopedPatchPlan } from './scoped-patch-plan.js';
@@ -111,7 +116,7 @@ export async function runPublish(input: {
 
   if (plan.strategy === 'no-op') {
     if (!analysis.remoteCurrent) throw new Error('No-op adoption requires a remote semantic snapshot.');
-    await recordPublishReceiptV2({
+    const receiptInput = {
       cwd: input.cwd,
       target: input.target,
       resolvedDocumentId: analysis.resolvedDocumentId,
@@ -122,24 +127,36 @@ export async function runPublish(input: {
       remoteMarkdown: analysis.remote.markdown,
       remoteRevision: analysis.remote.revision,
       remoteSemantic: analysis.remoteCurrent
-    });
+    };
+    if (input.syncWhiteboards) {
+      await recordPublishReceiptV3({ ...receiptInput, whiteboards: whiteboardEntries(analysis.receipt) });
+    } else {
+      await recordPublishReceiptV2(receiptInput);
+    }
     return { mode: 'write', plan };
   }
 
   if (plan.strategy === 'block-patch') {
-    if ((plan.whiteboards?.operations.length ?? 0) > 0) {
-      throw new Error('Whiteboard writes are not available until the verified write phase is enabled.');
-    }
     if (!plan.scopedPatch) throw new Error('block-patch write is missing a scoped patch plan');
     if (!analysis.localCurrent) throw new Error('block-patch write is missing local semantic state');
-    await applyScopedPatch({
+    const completedOperations = await applyScopedPatch({
       adapter: input.adapter,
       doc: analysis.resolvedDocumentId,
       plan: plan.scopedPatch
     });
+    const verifiedWhiteboards = input.syncWhiteboards && plan.whiteboards
+      ? await applyWhiteboardPlan({
+        adapter: input.adapter,
+        doc: analysis.resolvedDocumentId,
+        plan: plan.whiteboards,
+        assets: analysis.whiteboardAssets ?? [],
+        previousEntries: whiteboardEntries(analysis.receipt),
+        completedOperations
+      })
+      : [];
     const afterMarkdown = await input.adapter.fetchDocMarkdown({ doc: analysis.resolvedDocumentId });
     const afterSemantic = await fetchRemoteSemantic(input.adapter, analysis.resolvedDocumentId);
-    await recordPublishReceiptV2({
+    const receiptInput = {
       cwd: input.cwd,
       target: input.target,
       resolvedDocumentId: analysis.resolvedDocumentId,
@@ -150,7 +167,12 @@ export async function runPublish(input: {
       remoteMarkdown: afterMarkdown.markdown,
       remoteRevision: afterMarkdown.revision,
       remoteSemantic: afterSemantic
-    });
+    };
+    if (input.syncWhiteboards) {
+      await recordPublishReceiptV3({ ...receiptInput, whiteboards: verifiedWhiteboards });
+    } else {
+      await recordPublishReceiptV2(receiptInput);
+    }
     return { mode: 'write', plan };
   }
 
@@ -552,7 +574,7 @@ async function applyScopedPatch(input: {
   adapter: FeishuAdapter;
   doc: string;
   plan: ScopedPatchPlan;
-}): Promise<void> {
+}): Promise<PublishWriteOperationSummary[]> {
   if (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks || !input.adapter.fetchDocBlocks) {
     throw new Error('Configured Feishu adapter does not support scoped block-patch writes');
   }
@@ -589,6 +611,104 @@ async function applyScopedPatch(input: {
       if (completed.length === 0) throw error;
       throw new PartialWriteError({ completedOperations: completed, failedOperation: operation, cause: error });
     }
+  }
+  return completed;
+}
+
+async function applyWhiteboardPlan(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  plan: WhiteboardPlan;
+  assets: LocalWhiteboardAsset[];
+  previousEntries: WhiteboardReceiptEntry[];
+  completedOperations: PublishWriteOperationSummary[];
+}): Promise<WhiteboardReceiptEntry[]> {
+  const replaceImageWithWhiteboard = input.adapter.replaceImageWithWhiteboard;
+  const queryWhiteboard = input.adapter.queryWhiteboard;
+  const updateWhiteboard = input.adapter.updateWhiteboard;
+  const fetchDocBlocks = input.adapter.fetchDocBlocks;
+  if (!replaceImageWithWhiteboard || !queryWhiteboard || !updateWhiteboard || !fetchDocBlocks) {
+    throw new Error('Configured Feishu adapter does not support verified Whiteboard writes.');
+  }
+
+  const localByKey = new Map(input.assets.map((asset) => [asset.assetKey, asset]));
+  const entries = new Map(input.previousEntries.map((entry) => [entry.assetKey, entry]));
+  const completed = [...input.completedOperations];
+  for (const operation of input.plan.operations) {
+    const summary = summarizeWhiteboardOperation(operation);
+    try {
+      const asset = localByKey.get(operation.assetKey);
+      if (!asset) throw new Error(`local Whiteboard asset unavailable during write: ${operation.assetKey}`);
+
+      let blockId: string;
+      let whiteboardToken: string;
+      if (operation.kind === 'whiteboard-create') {
+        const created = await replaceImageWithWhiteboard({
+          doc: input.doc,
+          blockId: operation.remoteImageBlockId,
+          svg: asset.svgSource
+        });
+        blockId = created.blockId;
+        whiteboardToken = created.whiteboardToken;
+      } else {
+        blockId = operation.blockId;
+        whiteboardToken = operation.whiteboardToken;
+        await updateWhiteboard({
+          whiteboardToken,
+          svg: asset.svgSource,
+          idempotencyToken: `fms-${asset.svgHash.slice(0, 32)}`
+        });
+      }
+
+      const remote = await queryWhiteboard({ whiteboardToken });
+      verifyWhiteboardReadback({ raw: remote.raw, expectedTexts: asset.expectedTexts });
+      const blocks = await fetchDocBlocks({ doc: input.doc });
+      verifyWhiteboardIdentity(blocks.blocks, input.doc, blockId, whiteboardToken);
+      entries.set(operation.assetKey, {
+        assetKey: operation.assetKey,
+        pngPath: operation.assetKey,
+        svgPath: operation.assetKey.replace(/\.png$/i, '.svg'),
+        svgHash: asset.svgHash,
+        whiteboardToken,
+        blockId,
+        remoteStateHash: whiteboardRemoteStateHash(remote.raw),
+        placementFingerprint: operation.placementFingerprint
+      });
+      completed.push(summary);
+    } catch (error) {
+      throw new PartialWriteError({
+        completedOperations: completed,
+        failedOperation: summary,
+        cause: error
+      });
+    }
+  }
+  return [...entries.values()].sort((left, right) => left.assetKey.localeCompare(right.assetKey));
+}
+
+function summarizeWhiteboardOperation(operation: WhiteboardOperation): PublishWriteOperationSummary {
+  return {
+    kind: operation.kind,
+    locator: operation.locator,
+    assetKey: operation.assetKey
+  };
+}
+
+function verifyWhiteboardIdentity(
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  documentId: string,
+  blockId: string,
+  whiteboardToken: string
+): void {
+  const remote = remoteSemanticDocument(blocks, documentId);
+  const matched = remote.nodes.some((node) => {
+    return node.kind === 'asset' &&
+      node.representation === 'whiteboard' &&
+      node.remoteBlockId === blockId &&
+      node.remoteToken === whiteboardToken;
+  });
+  if (!matched) {
+    throw new Error('Whiteboard readback identity does not match the created or tracked block.');
   }
 }
 
@@ -670,6 +790,48 @@ async function recordPublishReceiptV2(input: {
       remoteRevision: input.remoteRevision,
       localBaseSnapshot,
       remoteSemanticSnapshot,
+      updatedAt: new Date().toISOString()
+    }
+  });
+}
+
+async function recordPublishReceiptV3(input: {
+  cwd: string;
+  target: PublishReceiptTarget;
+  resolvedDocumentId: string;
+  profile: PublishProfileName;
+  localSource: string;
+  localSourceHash: string;
+  publishDraftHash: string;
+  remoteMarkdown: string;
+  remoteRevision?: string;
+  remoteSemantic: SemanticDocument;
+  whiteboards: WhiteboardReceiptEntry[];
+}): Promise<void> {
+  const localBaseSnapshot = await writeLocalBaseSnapshot({
+    cwd: input.cwd,
+    target: input.target,
+    markdown: input.localSource
+  });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: input.cwd,
+    target: input.target,
+    document: input.remoteSemantic
+  });
+  await writePublishReceipt({
+    cwd: input.cwd,
+    receipt: {
+      version: 3,
+      target: input.target,
+      resolvedDocumentId: input.resolvedDocumentId,
+      profile: input.profile,
+      localSourceHash: input.localSourceHash,
+      publishDraftHash: input.publishDraftHash,
+      remoteSnapshotHash: hashText(input.remoteMarkdown),
+      remoteRevision: input.remoteRevision,
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: input.whiteboards,
       updatedAt: new Date().toISOString()
     }
   });

@@ -4,8 +4,16 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
 import { markdownToFeishuBlocks } from '../src/markdown/blocks.js';
-import { hashText, readLocalBaseSnapshot, readPublishReceipt, writePublishReceipt } from '../src/receipts/publish-receipt.js';
+import {
+  hashText,
+  readLocalBaseSnapshot,
+  readPublishReceipt,
+  writeLocalBaseSnapshot,
+  writePublishReceipt
+} from '../src/receipts/publish-receipt.js';
+import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
 import { runPublish } from '../src/publish/run-publish.js';
+import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runPublish', () => {
   it('returns a dry-run plan without writing remotely', async () => {
@@ -977,6 +985,165 @@ describe('runPublish', () => {
     expect(result.plan.strategy).toBe('blocked');
     expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({ code: 'whiteboard-adapter-unavailable' }));
   });
+
+  it('creates and verifies a Whiteboard before writing a version 3 receipt', async () => {
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
+    let created = false;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)', revision: created ? '2' : '1' }),
+      fetchDocBlocks: async () => ({ blocks: created ? [
+        { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+        { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+      ] : [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      replaceImageWithWhiteboard: async () => {
+        created = true;
+        return { blockId: 'wb_block', whiteboardToken: 'wb_token' };
+      },
+      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      updateWhiteboard: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(created).toBe(true);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({
+        version: 3,
+        whiteboards: [{
+          assetKey: 'assets/cagra.png',
+          blockId: 'wb_block',
+          whiteboardToken: 'wb_token',
+          svgHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          remoteStateHash: expect.stringMatching(/^[a-f0-9]{64}$/)
+        }]
+      });
+  });
+
+  it('updates a tracked Whiteboard in place with an idempotency token', async () => {
+    const fixture = await createWhiteboardFixture(
+      '![CAGRA](./assets/cagra.png)',
+      '<svg viewBox="0 0 10 10"><text>CAGRA v2</text></svg>'
+    );
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    await writeTrackedWhiteboardReceipt({
+      cwd: fixture.dir,
+      markdown: '![CAGRA](./assets/cagra.png)',
+      remoteMarkdown,
+      svgHash: hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>'),
+      remoteRaw: { nodes: [{ text: 'CAGRA v1' }] }
+    });
+    let remoteRaw: unknown = { nodes: [{ text: 'CAGRA v1' }] };
+    const updates: Array<{ token: string; svg: string; idempotencyToken: string }> = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '2' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+        { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: remoteRaw }),
+      updateWhiteboard: async ({ whiteboardToken, svg, idempotencyToken }) => {
+        updates.push({ token: whiteboardToken, svg, idempotencyToken });
+        remoteRaw = { nodes: [{ text: 'CAGRA v2' }] };
+      },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(updates).toEqual([expect.objectContaining({
+      token: 'wb_token',
+      svg: expect.stringContaining('CAGRA v2'),
+      idempotencyToken: expect.stringMatching(/^fms-.{10,}$/)
+    })]);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({
+        version: 3,
+        whiteboards: [{ blockId: 'wb_block', whiteboardToken: 'wb_token' }]
+      });
+  });
+
+  it('keeps the previous receipt when Whiteboard readback is missing expected text', async () => {
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
+    let created = false;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: created ? [
+        { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+        { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+      ] : [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      replaceImageWithWhiteboard: async () => {
+        created = true;
+        return { blockId: 'wb_block', whiteboardToken: 'wb_token' };
+      },
+      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'Different' }] } }),
+      updateWhiteboard: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    })).rejects.toThrow('Whiteboard readback is missing expected text: CAGRA');
+
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toBeUndefined();
+  });
 });
 
 async function createWhiteboardFixture(markdown: string, svg = '<svg viewBox="0 0 10 10"><text>CAGRA</text></svg>') {
@@ -988,6 +1155,53 @@ async function createWhiteboardFixture(markdown: string, svg = '<svg viewBox="0 
   await writeFile(join(assets, 'cagra.png'), 'png', 'utf8');
   await writeFile(join(assets, 'cagra.svg'), svg, 'utf8');
   return { dir, markdownPath };
+}
+
+async function writeTrackedWhiteboardReceipt(input: {
+  cwd: string;
+  markdown: string;
+  remoteMarkdown: string;
+  svgHash: string;
+  remoteRaw: unknown;
+}): Promise<void> {
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd: input.cwd, target, markdown: input.markdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: input.cwd,
+    target,
+    document: { nodes: [{
+      kind: 'asset',
+      locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+      representation: 'whiteboard',
+      remoteBlockId: 'wb_block',
+      remoteToken: 'wb_token'
+    }] }
+  });
+  await writePublishReceipt({
+    cwd: input.cwd,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(input.markdown),
+      publishDraftHash: hashText(input.markdown),
+      remoteSnapshotHash: hashText(input.remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'assets/cagra.png',
+        pngPath: 'assets/cagra.png',
+        svgPath: 'assets/cagra.svg',
+        svgHash: input.svgHash,
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: whiteboardRemoteStateHash(input.remoteRaw),
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    }
+  });
 }
 
 function textBlock(blockId: string, text: string): { block_id: string; block_type: number; text: { elements: Array<{ text_run: { content: string; text_element_style: Record<string, never> } }> } } {

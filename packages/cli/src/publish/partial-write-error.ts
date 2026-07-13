@@ -1,17 +1,25 @@
 import type { ScopedPatchOperation } from './scoped-patch-plan.js';
+import type { SemanticLocator } from '../semantic/types.js';
+import type { WhiteboardOperation } from '../whiteboards/whiteboard-plan.js';
+
+export type PublishWriteOperationSummary = {
+  kind: ScopedPatchOperation['kind'] | WhiteboardOperation['kind'];
+  locator?: SemanticLocator;
+  assetKey?: string;
+};
 
 export class PartialWriteError extends Error {
-  readonly completedOperations: ScopedPatchOperation[];
-  readonly failedOperation: ScopedPatchOperation;
+  readonly completedOperations: PublishWriteOperationSummary[];
+  readonly failedOperation: PublishWriteOperationSummary;
   readonly receiptWritten = false;
 
   constructor(input: {
-    completedOperations: ScopedPatchOperation[];
-    failedOperation: ScopedPatchOperation;
+    completedOperations: PublishWriteOperationSummary[];
+    failedOperation: PublishWriteOperationSummary;
     cause: unknown;
   }) {
     const causeMessage = input.cause instanceof Error ? input.cause.message : String(input.cause);
-    super(`Scoped publish partially failed at ${input.failedOperation.kind}: ${causeMessage}`);
+    super(`Publish partially failed at ${input.failedOperation.kind}: ${causeMessage}`);
     this.name = 'PartialWriteError';
     this.completedOperations = input.completedOperations;
     this.failedOperation = input.failedOperation;
