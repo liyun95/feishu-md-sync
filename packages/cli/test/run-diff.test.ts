@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -114,6 +114,47 @@ describe('runDiff', () => {
     expect(result.scoped.tables).toEqual([expect.objectContaining({
       additions: [{ key: 'num_random_samplings', index: 1 }]
     })]);
+  });
+
+  it('reports an asset-level Whiteboard creation diff', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-whiteboard-'));
+    const assets = join(dir, 'assets');
+    const file = join(dir, 'doc.md');
+    const markdown = '![CAGRA](./assets/cagra.png)';
+    await mkdir(assets);
+    await writeFile(file, markdown, 'utf8');
+    await writeFile(join(assets, 'cagra.png'), 'png', 'utf8');
+    await writeFile(join(assets, 'cagra.svg'), '<svg viewBox="0 0 10 10"><text>CAGRA</text></svg>', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      updateWhiteboard: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.scoped.whiteboards).toEqual([expect.objectContaining({
+      assetKey: 'assets/cagra.png',
+      state: 'untracked',
+      local: 'changed',
+      remote: 'untracked',
+      action: 'replace remote image with whiteboard'
+    })]);
+    expect(result.hasDiff).toBe(true);
   });
 });
 

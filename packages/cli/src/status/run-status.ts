@@ -12,6 +12,7 @@ import {
 import { applyPublishTransformForProfile } from '../publish/profile-transform.js';
 import { analyzeExistingPublish } from '../publish/run-publish.js';
 import type { SemanticLocator } from '../semantic/types.js';
+import type { WhiteboardAssetPlan } from '../whiteboards/whiteboard-plan.js';
 
 export type PublishStatusState = 'untracked' | 'clean' | 'local-changed' | 'remote-changed' | 'diverged';
 
@@ -39,6 +40,7 @@ export type PublishStatusResult = {
   remoteCanonicalHash: string;
   remoteRevision?: string;
   transformWarnings: string[];
+  whiteboards: WhiteboardAssetPlan[];
   scopeSummary: {
     localChanged: SemanticLocator[];
     remoteChanged: SemanticLocator[];
@@ -71,11 +73,12 @@ export async function runStatus(input: {
   sourcePath: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  syncWhiteboards?: boolean;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusResult> {
   const context = await loadPublishStatusContext(input);
   const result = statusFromContext(context);
-  if (!shouldAnalyzeScopes(context)) return result;
+  if (!input.syncWhiteboards && !shouldAnalyzeScopes(context)) return result;
 
   try {
     const analysis = await analyzeExistingPublish({
@@ -85,16 +88,18 @@ export async function runStatus(input: {
       profile: input.profile,
       strategy: 'auto',
       adapter: input.adapter,
-      localSource: context.localSource
+      localSource: context.localSource,
+      syncWhiteboards: input.syncWhiteboards
     });
     const scopeSummary = analysis.plan.scopedPatch?.scopeSummary ?? emptyScopeSummary();
-    const recommendation = result.state === 'diverged' && scopeSummary.overlappingConflicts.length === 0
+    const withWhiteboards = statusWithWhiteboards(result, analysis.plan.whiteboards?.assets ?? []);
+    const recommendation = withWhiteboards.state === 'diverged' && scopeSummary.overlappingConflicts.length === 0
       ? {
         action: 'publish-dry-run' as const,
         reason: 'local and remote changes are in disjoint scopes'
       }
-      : result.recommendation;
-    return { ...result, scopeSummary, recommendation };
+      : withWhiteboards.recommendation;
+    return { ...withWhiteboards, scopeSummary, recommendation };
   } catch {
     return result;
   }
@@ -156,6 +161,7 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
       remoteCanonicalHash,
       remoteRevision: context.remoteRevision,
       transformWarnings: context.transformWarnings,
+      whiteboards: [],
       scopeSummary: emptyScopeSummary(),
       recommendation: recommendationFor({ state, contentMatchesRemote })
     };
@@ -182,13 +188,38 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     remoteCanonicalHash,
     remoteRevision: context.remoteRevision,
     transformWarnings: context.transformWarnings,
+    whiteboards: [],
     scopeSummary: emptyScopeSummary(),
     recommendation: recommendationFor({ state, contentMatchesRemote })
   };
 }
 
 function shouldAnalyzeScopes(context: PublishStatusContext): boolean {
-  return context.localSource.includes('<table') || context.receipt?.version === 2;
+  return context.localSource.includes('<table') || context.receipt?.version === 2 || context.receipt?.version === 3;
+}
+
+export function statusWithWhiteboards(
+  status: PublishStatusResult,
+  whiteboards: WhiteboardAssetPlan[]
+): PublishStatusResult {
+  if (whiteboards.length === 0) return { ...status, whiteboards };
+  const whiteboardLocalChanged = whiteboards.some(({ state }) => {
+    return state === 'local-changed' || state === 'conflict' || state === 'untracked' || state === 'missing';
+  });
+  const whiteboardRemoteChanged = whiteboards.some(({ state }) => {
+    return state === 'remote-changed' || state === 'conflict' || state === 'missing';
+  });
+  const localChanged = status.localChanged || whiteboardLocalChanged;
+  const remoteChanged = status.remoteChanged || whiteboardRemoteChanged;
+  const state = status.hasReceipt ? statusStateFor({ localChanged, remoteChanged }) : 'untracked';
+  return {
+    ...status,
+    state,
+    localChanged,
+    remoteChanged,
+    whiteboards,
+    recommendation: recommendationFor({ state, contentMatchesRemote: status.contentMatchesRemote })
+  };
 }
 
 function emptyScopeSummary(): PublishStatusResult['scopeSummary'] {

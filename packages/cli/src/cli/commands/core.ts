@@ -21,6 +21,7 @@ type PullCommandOptions = {
 type StatusCommandOptions = {
   target?: string;
   profile?: string;
+  syncWhiteboards?: boolean;
   format?: string;
 };
 
@@ -43,6 +44,7 @@ export function registerCoreCommands(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
+    .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
       const cwd = process.cwd();
@@ -54,6 +56,7 @@ export function registerCoreCommands(program: Command): void {
         sourcePath: path.resolve(cwd, markdownFile),
         target,
         profile,
+        syncWhiteboards: opts.syncWhiteboards === true,
         adapter: new LarkCliAdapter()
       });
       printFormatted(result, opts.format);
@@ -91,6 +94,7 @@ export function registerCoreCommands(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
+    .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
       const cwd = process.cwd();
@@ -102,6 +106,7 @@ export function registerCoreCommands(program: Command): void {
         sourcePath: path.resolve(cwd, markdownFile),
         target,
         profile,
+        syncWhiteboards: opts.syncWhiteboards === true,
         adapter: new LarkCliAdapter()
       });
       if (opts.format === 'json') {

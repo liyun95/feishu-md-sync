@@ -32,12 +32,19 @@ function prettyLines(value: unknown): string[] | undefined {
   if (plan) return publishPlanLines(record, plan);
   if (typeof record.state === 'string' && asRecord(record.recommendation)) {
     const recommendation = asRecord(record.recommendation)!;
-    return [
+    const lines = [
       `state: ${record.state}`,
       `local changed: ${String(record.localChanged)}`,
       `remote changed: ${String(record.remoteChanged)}`,
       `recommendation: ${String(recommendation.action)} - ${String(recommendation.reason)}`
     ];
+    for (const value of Array.isArray(record.whiteboards) ? record.whiteboards : []) {
+      const whiteboard = asRecord(value);
+      if (whiteboard) {
+        lines.push(`whiteboard[${String(whiteboard.state)}]: ${String(whiteboard.assetKey)} - ${String(whiteboard.action)}`);
+      }
+    }
+    return lines;
   }
   return undefined;
 }
@@ -74,9 +81,25 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     const blocker = asRecord(blockerValue);
     if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.message)}`);
   }
+  const whiteboards = asRecord(plan.whiteboards);
+  for (const value of Array.isArray(whiteboards?.assets) ? whiteboards.assets : []) {
+    const whiteboard = asRecord(value);
+    if (whiteboard) {
+      lines.push(`whiteboard[${String(whiteboard.state)}]: ${String(whiteboard.assetKey)} - ${String(whiteboard.action)}`);
+    }
+  }
+  for (const value of Array.isArray(whiteboards?.blockers) ? whiteboards.blockers : []) {
+    const blocker = asRecord(value);
+    if (blocker) {
+      lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.assetKey)} - ${String(blocker.message)}`);
+    }
+  }
   for (const warning of Array.isArray(plan.warnings) ? plan.warnings : []) lines.push(`warning: ${String(warning)}`);
   if (plan.requiresUntrackedRemoteConfirmation === true) lines.push('requires: --confirm-untracked-remote');
   if (plan.requiresCollaborationRiskConfirmation === true) lines.push('requires: --confirm-collaboration-risk');
+  for (const assetKey of Array.isArray(plan.requiredRemoteWhiteboardOverwrites) ? plan.requiredRemoteWhiteboardOverwrites : []) {
+    lines.push(`requires: --confirm-remote-whiteboard-overwrite ${String(assetKey)}`);
+  }
   return lines;
 }
 

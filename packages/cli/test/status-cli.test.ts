@@ -32,6 +32,7 @@ describe('status CLI', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--target <url-or-token>');
     expect(result.stdout).toContain('--profile <profile>');
+    expect(result.stdout).toContain('--sync-whiteboards');
     expect(result.stdout).not.toContain('legacy Feishu docx ID or URL');
   });
 

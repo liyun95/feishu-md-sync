@@ -2,11 +2,17 @@ import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import { unifiedDiff } from '../core/diff.js';
-import { loadPublishStatusContext, statusFromContext, type PublishStatusResult } from '../status/run-status.js';
+import {
+  loadPublishStatusContext,
+  statusFromContext,
+  statusWithWhiteboards,
+  type PublishStatusResult
+} from '../status/run-status.js';
 import { analyzeExistingPublish } from '../publish/run-publish.js';
 import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
 import type { TableRowAddition, TableRowUpdate } from '../publish/table-diff.js';
 import type { SemanticLocator } from '../semantic/types.js';
+import type { WhiteboardAssetPlan } from '../whiteboards/whiteboard-plan.js';
 
 export type RunDiffResult = {
   mode: 'read-only';
@@ -24,6 +30,7 @@ export type RunDiffResult = {
       additions: TableRowAddition[];
       updates: TableRowUpdate[];
     }>;
+    whiteboards: WhiteboardAssetPlan[];
     blockers: ScopedPatchBlocker[];
     warnings: string[];
   };
@@ -35,12 +42,13 @@ export async function runDiff(input: {
   sourcePath: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  syncWhiteboards?: boolean;
   adapter: FeishuAdapter;
 }): Promise<RunDiffResult> {
   const context = await loadPublishStatusContext(input);
   let status = statusFromContext(context);
-  let scoped: RunDiffResult['scoped'] = { text: [], tables: [], blockers: [], warnings: [] };
-  if (context.localSource.includes('<table') || context.receipt?.version === 2) {
+  let scoped: RunDiffResult['scoped'] = { text: [], tables: [], whiteboards: [], blockers: [], warnings: [] };
+  if (input.syncWhiteboards || context.localSource.includes('<table') || context.receipt?.version === 2 || context.receipt?.version === 3) {
     try {
       const analysis = await analyzeExistingPublish({
         cwd: input.cwd,
@@ -49,9 +57,12 @@ export async function runDiff(input: {
         profile: input.profile,
         strategy: 'auto',
         adapter: input.adapter,
-        localSource: context.localSource
+        localSource: context.localSource,
+        syncWhiteboards: input.syncWhiteboards
       });
       const patch = analysis.plan.scopedPatch;
+      const whiteboards = analysis.plan.whiteboards?.assets ?? [];
+      status = statusWithWhiteboards(status, whiteboards);
       if (patch) {
         status = { ...status, scopeSummary: patch.scopeSummary };
         scoped = {
@@ -68,6 +79,7 @@ export async function runDiff(input: {
             additions: operation.diff.additions,
             updates: operation.diff.updates
           }] : []),
+          whiteboards,
           blockers: patch.blockers,
           warnings: patch.warnings
         };
@@ -76,7 +88,7 @@ export async function runDiff(input: {
       // Preserve the raw Markdown diff when scope-aware analysis is unavailable.
     }
   }
-  const hasScopedDiff = scoped.text.length > 0 || scoped.tables.length > 0 || scoped.blockers.length > 0;
+  const hasScopedDiff = scoped.text.length > 0 || scoped.tables.length > 0 || scoped.whiteboards.some((asset) => asset.state !== 'clean') || scoped.blockers.length > 0;
   const hasDiff = context.remoteCanonical !== context.publishDraftCanonical || hasScopedDiff;
   return {
     mode: 'read-only',
@@ -115,9 +127,12 @@ export function diffSummaryLines(result: RunDiffResult): string[] {
       lines.push(`  ~ row ${update.key}: columns ${update.changedCellIndexes.map((index) => index + 1).join(', ')}`);
     }
   }
+  for (const whiteboard of result.scoped.whiteboards) {
+    lines.push(`whiteboard[${whiteboard.state}]: ${whiteboard.assetKey} - ${whiteboard.action}`);
+  }
   for (const blocker of result.scoped.blockers) lines.push(`blocker[${blocker.code}]: ${blocker.message}`);
   for (const warning of result.scoped.warnings) lines.push(`warning: ${warning}`);
-  if (result.scoped.tables.length > 0 || result.scoped.blockers.length > 0 || result.scoped.warnings.length > 0) lines.push('');
+  if (result.scoped.tables.length > 0 || result.scoped.whiteboards.length > 0 || result.scoped.blockers.length > 0 || result.scoped.warnings.length > 0) lines.push('');
 
   lines.push(result.diff.trimEnd());
   return lines;
