@@ -44,6 +44,10 @@ function prettyLines(value: unknown): string[] | undefined {
         lines.push(`whiteboard[${String(whiteboard.state)}]: ${String(whiteboard.assetKey)} - ${String(whiteboard.action)}`);
       }
     }
+    for (const value of Array.isArray(record.whiteboardBlockers) ? record.whiteboardBlockers : []) {
+      const blocker = asRecord(value);
+      if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.assetKey)} - ${String(blocker.message)}`);
+    }
     return lines;
   }
   return undefined;

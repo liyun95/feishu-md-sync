@@ -54,7 +54,7 @@ assets/architecture.svg
 
 Run `status`, `diff`, or `publish` with `--sync-whiteboards`. The PNG reference must be a standalone Markdown block; an image embedded in prose is blocked when a same-name SVG exists. Remote HTTP images, data URLs, and non-PNG references are not candidates.
 
-The first publish requires exactly one corresponding image or Whiteboard block in the existing remote document. An image block is replaced by a Whiteboard; an existing Whiteboard is adopted. Later publishes update the same Whiteboard token.
+The first publish requires exactly one corresponding image or Whiteboard block in the existing remote document. To avoid guessing between interchangeable positions, the first version blocks a section containing multiple untracked asset slots; place them under separate headings or establish receipts one at a time. Neighboring text must also match during initial adoption, so adopt the asset before making adjacent text changes. An image block is replaced by a Whiteboard; an existing Whiteboard is adopted. Later publishes update the same Whiteboard token.
 
 The supported editable SVG subset includes:
 

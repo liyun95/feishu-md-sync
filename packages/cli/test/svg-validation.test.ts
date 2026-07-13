@@ -41,6 +41,20 @@ describe('Whiteboard SVG validation', () => {
     expect(local.valid).toBe(true);
   });
 
+  it.each(['onload', 'onclick'])('blocks script event attribute %s', (attribute) => {
+    const result = validateWhiteboardSvg(`<svg viewBox="0 0 10 10"><rect width="2" height="2" ${attribute}="alert(1)"/></svg>`);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'unsupported-element' }));
+  });
+
+  it('blocks XML processing instructions such as external stylesheets', () => {
+    const result = validateWhiteboardSvg('<?xml-stylesheet href="https://example.com/style.css"?><svg viewBox="0 0 10 10"><rect width="2" height="2"/></svg>');
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'external-resource' }));
+  });
+
   it.each(['matrix(1 0 0 1 0 0)', 'skewX(20)', 'skewY(20)'])('blocks unsupported transform %s', (transform) => {
     const result = validateWhiteboardSvg(`<svg viewBox="0 0 10 10"><rect width="2" height="2" transform="${transform}"/></svg>`);
 

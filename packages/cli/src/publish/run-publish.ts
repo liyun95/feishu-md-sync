@@ -656,7 +656,11 @@ async function applyWhiteboardPlan(input: {
         await updateWhiteboard({
           whiteboardToken,
           svg: asset.svgSource,
-          idempotencyToken: `fms-${semanticHash({ whiteboardToken, svgHash: asset.svgHash }).slice(0, 32)}`
+          idempotencyToken: `fms-${semanticHash({
+            whiteboardToken,
+            svgHash: asset.svgHash,
+            remoteStateHash: operation.remoteStateHash
+          }).slice(0, 32)}`
         });
       }
 

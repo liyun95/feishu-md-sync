@@ -83,6 +83,9 @@ export function validateWhiteboardSvg(svg: string): SvgValidationResult {
   parser.on('error', (error: Error) => {
     addIssue(issues, 'malformed-svg', `malformed SVG: ${error.message}`);
   });
+  parser.on('processinginstruction', (instruction) => {
+    addIssue(issues, 'external-resource', `SVG processing instruction is unsupported: ${instruction.target}`);
+  });
 
   try {
     parser.write(svg).close();
@@ -106,6 +109,9 @@ export function validateWhiteboardSvg(svg: string): SvgValidationResult {
 function validateAttribute(attribute: SaxesAttributeNS, issues: SvgValidationIssue[]): void {
   const name = attribute.local;
   const value = attribute.value.trim();
+  if (/^on/i.test(name)) {
+    addIssue(issues, 'unsupported-element', `SVG script event attribute is unsupported: ${attribute.name}`);
+  }
   if ((name === 'href' || attribute.name === 'xlink:href') && value && !value.startsWith('#')) {
     addIssue(issues, 'external-resource', `external SVG reference is unsupported: ${value}`);
   }

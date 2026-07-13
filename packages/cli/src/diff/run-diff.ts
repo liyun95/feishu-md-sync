@@ -12,7 +12,7 @@ import { analyzeExistingPublish } from '../publish/run-publish.js';
 import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
 import type { TableRowAddition, TableRowUpdate } from '../publish/table-diff.js';
 import type { SemanticLocator } from '../semantic/types.js';
-import type { WhiteboardAssetPlan } from '../whiteboards/whiteboard-plan.js';
+import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
 
 export type RunDiffResult = {
   mode: 'read-only';
@@ -31,7 +31,7 @@ export type RunDiffResult = {
       updates: TableRowUpdate[];
     }>;
     whiteboards: WhiteboardAssetPlan[];
-    blockers: ScopedPatchBlocker[];
+    blockers: Array<ScopedPatchBlocker | WhiteboardPlanBlocker>;
     warnings: string[];
   };
   status: PublishStatusResult;
@@ -61,30 +61,33 @@ export async function runDiff(input: {
         syncWhiteboards: input.syncWhiteboards
       });
       const patch = analysis.plan.scopedPatch;
-      const whiteboards = analysis.plan.whiteboards?.assets ?? [];
-      status = statusWithWhiteboards(status, whiteboards);
-      if (patch) {
-        status = { ...status, scopeSummary: patch.scopeSummary };
-        scoped = {
-          text: patch.operations.flatMap((operation) => {
-            if (operation.kind === 'table-replace') return [];
-            return [{
-              kind: operation.kind,
-              locator: operation.locator,
-              ...('desiredMarkdown' in operation ? { desiredMarkdown: operation.desiredMarkdown } : {})
-            }];
-          }),
-          tables: patch.operations.flatMap((operation) => operation.kind === 'table-replace' ? [{
+      const whiteboardPlan = analysis.plan.whiteboards;
+      const whiteboards = whiteboardPlan?.assets ?? [];
+      status = {
+        ...statusWithWhiteboards(status, whiteboards),
+        whiteboardBlockers: whiteboardPlan?.blockers ?? []
+      };
+      if (patch) status = { ...status, scopeSummary: patch.scopeSummary };
+      scoped = {
+        text: (patch?.operations ?? []).flatMap((operation) => {
+          if (operation.kind === 'table-replace') return [];
+          return [{
+            kind: operation.kind,
             locator: operation.locator,
-            additions: operation.diff.additions,
-            updates: operation.diff.updates
-          }] : []),
-          whiteboards,
-          blockers: patch.blockers,
-          warnings: patch.warnings
-        };
-      }
-    } catch {
+            ...('desiredMarkdown' in operation ? { desiredMarkdown: operation.desiredMarkdown } : {})
+          }];
+        }),
+        tables: (patch?.operations ?? []).flatMap((operation) => operation.kind === 'table-replace' ? [{
+          locator: operation.locator,
+          additions: operation.diff.additions,
+          updates: operation.diff.updates
+        }] : []),
+        whiteboards,
+        blockers: [...(patch?.blockers ?? []), ...(whiteboardPlan?.blockers ?? [])],
+        warnings: [...(patch?.warnings ?? []), ...(whiteboardPlan?.warnings ?? [])]
+      };
+    } catch (error) {
+      if (input.syncWhiteboards) throw error;
       // Preserve the raw Markdown diff when scope-aware analysis is unavailable.
     }
   }

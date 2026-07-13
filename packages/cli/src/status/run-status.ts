@@ -12,7 +12,7 @@ import {
 import { applyPublishTransformForProfile } from '../publish/profile-transform.js';
 import { analyzeExistingPublish } from '../publish/run-publish.js';
 import type { SemanticLocator } from '../semantic/types.js';
-import type { WhiteboardAssetPlan } from '../whiteboards/whiteboard-plan.js';
+import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
 
 export type PublishStatusState = 'untracked' | 'clean' | 'local-changed' | 'remote-changed' | 'diverged';
 
@@ -41,6 +41,7 @@ export type PublishStatusResult = {
   remoteRevision?: string;
   transformWarnings: string[];
   whiteboards: WhiteboardAssetPlan[];
+  whiteboardBlockers: WhiteboardPlanBlocker[];
   scopeSummary: {
     localChanged: SemanticLocator[];
     remoteChanged: SemanticLocator[];
@@ -99,8 +100,14 @@ export async function runStatus(input: {
         reason: 'local and remote changes are in disjoint scopes'
       }
       : withWhiteboards.recommendation;
-    return { ...withWhiteboards, scopeSummary, recommendation };
-  } catch {
+    return {
+      ...withWhiteboards,
+      whiteboardBlockers: analysis.plan.whiteboards?.blockers ?? [],
+      scopeSummary,
+      recommendation
+    };
+  } catch (error) {
+    if (input.syncWhiteboards) throw error;
     return result;
   }
 }
@@ -162,6 +169,7 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
       remoteRevision: context.remoteRevision,
       transformWarnings: context.transformWarnings,
       whiteboards: [],
+      whiteboardBlockers: [],
       scopeSummary: emptyScopeSummary(),
       recommendation: recommendationFor({ state, contentMatchesRemote })
     };
@@ -189,6 +197,7 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     remoteRevision: context.remoteRevision,
     transformWarnings: context.transformWarnings,
     whiteboards: [],
+    whiteboardBlockers: [],
     scopeSummary: emptyScopeSummary(),
     recommendation: recommendationFor({ state, contentMatchesRemote })
   };

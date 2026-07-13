@@ -238,6 +238,26 @@ describe('runStatus', () => {
       action: 'update existing whiteboard'
     })]);
   });
+
+  it('fails closed when explicit Whiteboard analysis throws', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-whiteboard-error-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, 'Milvus stores vectors.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Milvus stores vectors.' }),
+      resolveDocumentId: async () => { throw new Error('block analysis unavailable'); },
+      replaceDocument: async () => {}
+    };
+
+    await expect(runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      syncWhiteboards: true,
+      adapter
+    })).rejects.toThrow('block analysis unavailable');
+  });
 });
 
 function statusTableBlocks(description: string) {

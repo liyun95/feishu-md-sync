@@ -378,6 +378,18 @@ describe('LarkCliAdapter', () => {
       .rejects.toThrow('lark-cli whiteboard +query did not return raw node state');
   });
 
+  it('rejects raw Whiteboard metadata without a nodes array', async () => {
+    const adapter = new LarkCliAdapter({
+      exec: async () => ({
+        stdout: JSON.stringify({ ok: true, data: { raw: { version: 1 } } }),
+        stderr: ''
+      })
+    });
+
+    await expect(adapter.queryWhiteboard({ whiteboardToken: 'wb_token' }))
+      .rejects.toThrow('lark-cli whiteboard +query did not return raw node state');
+  });
+
   it('updates a Whiteboard from SVG through stdin with overwrite and idempotency', async () => {
     const calls: Array<{ args: string[]; stdin?: string }> = [];
     const adapter = new LarkCliAdapter({

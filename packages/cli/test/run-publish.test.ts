@@ -825,7 +825,7 @@ describe('runPublish', () => {
       ] }),
       replaceDocument: async () => {},
       replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
-      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('CAGRA') }),
       updateWhiteboard: async () => {},
       createDocument: async () => ({ documentId: 'created' })
     };
@@ -851,7 +851,7 @@ describe('runPublish', () => {
     })]);
   });
 
-  it('combines text and Whiteboard changes in one dry-run plan', async () => {
+  it('blocks untracked Whiteboard creation when adjacent text also changes', async () => {
     const fixture = await createWhiteboardFixture('New paragraph.\n\n![CAGRA](./assets/cagra.png)');
     const adapter: FeishuAdapter = {
       fetchDocMarkdown: async () => ({ markdown: 'Old paragraph.\n\n![CAGRA](remote-image)' }),
@@ -862,7 +862,7 @@ describe('runPublish', () => {
       ] }),
       replaceDocument: async () => {},
       replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
-      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('CAGRA') }),
       updateWhiteboard: async () => {},
       createDocument: async () => ({ documentId: 'created' })
     };
@@ -881,7 +881,9 @@ describe('runPublish', () => {
     });
 
     expect(result.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({ kind: 'update' }));
-    expect(result.plan.whiteboards?.operations).toContainEqual(expect.objectContaining({ kind: 'whiteboard-create' }));
+    expect(result.plan.whiteboards?.operations).toEqual([]);
+    expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({ code: 'whiteboard-placement-mismatch' }));
+    expect(result.plan.strategy).toBe('blocked');
   });
 
   it('blocks Whiteboard sync before writing when SVG validation fails', async () => {
@@ -1007,7 +1009,7 @@ describe('runPublish', () => {
         created = true;
         return { blockId: 'wb_block', whiteboardToken: 'wb_token' };
       },
-      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('CAGRA') }),
       updateWhiteboard: async () => {},
       createDocument: async () => ({ documentId: 'created' })
     };
@@ -1073,7 +1075,7 @@ describe('runPublish', () => {
       }
 
       async queryWhiteboard() {
-        return { raw: { nodes: [{ text: this.created ? 'CAGRA' : 'missing' }] } };
+        return { raw: whiteboardTextRaw(this.created ? 'CAGRA' : 'missing') };
       }
 
       async updateWhiteboard() {}
@@ -1109,9 +1111,9 @@ describe('runPublish', () => {
       markdown: '![CAGRA](./assets/cagra.png)',
       remoteMarkdown,
       svgHash: hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>'),
-      remoteRaw: { nodes: [{ text: 'CAGRA v1' }] }
+      remoteRaw: whiteboardTextRaw('CAGRA v1')
     });
-    let remoteRaw: unknown = { nodes: [{ text: 'CAGRA v1' }] };
+    let remoteRaw: unknown = whiteboardTextRaw('CAGRA v1');
     const updates: Array<{ token: string; svg: string; idempotencyToken: string }> = [];
     const adapter: FeishuAdapter = {
       fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '2' }),
@@ -1127,7 +1129,7 @@ describe('runPublish', () => {
       queryWhiteboard: async () => ({ raw: remoteRaw }),
       updateWhiteboard: async ({ whiteboardToken, svg, idempotencyToken }) => {
         updates.push({ token: whiteboardToken, svg, idempotencyToken });
-        remoteRaw = { nodes: [{ text: 'CAGRA v2' }] };
+        remoteRaw = whiteboardTextRaw('CAGRA v2');
       },
       createDocument: async () => ({ documentId: 'created' })
     };
@@ -1151,7 +1153,8 @@ describe('runPublish', () => {
       svg: expect.stringContaining('CAGRA v2'),
       idempotencyToken: `fms-${semanticHash({
         whiteboardToken: 'wb_token',
-        svgHash: hashText(updatedSvg)
+        svgHash: hashText(updatedSvg),
+        remoteStateHash: whiteboardRemoteStateHash(whiteboardTextRaw('CAGRA v1'))
       }).slice(0, 32)}`
     })]);
     await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
@@ -1181,7 +1184,7 @@ describe('runPublish', () => {
         created = true;
         return { blockId: 'wb_block', whiteboardToken: 'wb_token' };
       },
-      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'Different' }] } }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Different') }),
       updateWhiteboard: async () => {},
       createDocument: async () => ({ documentId: 'created' })
     };
@@ -1205,6 +1208,10 @@ describe('runPublish', () => {
       .resolves.toBeUndefined();
   });
 });
+
+function whiteboardTextRaw(text: string): { nodes: Array<{ id: string; type: string; text: { text: string } }> } {
+  return { nodes: [{ id: 'text-1', type: 'text_shape', text: { text } }] };
+}
 
 async function createWhiteboardFixture(markdown: string, svg = '<svg viewBox="0 0 10 10"><text>CAGRA</text></svg>') {
   const dir = await mkdtemp(join(tmpdir(), 'fms-whiteboard-run-'));

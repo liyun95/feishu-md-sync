@@ -9,10 +9,11 @@ export function whiteboardRemoteStateHash(raw: unknown): string {
 }
 
 export function verifyWhiteboardReadback(input: { raw: unknown; expectedTexts: string[] }): void {
-  if (!containsContent(input.raw)) {
+  const nodes = whiteboardNodes(input.raw);
+  if (!nodes || nodes.length === 0) {
     throw new Error('Whiteboard readback returned no nodes.');
   }
-  const remoteText = collectStrings(input.raw).map(normalizeText).filter(Boolean).join('\n');
+  const remoteText = nodes.flatMap(textFromNode).map(normalizeText).filter(Boolean).join('\n');
   for (const expected of input.expectedTexts.map(normalizeText).filter(Boolean)) {
     if (!remoteText.includes(expected)) {
       throw new Error(`Whiteboard readback is missing expected text: ${expected}`);
@@ -20,12 +21,18 @@ export function verifyWhiteboardReadback(input: { raw: unknown; expectedTexts: s
   }
 }
 
-function containsContent(value: unknown): boolean {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  if (typeof value !== 'object') return true;
-  if (Array.isArray(value)) return value.some(containsContent);
-  return Object.values(value).some(containsContent);
+function whiteboardNodes(raw: unknown): unknown[] | undefined {
+  if (Array.isArray(raw)) return raw;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const nodes = (raw as { nodes?: unknown }).nodes;
+  return Array.isArray(nodes) ? nodes : undefined;
+}
+
+function textFromNode(node: unknown): string[] {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return [];
+  const record = node as { type?: unknown; text?: unknown };
+  if (record.type !== 'text_shape') return [];
+  return collectStrings(record.text);
 }
 
 function collectStrings(value: unknown): string[] {

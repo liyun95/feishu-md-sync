@@ -398,9 +398,10 @@ function whiteboardRawFromData(data: unknown): unknown {
     else if (typeof record.content === 'string') raw = parseEmbeddedJson(record.content);
     else raw = data;
   }
-  if (raw === undefined || raw === null ||
-      (Array.isArray(raw) && raw.length === 0) ||
-      (typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length === 0)) {
+  const hasNodeState = Array.isArray(raw)
+    ? raw.length > 0
+    : Boolean(raw && typeof raw === 'object' && Array.isArray((raw as { nodes?: unknown }).nodes));
+  if (!hasNodeState) {
     throw new Error('lark-cli whiteboard +query did not return raw node state.');
   }
   return raw;

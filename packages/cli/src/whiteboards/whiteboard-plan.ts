@@ -30,6 +30,7 @@ export type WhiteboardOperation =
     whiteboardToken: string;
     svgPath: string;
     svgHash: string;
+    remoteStateHash: string;
   }
   | {
     kind: 'whiteboard-update';
@@ -40,6 +41,7 @@ export type WhiteboardOperation =
     whiteboardToken: string;
     svgPath: string;
     svgHash: string;
+    remoteStateHash: string;
     reason: 'local-changed' | 'confirmed-remote-overwrite';
   };
 
@@ -140,6 +142,15 @@ function planUntrackedAsset(input: {
   assets: WhiteboardAssetPlan[];
   operations: WhiteboardOperation[];
 }): void {
+  if (hasMultipleUntrackedAssetSlots(input.input, input.asset.locator)) {
+    input.blockers.push({
+      code: 'whiteboard-correspondence-ambiguous',
+      assetKey: input.asset.assetKey,
+      message: `multiple untracked image or Whiteboard slots exist in this section: ${input.asset.assetKey}`
+    });
+    input.assets.push(missingAsset(input.asset.assetKey, 'track or separate remote Whiteboard slots'));
+    return;
+  }
   const candidates = correspondingRemoteAssets(input.input.remoteDocument, input.asset.locator);
   if (candidates.length !== 1) {
     input.blockers.push({
@@ -152,6 +163,17 @@ function planUntrackedAsset(input: {
   }
   const remote = candidates[0];
   const placementFingerprint = fingerprintFor(input.input.localDocument, input.asset.locator);
+  const localCorrespondenceFingerprint = correspondenceFingerprintFor(input.input.localDocument, input.asset.locator);
+  const remoteCorrespondenceFingerprint = correspondenceFingerprintFor(input.input.remoteDocument, remote.locator);
+  if (localCorrespondenceFingerprint !== remoteCorrespondenceFingerprint) {
+    input.blockers.push({
+      code: 'whiteboard-placement-mismatch',
+      assetKey: input.asset.assetKey,
+      message: `local and remote context do not identify the same asset position: ${input.asset.assetKey}`
+    });
+    input.assets.push(missingAsset(input.asset.assetKey, 'align local and remote Whiteboard placement'));
+    return;
+  }
   if (!remote.remoteBlockId) {
     input.blockers.push({
       code: 'missing-remote-whiteboard',
@@ -199,7 +221,8 @@ function planUntrackedAsset(input: {
     blockId: remote.remoteBlockId,
     whiteboardToken: remote.remoteToken,
     svgPath: input.asset.svgPath,
-    svgHash: input.asset.svgHash
+    svgHash: input.asset.svgHash,
+    remoteStateHash: input.input.remoteStates.get(remote.remoteToken)!.hash
   });
   input.assets.push({
     assetKey: input.asset.assetKey,
@@ -278,6 +301,7 @@ function planTrackedAsset(input: {
     whiteboardToken: remote.remoteToken!,
     svgPath: input.asset.svgPath,
     svgHash: input.asset.svgHash,
+    remoteStateHash: remoteState.hash,
     reason: remoteChanged ? 'confirmed-remote-overwrite' : 'local-changed'
   });
   input.assets.push({
@@ -295,6 +319,31 @@ function correspondingRemoteAssets(document: SemanticDocument, locator: Semantic
   });
 }
 
+function hasMultipleUntrackedAssetSlots(input: WhiteboardPlanningInput, locator: SemanticLocator): boolean {
+  const trackedLocalLocators = input.receiptEntries.flatMap((receipt) => {
+    return input.localAssets
+      .filter((asset) => asset.assetKey === receipt.assetKey)
+      .map((asset) => asset.locator);
+  });
+  const localCount = input.localDocument.nodes.filter((node) => {
+    return node.kind === 'asset' &&
+      sameSection(node.locator.sectionPath, locator.sectionPath) &&
+      !trackedLocalLocators.some((tracked) => sameLocator(tracked, node.locator));
+  }).length;
+  const remoteCount = input.remoteDocument.nodes.filter((node) => {
+    return node.kind === 'asset' &&
+      sameSection(node.locator.sectionPath, locator.sectionPath) &&
+      !input.receiptEntries.some((receipt) => {
+        return receipt.blockId === node.remoteBlockId && receipt.whiteboardToken === node.remoteToken;
+      });
+  }).length;
+  return localCount > 1 || remoteCount > 1;
+}
+
+function sameSection(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
+}
+
 function sameLocator(left: SemanticLocator, right: SemanticLocator): boolean {
   return left.kind === right.kind &&
     left.ordinal === right.ordinal &&
@@ -309,8 +358,28 @@ function fingerprintFor(document: SemanticDocument, locator: SemanticLocator): s
   return semanticHash({ locator, previous, next });
 }
 
+function correspondenceFingerprintFor(document: SemanticDocument, locator: SemanticLocator): string {
+  const index = document.nodes.findIndex((node) => sameLocator(node.locator, locator));
+  const previous = index > 0 ? correspondenceIdentityFor(document.nodes[index - 1]) : undefined;
+  const next = index >= 0 && index < document.nodes.length - 1
+    ? correspondenceIdentityFor(document.nodes[index + 1])
+    : undefined;
+  return semanticHash({ locator, previous, next });
+}
+
 function identityFor(node: SemanticNode | undefined): unknown {
-  return node ? stripExecutionMetadata(node) : undefined;
+  if (!node) return undefined;
+  return {
+    kind: node.kind,
+    locator: node.locator,
+    ...(node.kind === 'text' ? { blockType: node.blockType } : {})
+  };
+}
+
+function correspondenceIdentityFor(node: SemanticNode | undefined): unknown {
+  if (!node) return undefined;
+  if (node.kind === 'asset') return identityFor(node);
+  return stripExecutionMetadata(node);
 }
 
 function missingAsset(assetKey: string, action: string): WhiteboardAssetPlan {

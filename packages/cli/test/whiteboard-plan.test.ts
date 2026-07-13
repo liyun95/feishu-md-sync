@@ -32,6 +32,63 @@ describe('Whiteboard publish plan', () => {
     expect(result.assets).toContainEqual(expect.objectContaining({ state: 'untracked', remote: 'untracked' }));
   });
 
+  it('blocks untracked correspondence when a local image was inserted before the remote slot', () => {
+    const followingLocalImage: SemanticAssetNode = {
+      ...localNode(),
+      locator: { sectionPath: ['Architecture'], kind: 'asset', ordinal: 1 },
+      source: './assets/existing.png'
+    };
+    const result = planWhiteboardPublish({
+      ...planningInput({ remote: remoteAsset('image', 'image_block', 'image_token') }),
+      localDocument: { nodes: [localNode(), followingLocalImage] }
+    });
+
+    expect(result.operations).toEqual([]);
+    expect(result.blockers).toContainEqual(expect.objectContaining({ code: 'whiteboard-correspondence-ambiguous' }));
+  });
+
+  it('blocks multiple untracked asset slots in the same section', () => {
+    const secondLocal: SemanticAssetNode = {
+      ...localNode(),
+      locator: { sectionPath: ['Architecture'], kind: 'asset', ordinal: 1 },
+      source: './assets/other.png'
+    };
+    const secondRemote = {
+      ...remoteAsset('image', 'other_image', 'other_token'),
+      locator: secondLocal.locator
+    };
+    const result = planWhiteboardPublish({
+      ...planningInput({ remote: remoteAsset('image', 'image_block', 'image_token') }),
+      localDocument: { nodes: [localNode(), secondLocal] },
+      remoteDocument: { nodes: [remoteAsset('image', 'image_block', 'image_token'), secondRemote] }
+    });
+
+    expect(result.operations).toEqual([]);
+    expect(result.blockers).toContainEqual(expect.objectContaining({ code: 'whiteboard-correspondence-ambiguous' }));
+  });
+
+  it('blocks untracked correspondence when adjacent text content differs', () => {
+    const localText = {
+      kind: 'text' as const,
+      locator: { sectionPath: ['Architecture'], kind: 'text' as const, ordinal: 0 },
+      blockType: 2,
+      markdown: 'New local context.'
+    };
+    const remoteText = {
+      ...localText,
+      markdown: 'Different remote context.',
+      remoteBlockId: 'remote_text'
+    };
+    const result = planWhiteboardPublish({
+      ...planningInput({ remote: remoteAsset('image', 'image_block', 'image_token') }),
+      localDocument: { nodes: [localText, localNode()] },
+      remoteDocument: { nodes: [remoteText, remoteAsset('image', 'image_block', 'image_token')] }
+    });
+
+    expect(result.operations).toEqual([]);
+    expect(result.blockers).toContainEqual(expect.objectContaining({ code: 'whiteboard-placement-mismatch' }));
+  });
+
   it('returns clean when local SVG and remote nodes match the receipt baselines', () => {
     const result = planWhiteboardPublish(trackedInput({ localHash: 'svg-base', remoteHash: 'remote-base' }));
 
@@ -46,6 +103,7 @@ describe('Whiteboard publish plan', () => {
     expect(result.operations).toEqual([expect.objectContaining({
       kind: 'whiteboard-update',
       whiteboardToken: 'wb_token',
+      remoteStateHash: 'remote-base',
       reason: 'local-changed'
     })]);
     expect(result.assets).toEqual([expect.objectContaining({ state: 'local-changed', local: 'changed', remote: 'unchanged' })]);
@@ -81,6 +139,7 @@ describe('Whiteboard publish plan', () => {
     expect(result.operations).toEqual([expect.objectContaining({
       kind: 'whiteboard-update',
       assetKey: 'assets/cagra.png',
+      remoteStateHash: 'remote-current',
       reason: 'confirmed-remote-overwrite'
     })]);
   });

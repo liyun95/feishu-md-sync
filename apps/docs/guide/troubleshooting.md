@@ -68,11 +68,11 @@ The sibling SVG is malformed or uses a construct that cannot be imported safely.
 
 ## Whiteboard correspondence is ambiguous or missing
 
-The local standalone image must map to exactly one remote image or Whiteboard block at the same semantic position. This feature does not upload the PNG or create a missing image slot. Add or move the ordinary image in Feishu, then rerun the dry-run.
+The local standalone image must map to exactly one remote image or Whiteboard block at the same semantic position. Multiple untracked asset slots under one heading are intentionally ambiguous; separate them under different headings or establish receipts one at a time. Initial adoption also requires neighboring semantic content to match, so adopt the asset before changing adjacent text. This feature does not upload the PNG or create a missing image slot. Add or move the ordinary image in Feishu, then rerun the dry-run.
 
 ## `4003101: doc data is not ready ... whiteboard`
 
-Feishu may keep a newly created or recently updated Whiteboard in an asynchronous apply window. The CLI fails closed and does not write a receipt for that attempt. Wait for Feishu to finish applying the previous Whiteboard change, then rerun the same publish command; the Whiteboard update uses an asset- and board-specific idempotency token.
+Feishu may keep a newly created or recently updated Whiteboard in an asynchronous apply window. The CLI fails closed and does not write a receipt for that attempt. Wait for Feishu to finish applying the previous Whiteboard change, then rerun the same publish command; the Whiteboard update uses a board-, SVG-, and remote-state-specific idempotency token.
 
 ## Auth Or API Errors
 

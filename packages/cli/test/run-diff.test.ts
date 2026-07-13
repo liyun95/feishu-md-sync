@@ -156,6 +156,58 @@ describe('runDiff', () => {
     })]);
     expect(result.hasDiff).toBe(true);
   });
+
+  it('includes Whiteboard discovery blockers in scoped diff output', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-whiteboard-blocker-'));
+    const assets = join(dir, 'assets');
+    const file = join(dir, 'doc.md');
+    await mkdir(assets);
+    await writeFile(file, '![CAGRA](./assets/cagra.png)', 'utf8');
+    await writeFile(join(assets, 'cagra.png'), 'png', 'utf8');
+    await writeFile(join(assets, 'cagra.svg'), '<svg viewBox="0 0 10 10"><filter id="shadow"></filter></svg>', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      updateWhiteboard: async () => {}
+    };
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.scoped.blockers).toContainEqual(expect.objectContaining({ code: 'invalid-svg' }));
+  });
+
+  it('fails closed when explicit Whiteboard analysis throws', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-whiteboard-error-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, 'Milvus stores vectors.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Milvus stores vectors.' }),
+      resolveDocumentId: async () => { throw new Error('block analysis unavailable'); },
+      replaceDocument: async () => {}
+    };
+
+    await expect(runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      syncWhiteboards: true,
+      adapter
+    })).rejects.toThrow('block analysis unavailable');
+  });
 });
 
 function diffAdapter(markdown: string): FeishuAdapter {

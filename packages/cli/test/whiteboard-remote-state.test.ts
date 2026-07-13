@@ -25,14 +25,31 @@ describe('remote Whiteboard state', () => {
 
   it('accepts non-empty raw state containing all expected SVG text', () => {
     expect(() => verifyWhiteboardReadback({
-      raw: { nodes: [{ shape: { text: 'CAGRA' } }, { text: { content: 'Search path' } }] },
+      raw: { nodes: [
+        { id: 'text-1', type: 'text_shape', text: { text: 'CAGRA' } },
+        { id: 'text-2', type: 'text_shape', text: { text: 'Search path' } }
+      ] },
       expectedTexts: ['CAGRA', 'Search path']
     })).not.toThrow();
   });
 
-  it.each([null, {}, [], { nodes: [] }])('rejects empty raw state %#', (raw) => {
+  it.each([null, {}, [], { nodes: [] }, { nodes: [], version: 1 }])('rejects empty raw state %#', (raw) => {
     expect(() => verifyWhiteboardReadback({ raw, expectedTexts: [] }))
       .toThrow('Whiteboard readback returned no nodes');
+  });
+
+  it('does not accept expected text found only in arbitrary metadata', () => {
+    expect(() => verifyWhiteboardReadback({
+      raw: { nodes: [{ id: 'shape-1', type: 'composite_shape', metadata: { name: 'CAGRA' } }] },
+      expectedTexts: ['CAGRA']
+    })).toThrow('Whiteboard readback is missing expected text: CAGRA');
+  });
+
+  it('does not accept text on a non-text node', () => {
+    expect(() => verifyWhiteboardReadback({
+      raw: { nodes: [{ id: 'shape-1', type: 'composite_shape', text: 'CAGRA' }] },
+      expectedTexts: ['CAGRA']
+    })).toThrow('Whiteboard readback is missing expected text: CAGRA');
   });
 
   it('rejects readback missing expected SVG text', () => {
