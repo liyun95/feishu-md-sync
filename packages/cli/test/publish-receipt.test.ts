@@ -45,6 +45,25 @@ describe('publish receipt', () => {
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'missing' } })).resolves.toBeUndefined();
   });
 
+  it('writes and reads a version 2 receipt with resolved and semantic baselines', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-receipt-v2-'));
+    const receipt = {
+      version: 2 as const,
+      target: { kind: 'wiki' as const, token: 'wiki_token' },
+      resolvedDocumentId: 'doc_token',
+      profile: 'none' as const,
+      localSourceHash: 'source',
+      publishDraftHash: 'draft',
+      remoteSnapshotHash: 'remote',
+      localBaseSnapshot: { path: 'local.md', hash: 'local' },
+      remoteSemanticSnapshot: { path: 'remote.json', hash: 'semantic' },
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    };
+
+    await writePublishReceipt({ cwd: dir, receipt });
+    await expect(readPublishReceipt({ cwd: dir, target: receipt.target })).resolves.toEqual(receipt);
+  });
+
   it('stores local authoring markdown outside the receipt JSON', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-base-'));
     const target = { kind: 'docx' as const, token: 'doc_token' };
