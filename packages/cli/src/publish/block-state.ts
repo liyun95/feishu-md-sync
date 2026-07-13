@@ -75,9 +75,18 @@ function comparableBlock(block: FeishuBlock, byId: Map<string, FeishuBlock>): Fe
   const cellRefs = block.table.cells ?? [];
   const resolvedCells = cellRefs.map((cellRef) => {
     const cellBlock = typeof cellRef === 'string' ? byId.get(cellRef) : asBlock(cellRef);
-    const firstChildRef = Array.isArray(cellBlock?.children) ? cellBlock.children[0] : undefined;
-    const firstChild = typeof firstChildRef === 'string' ? byId.get(firstChildRef) : asBlock(firstChildRef);
-    return firstChild ?? { block_type: 2, text: { elements: [], style: { align: 1 } } };
+    const children = Array.isArray(cellBlock?.children)
+      ? cellBlock.children
+        .map((childRef) => (typeof childRef === 'string' ? byId.get(childRef) : asBlock(childRef)))
+        .filter((child): child is FeishuBlock => Boolean(child))
+        .map((child) => comparableBlock(child, byId))
+      : [];
+    return {
+      ...(cellBlock ?? { block_type: 32 }),
+      children: children.length > 0
+        ? children
+        : [{ block_type: 2, text: { elements: [], style: { align: 1 } } }]
+    };
   });
 
   return {

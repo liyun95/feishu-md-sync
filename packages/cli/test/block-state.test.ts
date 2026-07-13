@@ -12,19 +12,27 @@ describe('block-state helpers', () => {
     expect(directChildBlocks(blocks, page)).toEqual([{ block_id: 'a', block_type: 3 }, { block_type: 2 }]);
   });
 
-  it('resolves table cell IDs into comparable cell content blocks', () => {
+  it('resolves table cell IDs into comparable cell containers with all children', () => {
     const page = { block_id: 'page', block_type: 1, children: ['table'] };
     const blocks = [
       page,
       { block_id: 'table', block_type: 31, table: { property: { row_size: 1, column_size: 1 }, cells: ['cell'] } },
-      { block_id: 'cell', block_type: 32, children: ['text'] },
-      { block_id: 'text', block_type: 2, text: { elements: [] } }
+      { block_id: 'cell', block_type: 32, children: ['text', 'bullet'] },
+      { block_id: 'text', block_type: 2, text: { elements: [] } },
+      { block_id: 'bullet', block_type: 12, bullet: { elements: [] } }
     ];
 
     expect(comparableDirectChildBlocks(blocks, page)[0]).toMatchObject({
       block_type: 31,
       table: {
-        cells: [{ block_id: 'text', block_type: 2, text: { elements: [] } }]
+        cells: [{
+          block_id: 'cell',
+          block_type: 32,
+          children: [
+            { block_id: 'text', block_type: 2, text: { elements: [] } },
+            { block_id: 'bullet', block_type: 12, bullet: { elements: [] } }
+          ]
+        }]
       }
     });
   });
