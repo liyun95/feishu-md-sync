@@ -15,6 +15,8 @@ type PublishCommandOptions = {
   confirmDestructive?: boolean;
   confirmCollaborationRisk?: boolean;
   confirmUntrackedRemote?: boolean;
+  syncWhiteboards?: boolean;
+  confirmRemoteWhiteboardOverwrite?: string[];
   format?: string;
 };
 
@@ -31,9 +33,22 @@ export function registerPublishCommand(program: Command): void {
     .option('--confirm-destructive', 'confirm destructive document replacement in non-interactive mode')
     .option('--confirm-collaboration-risk', 'confirm block replacement/deletion may affect comments or block identity')
     .option('--confirm-untracked-remote', 'confirm adopting an existing remote document without a publish receipt')
+    .option('--sync-whiteboards', 'sync same-name local SVG assets to Feishu Whiteboards')
+    .option(
+      '--confirm-remote-whiteboard-overwrite <asset-key>',
+      'confirm overwriting one remotely changed Whiteboard asset; repeat for multiple assets',
+      (value: string, previous: string[]) => [...previous, value],
+      []
+    )
     .option('--format <format>', 'output format: pretty | json', 'pretty')
     .action(async (markdownFile: string, opts: PublishCommandOptions) => {
       const requested = publishRequestFromArgv(opts);
+      if (requested.syncWhiteboards && requested.create) {
+        throw new Error('--sync-whiteboards is not supported with --create');
+      }
+      if (requested.syncWhiteboards && requested.strategy === 'document-replace') {
+        throw new Error('--sync-whiteboards is not supported with --strategy document-replace');
+      }
       if (requested.write && requested.strategy === 'document-replace' && !requested.confirmDestructive) {
         throw new Error('--confirm-destructive is required with --strategy document-replace --write');
       }
@@ -53,6 +68,8 @@ export function registerPublishCommand(program: Command): void {
         confirmDestructive: requested.confirmDestructive,
         confirmCollaborationRisk: requested.confirmCollaborationRisk,
         confirmUntrackedRemote: requested.confirmUntrackedRemote,
+        syncWhiteboards: requested.syncWhiteboards,
+        confirmedRemoteWhiteboardOverwrites: requested.confirmedRemoteWhiteboardOverwrites,
         adapter: new LarkCliAdapter()
       });
 
@@ -67,6 +84,8 @@ function publishRequestFromArgv(opts: PublishCommandOptions): {
   confirmDestructive: boolean;
   confirmCollaborationRisk: boolean;
   confirmUntrackedRemote: boolean;
+  syncWhiteboards: boolean;
+  confirmedRemoteWhiteboardOverwrites: string[];
   create: boolean;
 } {
   const strategy = optionValueFromArgv('--strategy') ?? opts.strategy ?? 'auto';
@@ -79,11 +98,23 @@ function publishRequestFromArgv(opts: PublishCommandOptions): {
     strategy,
     confirmDestructive: opts.confirmDestructive === true || process.argv.includes('--confirm-destructive'),
     confirmCollaborationRisk: opts.confirmCollaborationRisk === true || process.argv.includes('--confirm-collaboration-risk'),
-    confirmUntrackedRemote: opts.confirmUntrackedRemote === true || process.argv.includes('--confirm-untracked-remote')
+    confirmUntrackedRemote: opts.confirmUntrackedRemote === true || process.argv.includes('--confirm-untracked-remote'),
+    syncWhiteboards: opts.syncWhiteboards === true || process.argv.includes('--sync-whiteboards'),
+    confirmedRemoteWhiteboardOverwrites: opts.confirmRemoteWhiteboardOverwrite ?? optionValuesFromArgv('--confirm-remote-whiteboard-overwrite')
   };
 }
 
 function optionValueFromArgv(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
+}
+
+function optionValuesFromArgv(name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < process.argv.length; index += 1) {
+    const value = process.argv[index];
+    if (value === name && process.argv[index + 1]) values.push(process.argv[index + 1]);
+    if (value.startsWith(`${name}=`)) values.push(value.slice(name.length + 1));
+  }
+  return values;
 }

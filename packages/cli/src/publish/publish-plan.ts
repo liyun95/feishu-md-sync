@@ -2,6 +2,7 @@ import type { PublishProfileName } from '../profiles/publish-profile.js';
 import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type { PublishBlockPatchPlan } from './block-patch-plan.js';
 import type { ScopedPatchPlan } from './scoped-patch-plan.js';
+import type { WhiteboardPlan } from '../whiteboards/whiteboard-plan.js';
 
 export type PublishStrategy = 'no-op' | 'block-patch' | 'blocked' | 'section-replace' | 'document-replace' | 'create-document';
 
@@ -23,6 +24,8 @@ export type PublishPlan = {
     warnings: string[];
   };
   scopedPatch?: ScopedPatchPlan;
+  whiteboards?: WhiteboardPlan;
+  requiredRemoteWhiteboardOverwrites?: string[];
   risks: string[];
   warnings: string[];
 };
@@ -39,6 +42,7 @@ export function buildPublishPlan(input: {
   forceDocumentReplace?: boolean;
   blockPatch?: PublishBlockPatchPlan;
   scopedPatch?: ScopedPatchPlan;
+  whiteboards?: WhiteboardPlan;
 }): PublishPlan {
   const localSourceHash = hashText(input.localSource);
   const publishDraftHash = hashText(input.publishDraft);
@@ -60,7 +64,11 @@ export function buildPublishPlan(input: {
     };
   }
 
-  const remoteChanged = input.receipt ? input.receipt.remoteSnapshotHash !== remoteSnapshotHash : false;
+  const markdownRemoteChanged = input.receipt ? input.receipt.remoteSnapshotHash !== remoteSnapshotHash : false;
+  const whiteboardRemoteChanged = input.whiteboards?.assets.some((asset) => {
+    return asset.state === 'remote-changed' || asset.state === 'conflict';
+  }) ?? false;
+  const remoteChanged = markdownRemoteChanged || whiteboardRemoteChanged;
   const risks: string[] = [];
 
   if (!input.receipt) risks.push('untracked remote: no publish receipt exists for this target');
@@ -84,10 +92,31 @@ export function buildPublishPlan(input: {
     };
   }
 
-  if (input.scopedPatch) {
-    const warnings = [...input.transformWarnings, ...input.scopedPatch.warnings];
-    if (input.scopedPatch.blockers.length > 0) {
-      risks.push(...input.scopedPatch.blockers.map((blocker) => blocker.message));
+  if (input.scopedPatch || input.whiteboards) {
+    const scopedOperations = input.scopedPatch?.operations ?? [];
+    const whiteboardOperations = input.whiteboards?.operations ?? [];
+    const scopedBlockers = input.scopedPatch?.blockers ?? [];
+    const whiteboardBlockers = input.whiteboards?.blockers ?? [];
+    const warnings = [
+      ...input.transformWarnings,
+      ...(input.scopedPatch?.warnings ?? []),
+      ...(input.whiteboards?.warnings ?? [])
+    ];
+    const requiresCollaborationRiskConfirmation =
+      (input.scopedPatch?.requiresCollaborationRiskConfirmation ?? false) ||
+      (input.whiteboards?.requiresCollaborationRiskConfirmation ?? false);
+    const requiresUntrackedRemoteConfirmation =
+      (!input.receipt && Boolean(input.scopedPatch)) ||
+      (input.whiteboards?.requiresUntrackedRemoteConfirmation ?? false);
+    const requiredRemoteWhiteboardOverwrites = whiteboardOperations.flatMap((operation) => {
+      return operation.kind === 'whiteboard-update' && operation.reason === 'confirmed-remote-overwrite'
+        ? [operation.assetKey]
+        : [];
+    });
+
+    if (scopedBlockers.length > 0 || whiteboardBlockers.length > 0) {
+      risks.push(...scopedBlockers.map((blocker) => blocker.message));
+      risks.push(...whiteboardBlockers.map((blocker) => blocker.message));
       risks.push('scoped publish is blocked; auto will not fall back to document replacement');
       return {
         target: input.target,
@@ -98,48 +127,54 @@ export function buildPublishPlan(input: {
         localSourceHash,
         publishDraftHash,
         remoteSnapshotHash,
-        requiresCollaborationRiskConfirmation: input.scopedPatch.requiresCollaborationRiskConfirmation,
-        requiresUntrackedRemoteConfirmation: !input.receipt,
+        requiresCollaborationRiskConfirmation,
+        requiresUntrackedRemoteConfirmation,
         scopedPatch: input.scopedPatch,
+        whiteboards: input.whiteboards,
+        requiredRemoteWhiteboardOverwrites,
         risks,
         warnings
       };
     }
 
-    if (input.scopedPatch.operations.length === 0) {
+    if (scopedOperations.length === 0 && whiteboardOperations.length === 0) {
       return {
         target: input.target,
         profile: input.profile,
         strategy: 'no-op',
-        safeToWrite: Boolean(input.receipt),
+        safeToWrite: !requiresUntrackedRemoteConfirmation,
         remoteChanged,
         localSourceHash,
         publishDraftHash,
         remoteSnapshotHash,
         requiresCollaborationRiskConfirmation: false,
-        requiresUntrackedRemoteConfirmation: !input.receipt,
+        requiresUntrackedRemoteConfirmation,
         scopedPatch: input.scopedPatch,
+        whiteboards: input.whiteboards,
+        requiredRemoteWhiteboardOverwrites,
         risks,
         warnings
       };
     }
 
-    if (!input.receipt) risks.push('untracked remote block-patch requires explicit confirmation');
-    if (input.scopedPatch.requiresCollaborationRiskConfirmation) {
+    if (requiresUntrackedRemoteConfirmation) risks.push('untracked remote block-patch requires explicit confirmation');
+    if (requiresCollaborationRiskConfirmation) {
       risks.push('changed blocks may lose comments, anchors, or block identity when replaced');
     }
     return {
       target: input.target,
       profile: input.profile,
       strategy: 'block-patch',
-      safeToWrite: Boolean(input.receipt) && !input.scopedPatch.requiresCollaborationRiskConfirmation,
+      safeToWrite: !requiresCollaborationRiskConfirmation && !requiresUntrackedRemoteConfirmation,
       remoteChanged,
       localSourceHash,
       publishDraftHash,
       remoteSnapshotHash,
-      requiresCollaborationRiskConfirmation: input.scopedPatch.requiresCollaborationRiskConfirmation,
-      requiresUntrackedRemoteConfirmation: !input.receipt,
+      requiresCollaborationRiskConfirmation,
+      requiresUntrackedRemoteConfirmation,
       scopedPatch: input.scopedPatch,
+      whiteboards: input.whiteboards,
+      requiredRemoteWhiteboardOverwrites,
       risks,
       warnings
     };

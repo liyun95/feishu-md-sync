@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildPublishPlan } from '../src/publish/publish-plan.js';
 import { hashText } from '../src/receipts/publish-receipt.js';
+import type { WhiteboardPlan } from '../src/whiteboards/whiteboard-plan.js';
 
 describe('publish plan', () => {
   it('plans no-op when desired draft matches remote content', () => {
@@ -214,4 +215,123 @@ describe('publish plan', () => {
     expect(plan.requiresUntrackedRemoteConfirmation).toBe(true);
     expect(plan.risks).toContain('untracked remote block-patch requires explicit confirmation');
   });
+
+  it('selects block-patch when only a Whiteboard operation is planned', () => {
+    const plan = buildPublishPlan({
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      localSource: '![CAGRA](./assets/cagra.png)',
+      publishDraft: '![CAGRA](./assets/cagra.png)',
+      remoteMarkdown: '![CAGRA](remote-image)',
+      receipt: trackedReceipt(),
+      transformWarnings: [],
+      scopedPatch: emptyScopedPatch(),
+      whiteboards: whiteboardPlan({ operations: [{
+        kind: 'whiteboard-update',
+        assetKey: 'assets/cagra.png',
+        locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+        placementFingerprint: 'placement',
+        blockId: 'wb_block',
+        whiteboardToken: 'wb_token',
+        svgPath: '/tmp/cagra.svg',
+        svgHash: 'svg-new',
+        reason: 'local-changed'
+      }] })
+    });
+
+    expect(plan.strategy).toBe('block-patch');
+    expect(plan.whiteboards?.operations).toHaveLength(1);
+    expect(plan.requiresCollaborationRiskConfirmation).toBe(true);
+  });
+
+  it('blocks the entire publish when Whiteboard planning has a blocker', () => {
+    const plan = buildPublishPlan({
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      localSource: 'Local.',
+      publishDraft: 'Local.',
+      remoteMarkdown: 'Remote.',
+      receipt: trackedReceipt(),
+      transformWarnings: [],
+      scopedPatch: emptyScopedPatch(),
+      whiteboards: whiteboardPlan({
+        blockers: [{ code: 'whiteboard-conflict', assetKey: 'assets/cagra.png', message: 'remote Whiteboard changed' }]
+      })
+    });
+
+    expect(plan.strategy).toBe('blocked');
+    expect(plan.risks).toContain('remote Whiteboard changed');
+  });
+
+  it('requires untracked confirmation for a new Whiteboard in a tracked document', () => {
+    const plan = buildPublishPlan({
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      localSource: 'Local.',
+      publishDraft: 'Local.',
+      remoteMarkdown: 'Remote.',
+      receipt: trackedReceipt(),
+      transformWarnings: [],
+      scopedPatch: emptyScopedPatch(),
+      whiteboards: whiteboardPlan({
+        operations: [{
+          kind: 'whiteboard-create',
+          assetKey: 'assets/cagra.png',
+          locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+          placementFingerprint: 'placement',
+          remoteImageBlockId: 'image_block',
+          svgPath: '/tmp/cagra.svg',
+          svgHash: 'svg-new'
+        }],
+        requiresUntrackedRemoteConfirmation: true
+      })
+    });
+
+    expect(plan.strategy).toBe('block-patch');
+    expect(plan.requiresUntrackedRemoteConfirmation).toBe(true);
+  });
 });
+
+function trackedReceipt() {
+  return {
+    version: 1 as const,
+    target: { kind: 'docx' as const, token: 'doc_token' },
+    profile: 'none' as const,
+    localSourceHash: 'old-source',
+    publishDraftHash: 'old-draft',
+    remoteSnapshotHash: hashText('Remote.'),
+    updatedAt: '2026-07-13T00:00:00.000Z'
+  };
+}
+
+function emptyScopedPatch() {
+  return {
+    kind: 'scoped-patch-plan' as const,
+    safeToWrite: true,
+    operations: [],
+    blockers: [],
+    warnings: [],
+    requiresCollaborationRiskConfirmation: false,
+    scopeSummary: {
+      localChanged: [],
+      remoteChanged: [],
+      overlappingConflicts: [],
+      unrelatedRemoteChanges: []
+    }
+  };
+}
+
+function whiteboardPlan(input: Partial<WhiteboardPlan>): WhiteboardPlan {
+  const operations = input.operations ?? [];
+  const blockers = input.blockers ?? [];
+  return {
+    kind: 'whiteboard-plan',
+    safeToWrite: blockers.length === 0,
+    assets: input.assets ?? [],
+    operations,
+    blockers,
+    warnings: input.warnings ?? [],
+    requiresCollaborationRiskConfirmation: input.requiresCollaborationRiskConfirmation ?? operations.length > 0,
+    requiresUntrackedRemoteConfirmation: input.requiresUntrackedRemoteConfirmation ?? false
+  };
+}

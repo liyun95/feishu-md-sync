@@ -7,6 +7,7 @@ import {
   hashText,
   readLocalBaseSnapshot,
   readPublishReceipt,
+  whiteboardEntries,
   writeLocalBaseSnapshot,
   writePublishReceipt,
   type PublishReceipt,
@@ -17,6 +18,9 @@ import { localSemanticDocument } from '../semantic/local-document.js';
 import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import { semanticHash, stripExecutionMetadata } from '../semantic/normalize.js';
 import type { SemanticDocument, SemanticLocator, SemanticNode, SemanticTable, SemanticTextBlock } from '../semantic/types.js';
+import { discoverLocalWhiteboardAssets, normalizeAssetKey, type LocalWhiteboardAsset } from '../whiteboards/local-assets.js';
+import { whiteboardRemoteStateHash } from '../whiteboards/remote-state.js';
+import { planWhiteboardPublish, type WhiteboardPlan } from '../whiteboards/whiteboard-plan.js';
 import { findPageBlock } from './block-state.js';
 import { PartialWriteError } from './partial-write-error.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
@@ -45,6 +49,8 @@ export type PublishAnalysis = {
   receipt: PublishReceipt | undefined;
   localCurrent?: SemanticDocument;
   remoteCurrent?: SemanticDocument;
+  whiteboardPlan?: WhiteboardPlan;
+  whiteboardAssets?: LocalWhiteboardAsset[];
 };
 
 export async function runPublish(input: {
@@ -58,10 +64,18 @@ export async function runPublish(input: {
   confirmDestructive: boolean;
   confirmCollaborationRisk?: boolean;
   confirmUntrackedRemote?: boolean;
+  syncWhiteboards?: boolean;
+  confirmedRemoteWhiteboardOverwrites?: string[];
   adapter: FeishuAdapter;
 }): Promise<RunPublishResult> {
   if (input.write && input.strategy === 'document-replace' && !input.confirmDestructive) {
     throw new Error('document-replace requires --confirm-destructive in non-interactive mode');
+  }
+  if (input.syncWhiteboards && input.create) {
+    throw new Error('--sync-whiteboards is not supported with --create');
+  }
+  if (input.syncWhiteboards && input.strategy === 'document-replace') {
+    throw new Error('--sync-whiteboards is not supported with --strategy document-replace');
   }
 
   const localSource = await readFile(input.file, 'utf8');
@@ -77,7 +91,9 @@ export async function runPublish(input: {
     profile: input.profile,
     strategy: input.strategy,
     adapter: input.adapter,
-    localSource
+    localSource,
+    syncWhiteboards: input.syncWhiteboards,
+    confirmedRemoteWhiteboardOverwrites: input.confirmedRemoteWhiteboardOverwrites
   });
   if (!input.write) return { mode: 'dry-run', plan: analysis.plan };
 
@@ -111,6 +127,9 @@ export async function runPublish(input: {
   }
 
   if (plan.strategy === 'block-patch') {
+    if ((plan.whiteboards?.operations.length ?? 0) > 0) {
+      throw new Error('Whiteboard writes are not available until the verified write phase is enabled.');
+    }
     if (!plan.scopedPatch) throw new Error('block-patch write is missing a scoped patch plan');
     if (!analysis.localCurrent) throw new Error('block-patch write is missing local semantic state');
     await applyScopedPatch({
@@ -188,6 +207,8 @@ export async function analyzeExistingPublish(input: {
   strategy: 'auto' | PublishStrategy;
   adapter: FeishuAdapter;
   localSource?: string;
+  syncWhiteboards?: boolean;
+  confirmedRemoteWhiteboardOverwrites?: string[];
 }): Promise<PublishAnalysis> {
   const localSource = input.localSource ?? await readFile(input.file, 'utf8');
   const transform = applyPublishTransformForProfile(localSource, input.profile);
@@ -220,6 +241,9 @@ export async function analyzeExistingPublish(input: {
   }
 
   if (!input.adapter.fetchDocBlocks) {
+    const whiteboards = input.syncWhiteboards
+      ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', 'Whiteboard planning requires Docx block reads.')
+      : undefined;
     return {
       plan: buildPublishPlan({
         target: input.target,
@@ -228,14 +252,16 @@ export async function analyzeExistingPublish(input: {
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
         receipt,
-        transformWarnings: [...transform.warnings, 'block-patch planning unavailable: adapter cannot fetch Docx blocks']
+        transformWarnings: [...transform.warnings, 'block-patch planning unavailable: adapter cannot fetch Docx blocks'],
+        whiteboards
       }),
       resolvedDocumentId,
       localSource,
       publishDraft: transform.markdown,
       blockPatchDraft,
       remote,
-      receipt
+      receipt,
+      whiteboardPlan: whiteboards
     };
   }
 
@@ -244,6 +270,9 @@ export async function analyzeExistingPublish(input: {
     remoteBlocks = await input.adapter.fetchDocBlocks({ doc: resolvedDocumentId });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const whiteboards = input.syncWhiteboards
+      ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', `Whiteboard planning requires Docx block reads: ${message}`)
+      : undefined;
     return {
       plan: buildPublishPlan({
         target: input.target,
@@ -252,14 +281,16 @@ export async function analyzeExistingPublish(input: {
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
         receipt,
-        transformWarnings: [...transform.warnings, `block-patch planning unavailable: ${message}`]
+        transformWarnings: [...transform.warnings, `block-patch planning unavailable: ${message}`],
+        whiteboards
       }),
       resolvedDocumentId,
       localSource,
       publishDraft: transform.markdown,
       blockPatchDraft,
       remote,
-      receipt
+      receipt,
+      whiteboardPlan: whiteboards
     };
   }
   const page = findPageBlock(remoteBlocks.blocks, resolvedDocumentId);
@@ -283,6 +314,17 @@ export async function analyzeExistingPublish(input: {
       remoteCurrent,
       tracked: Boolean(receipt)
     });
+  const whiteboardAnalysis: { plan?: WhiteboardPlan; assets?: LocalWhiteboardAsset[] } = input.syncWhiteboards
+    ? await analyzeWhiteboards({
+      file: input.file,
+      localSource,
+      localCurrent,
+      remoteCurrent,
+      receipt,
+      adapter: input.adapter,
+      confirmedRemoteWhiteboardOverwrites: input.confirmedRemoteWhiteboardOverwrites ?? []
+    })
+    : {};
   const plan = buildPublishPlan({
     target: input.target,
     profile: input.profile,
@@ -291,7 +333,8 @@ export async function analyzeExistingPublish(input: {
     remoteMarkdown: remote.markdown,
     receipt,
     transformWarnings: transform.warnings,
-    scopedPatch
+    scopedPatch,
+    whiteboards: whiteboardAnalysis.plan
   });
   return {
     plan,
@@ -302,7 +345,90 @@ export async function analyzeExistingPublish(input: {
     remote,
     receipt,
     localCurrent,
-    remoteCurrent
+    remoteCurrent,
+    whiteboardPlan: whiteboardAnalysis.plan,
+    whiteboardAssets: whiteboardAnalysis.assets
+  };
+}
+
+async function analyzeWhiteboards(input: {
+  file: string;
+  localSource: string;
+  localCurrent: SemanticDocument;
+  remoteCurrent: SemanticDocument;
+  receipt: PublishReceipt | undefined;
+  adapter: FeishuAdapter;
+  confirmedRemoteWhiteboardOverwrites: string[];
+}): Promise<{ plan: WhiteboardPlan; assets: LocalWhiteboardAsset[] }> {
+  if (!input.adapter.queryWhiteboard || !input.adapter.updateWhiteboard || !input.adapter.replaceImageWithWhiteboard) {
+    return {
+      plan: blockedWhiteboardPlan(
+        'whiteboard-adapter-unavailable',
+        'Configured Feishu adapter does not support Whiteboard create/query/update.'
+      ),
+      assets: []
+    };
+  }
+
+  const tracked = whiteboardEntries(input.receipt);
+  const discovery = await discoverLocalWhiteboardAssets({
+    sourcePath: input.file,
+    markdown: input.localSource,
+    document: input.localCurrent,
+    tracked
+  });
+  const localLocators = new Set(discovery.assets.map((asset) => locatorKey(asset.locator)));
+  const tokens = new Set([
+    ...tracked.map((entry) => entry.whiteboardToken),
+    ...input.remoteCurrent.nodes.flatMap((node) => {
+      return node.kind === 'asset' &&
+        node.representation === 'whiteboard' &&
+        node.remoteToken &&
+        localLocators.has(locatorKey(node.locator))
+        ? [node.remoteToken]
+        : [];
+    })
+  ]);
+  const remoteStates = new Map<string, { hash: string }>();
+  const queryBlockers: Array<{ code: string; assetKey: string; message: string }> = [];
+  for (const token of tokens) {
+    try {
+      const remote = await input.adapter.queryWhiteboard({ whiteboardToken: token });
+      remoteStates.set(token, { hash: whiteboardRemoteStateHash(remote.raw) });
+    } catch (error) {
+      const related = tracked.find((entry) => entry.whiteboardToken === token)?.assetKey ?? '<untracked-whiteboard>';
+      queryBlockers.push({
+        code: 'remote-whiteboard-query-failed',
+        assetKey: related,
+        message: `failed to query remote Whiteboard ${token}: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  }
+
+  return {
+    plan: planWhiteboardPublish({
+      localDocument: input.localCurrent,
+      remoteDocument: input.remoteCurrent,
+      localAssets: discovery.assets,
+      discoveryBlockers: [...discovery.blockers, ...queryBlockers],
+      receiptEntries: tracked,
+      remoteStates,
+      confirmedRemoteOverwrites: new Set(input.confirmedRemoteWhiteboardOverwrites.map(normalizeAssetKey))
+    }),
+    assets: discovery.assets
+  };
+}
+
+function blockedWhiteboardPlan(code: string, message: string): WhiteboardPlan {
+  return {
+    kind: 'whiteboard-plan',
+    safeToWrite: false,
+    assets: [],
+    operations: [],
+    blockers: [{ code, assetKey: '<whiteboard>', message }],
+    warnings: [],
+    requiresCollaborationRiskConfirmation: false,
+    requiresUntrackedRemoteConfirmation: false
   };
 }
 
@@ -497,6 +623,10 @@ function verifyOperation(operation: ScopedPatchOperation, blocks: import('../fei
 function sameSection(left: SemanticLocator, right: SemanticLocator): boolean {
   return left.sectionPath.length === right.sectionPath.length &&
     left.sectionPath.every((part, index) => part === right.sectionPath[index]);
+}
+
+function locatorKey(locator: SemanticLocator): string {
+  return `${locator.kind}:${JSON.stringify(locator.sectionPath)}:${locator.ordinal}`;
 }
 
 async function fetchRemoteSemantic(adapter: FeishuAdapter, documentId: string): Promise<SemanticDocument> {

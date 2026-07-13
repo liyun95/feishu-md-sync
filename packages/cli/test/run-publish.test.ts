@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -805,7 +805,190 @@ describe('runPublish', () => {
       'wiki-parent:# Wiki Child\n\n<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vectors.'
     ]);
   });
+
+  it('plans a Whiteboard image replacement during dry-run', async () => {
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      updateWhiteboard: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.whiteboards?.operations).toEqual([expect.objectContaining({
+      kind: 'whiteboard-create',
+      assetKey: 'assets/cagra.png',
+      remoteImageBlockId: 'image_block'
+    })]);
+  });
+
+  it('combines text and Whiteboard changes in one dry-run plan', async () => {
+    const fixture = await createWhiteboardFixture('New paragraph.\n\n![CAGRA](./assets/cagra.png)');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Old paragraph.\n\n![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['p1', 'image_block'] },
+        textBlock('p1', 'Old paragraph.'),
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA' }] } }),
+      updateWhiteboard: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({ kind: 'update' }));
+    expect(result.plan.whiteboards?.operations).toContainEqual(expect.objectContaining({ kind: 'whiteboard-create' }));
+  });
+
+  it('blocks Whiteboard sync before writing when SVG validation fails', async () => {
+    const fixture = await createWhiteboardFixture(
+      '![CAGRA](./assets/cagra.png)',
+      '<svg viewBox="0 0 10 10"><filter id="shadow"></filter></svg>'
+    );
+    const writes: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => {
+        writes.push('create');
+        return { blockId: 'wb_block', whiteboardToken: 'wb_token' };
+      },
+      queryWhiteboard: async () => ({ raw: { nodes: [] } }),
+      updateWhiteboard: async () => { writes.push('update'); },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({ code: 'invalid-svg' }));
+    expect(writes).toEqual([]);
+  });
+
+  it('preserves current behavior and skips Whiteboard adapter calls when opt-in is false', async () => {
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
+    let queries = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      queryWhiteboard: async () => {
+        queries += 1;
+        return { raw: { nodes: [] } };
+      },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: false,
+      adapter
+    });
+
+    expect(result.plan.whiteboards).toBeUndefined();
+    expect(queries).toBe(0);
+  });
+
+  it('returns a blocked dry-run when the adapter lacks Whiteboard capabilities', async () => {
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '![CAGRA](remote-image)' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['image_block'] },
+        { block_id: 'image_block', block_type: 27, image: { token: 'image_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({ code: 'whiteboard-adapter-unavailable' }));
+  });
 });
+
+async function createWhiteboardFixture(markdown: string, svg = '<svg viewBox="0 0 10 10"><text>CAGRA</text></svg>') {
+  const dir = await mkdtemp(join(tmpdir(), 'fms-whiteboard-run-'));
+  const assets = join(dir, 'assets');
+  const markdownPath = join(dir, 'doc.md');
+  await mkdir(assets);
+  await writeFile(markdownPath, markdown, 'utf8');
+  await writeFile(join(assets, 'cagra.png'), 'png', 'utf8');
+  await writeFile(join(assets, 'cagra.svg'), svg, 'utf8');
+  return { dir, markdownPath };
+}
 
 function textBlock(blockId: string, text: string): { block_id: string; block_type: number; text: { elements: Array<{ text_run: { content: string; text_element_style: Record<string, never> } }> } } {
   return {
