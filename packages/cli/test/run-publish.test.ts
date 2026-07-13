@@ -252,27 +252,20 @@ describe('runPublish', () => {
     });
   });
 
-  it('replaces code blocks as XML so the language survives readback', async () => {
+  it('blocks code block body updates until language-preserving IO is available', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, '```python\nprint("new")\n```', 'utf8');
-    let written = false;
-    const calls: Array<{ format: string; content: string }> = [];
     const adapter: FeishuAdapter = {
-      fetchDocMarkdown: async () => ({
-        markdown: written ? '```python\nprint("new")\n```' : '```python\nprint("old")\n```'
-      }),
+      fetchDocMarkdown: async () => ({ markdown: '```python\nprint("old")\n```' }),
       fetchDocBlocks: async () => ({
         blocks: [
           { block_id: 'doc_token', block_type: 1, children: ['code1'] },
-          codeBlock('code1', written ? 'print("new")' : 'print("old")', 49)
+          codeBlock('code1', 'print("old")', 49)
         ]
       }),
       replaceDocument: async () => {},
-      replaceBlock: async ({ format, content }) => {
-        calls.push({ format, content });
-        written = true;
-      },
+      replaceBlock: async () => {},
       insertBlocksAfter: async () => {},
       deleteBlocks: async () => {},
       createDocument: async () => ({ documentId: 'created' })
@@ -283,20 +276,56 @@ describe('runPublish', () => {
       file: markdownPath,
       target: { kind: 'docx', token: 'doc_token' },
       profile: 'none',
-      write: true,
+      write: false,
       create: false,
       strategy: 'auto',
       confirmDestructive: false,
-      confirmCollaborationRisk: true,
-      confirmUntrackedRemote: true,
       adapter
     });
 
-    expect(result.mode).toBe('write');
-    expect(calls).toEqual([{
-      format: 'xml',
-      content: '<pre lang="python"><code>print("new")</code></pre>'
-    }]);
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.scopedPatch?.operations).toEqual([]);
+    expect(result.plan.scopedPatch?.blockers).toContainEqual(expect.objectContaining({
+      code: 'unsupported-local-change',
+      message: 'code block updates are unsupported until language-preserving IO is available'
+    }));
+  });
+
+  it('adopts a missing remote code language when the body is unchanged', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '```python\nprint("same")\n```', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '```python\nprint("same")\n```' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+          codeBlock('code1', 'print("same")')
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('no-op');
+    expect(result.plan.scopedPatch?.operations).toEqual([]);
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.warnings).toContain('adopting text representation difference at text:[]:0');
   });
 
   it('writes a block-patch create with the planned insert anchor', async () => {
@@ -788,13 +817,13 @@ function textBlock(blockId: string, text: string): { block_id: string; block_typ
   };
 }
 
-function codeBlock(blockId: string, content: string, language: number) {
+function codeBlock(blockId: string, content: string, language?: number) {
   return {
     block_id: blockId,
     block_type: 14,
     code: {
       elements: [{ text_run: { content, text_element_style: {} } }],
-      style: { language }
+      style: language === undefined ? {} : { language }
     }
   };
 }

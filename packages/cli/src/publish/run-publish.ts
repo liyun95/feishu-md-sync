@@ -434,12 +434,11 @@ async function applyScopedPatch(input: {
   for (const operation of input.plan.operations) {
     try {
       if (operation.kind === 'update') {
-        const replacement = textBlockReplacement(operation.desiredMarkdown);
         await input.adapter.replaceBlock({
           doc: input.doc,
           blockId: operation.remoteBlockId,
-          content: replacement.content,
-          format: replacement.format
+          content: operation.desiredMarkdown,
+          format: 'markdown'
         });
       } else if (operation.kind === 'create') {
         await input.adapter.insertBlocksAfter({
@@ -593,30 +592,6 @@ function stripLeadingH1(markdown: string): string {
     .replace(/^#\s+.+?(?:\n{1,2}|$)/, '')
     .trimStart();
   return frontmatter ? `${frontmatter}\n${stripped}` : stripped;
-}
-
-function textBlockReplacement(markdown: string): { content: string; format: 'markdown' | 'xml' } {
-  const code = markdown.match(/^```([^\n`]*)\n([\s\S]*?)\n```$/);
-  if (!code) return { content: markdown, format: 'markdown' };
-  const language = code[1]?.trim() ?? '';
-  const languageAttribute = language ? ` lang="${escapeXmlAttribute(language)}"` : '';
-  return {
-    content: `<pre${languageAttribute}><code>${escapeXmlText(code[2] ?? '').replace(/\n/g, '<br/>')}</code></pre>`,
-    format: 'xml'
-  };
-}
-
-function escapeXmlText(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function escapeXmlAttribute(value: string): string {
-  return escapeXmlText(value)
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
 }
 
 function splitLeadingFrontmatter(markdown: string): { frontmatter?: string; body: string } {

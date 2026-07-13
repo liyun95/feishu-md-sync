@@ -244,7 +244,7 @@ function planTextScopes(input: {
     if (!remote || remote.kind !== 'text') return entry;
 
     if (!input.tracked) {
-      if (visibleText(entry.node.markdown) === visibleText(remote.markdown) && entry.node.markdown !== remote.markdown) {
+      if (textRepresentationsEquivalent(entry.node.markdown, remote.markdown) && entry.node.markdown !== remote.markdown) {
         input.warnings.push(`adopting text representation difference at ${key}`);
         return textEntry({ ...entry.node, markdown: remote.markdown });
       }
@@ -278,6 +278,14 @@ function planTextScopes(input: {
     if (operation.kind === 'update') {
       const entry = desiredEntries[operation.path[0]];
       if (!entry || entry.node.kind !== 'text') return [];
+      if (entry.node.blockType === 14) {
+        input.blockers.push({
+          code: 'unsupported-local-change',
+          locator: entry.node.locator,
+          message: 'code block updates are unsupported until language-preserving IO is available'
+        });
+        return [];
+      }
       return [{
         kind: 'update',
         locator: entry.node.locator,
@@ -288,6 +296,14 @@ function planTextScopes(input: {
     if (operation.kind === 'create') {
       const entry = desiredEntries[operation.index];
       if (!entry || entry.node.kind !== 'text') return [];
+      if (entry.node.blockType === 14) {
+        input.blockers.push({
+          code: 'unsupported-local-change',
+          locator: entry.node.locator,
+          message: 'code block creation is unsupported until language-preserving IO is available'
+        });
+        return [];
+      }
       return [{
         kind: 'create',
         locator: entry.node.locator,
@@ -380,6 +396,23 @@ function locatorKey(locator: SemanticLocator): string {
 
 function visibleText(markdown: string): string {
   return normalizeWhitespace(markdown.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'));
+}
+
+function textRepresentationsEquivalent(local: string, remote: string): boolean {
+  if (visibleText(local) === visibleText(remote)) return true;
+  const localCode = fencedCode(local);
+  const remoteCode = fencedCode(remote);
+  if (!localCode || !remoteCode || localCode.body !== remoteCode.body) return false;
+  return !localCode.language || !remoteCode.language || localCode.language === remoteCode.language;
+}
+
+function fencedCode(markdown: string): { language: string; body: string } | undefined {
+  const match = markdown.match(/^```([^\n`]*)\n([\s\S]*?)\n```$/);
+  if (!match) return undefined;
+  return {
+    language: (match[1] ?? '').trim().toLocaleLowerCase('en-US'),
+    body: match[2] ?? ''
+  };
 }
 
 function isTable(node: SemanticNode): node is SemanticTable {
