@@ -44,7 +44,27 @@ export type PublishReceiptV2 = {
   updatedAt: string;
 };
 
-export type PublishReceipt = PublishReceiptV1 | PublishReceiptV2;
+export type WhiteboardReceiptEntry = {
+  assetKey: string;
+  pngPath: string;
+  svgPath: string;
+  svgHash: string;
+  whiteboardToken: string;
+  blockId: string;
+  remoteStateHash: string;
+  placementFingerprint: string;
+};
+
+export type PublishReceiptV3 = Omit<PublishReceiptV2, 'version'> & {
+  version: 3;
+  whiteboards: WhiteboardReceiptEntry[];
+};
+
+export type PublishReceipt = PublishReceiptV1 | PublishReceiptV2 | PublishReceiptV3;
+
+export function whiteboardEntries(receipt: PublishReceipt | undefined): WhiteboardReceiptEntry[] {
+  return receipt?.version === 3 ? receipt.whiteboards : [];
+}
 
 export function hashText(value: string): string {
   return createHash('sha256').update(value).digest('hex');

@@ -8,8 +8,10 @@ import {
   publishReceiptPath,
   readLocalBaseSnapshot,
   readPublishReceipt,
+  whiteboardEntries,
   writeLocalBaseSnapshot,
-  writePublishReceipt
+  writePublishReceipt,
+  type PublishReceiptV3
 } from '../src/receipts/publish-receipt.js';
 
 describe('publish receipt', () => {
@@ -62,6 +64,62 @@ describe('publish receipt', () => {
 
     await writePublishReceipt({ cwd: dir, receipt });
     await expect(readPublishReceipt({ cwd: dir, target: receipt.target })).resolves.toEqual(receipt);
+  });
+
+  it('writes and reads a version 3 receipt with Whiteboard baselines', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-receipt-v3-'));
+    const receipt: PublishReceiptV3 = {
+      version: 3,
+      target: { kind: 'docx', token: 'doc_token' },
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: 'local',
+      publishDraftHash: 'draft',
+      remoteSnapshotHash: 'remote',
+      localBaseSnapshot: { path: 'base.md', hash: 'base' },
+      remoteSemanticSnapshot: { path: 'remote.json', hash: 'semantic' },
+      whiteboards: [{
+        assetKey: 'assets/cagra.png',
+        pngPath: 'assets/cagra.png',
+        svgPath: 'assets/cagra.svg',
+        svgHash: 'svg',
+        whiteboardToken: 'wb',
+        blockId: 'block',
+        remoteStateHash: 'raw',
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    };
+
+    await writePublishReceipt({ cwd: dir, receipt });
+
+    await expect(readPublishReceipt({ cwd: dir, target: receipt.target })).resolves.toEqual(receipt);
+    expect(whiteboardEntries(receipt)).toEqual(receipt.whiteboards);
+  });
+
+  it('treats legacy receipts as having no Whiteboard entries', () => {
+    expect(whiteboardEntries(undefined)).toEqual([]);
+    expect(whiteboardEntries({
+      version: 1,
+      target: { kind: 'docx', token: 'doc' },
+      profile: 'none',
+      localSourceHash: 'local',
+      publishDraftHash: 'draft',
+      remoteSnapshotHash: 'remote',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })).toEqual([]);
+    expect(whiteboardEntries({
+      version: 2,
+      target: { kind: 'docx', token: 'doc' },
+      resolvedDocumentId: 'doc',
+      profile: 'none',
+      localSourceHash: 'local',
+      publishDraftHash: 'draft',
+      remoteSnapshotHash: 'remote',
+      localBaseSnapshot: { path: 'base.md', hash: 'base' },
+      remoteSemanticSnapshot: { path: 'remote.json', hash: 'semantic' },
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })).toEqual([]);
   });
 
   it('stores local authoring markdown outside the receipt JSON', async () => {

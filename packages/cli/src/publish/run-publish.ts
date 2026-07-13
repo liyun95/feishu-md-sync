@@ -390,7 +390,7 @@ async function loadSemanticBaselines(input: {
 
   const localBaseDraft = applyPublishTransformForProfile(localBaseSource, input.profile).markdown;
   const localBase = localSemanticDocument(markdownBodyForBlockPatch(localBaseDraft, input.currentRemoteMarkdown));
-  if (input.receipt.version === 2) {
+  if (input.receipt.version === 2 || input.receipt.version === 3) {
     const remoteBase = await readRemoteSemanticSnapshot({
       cwd: input.cwd,
       snapshot: input.receipt.remoteSemanticSnapshot
