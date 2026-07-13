@@ -28,7 +28,7 @@ export type SemanticCell = {
 
 export type SemanticLocator = {
   sectionPath: string[];
-  kind: 'text' | 'table' | 'opaque';
+  kind: 'text' | 'table' | 'asset' | 'opaque';
   ordinal: number;
 };
 
@@ -62,7 +62,18 @@ export type SemanticOpaqueNode = {
   remoteBlockId?: string;
 };
 
-export type SemanticNode = SemanticTextBlock | SemanticTable | SemanticOpaqueNode;
+export type SemanticAssetNode = {
+  kind: 'asset';
+  locator: SemanticLocator;
+  representation: 'image' | 'whiteboard';
+  alt?: string;
+  source?: string;
+  remoteBlockId?: string;
+  remoteToken?: string;
+  unsupported?: string[];
+};
+
+export type SemanticNode = SemanticTextBlock | SemanticTable | SemanticAssetNode | SemanticOpaqueNode;
 
 export type SemanticDocument = {
   nodes: SemanticNode[];
