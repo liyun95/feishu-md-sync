@@ -91,6 +91,8 @@ Use `--profile zilliz` when local Markdown uses Milvus wording but the Feishu do
 - Remote writes require `publish --write`.
 - The first write to an existing untracked document also requires `--confirm-untracked-remote`.
 - Block-patch updates or deletions that may affect comments, anchors, or block identity require `--confirm-collaboration-risk`.
+- Reconstructable HTML tables support row additions and updates keyed by a unique first column. The first implementation replaces only the matched table block and uses the same collaboration-risk confirmation.
+- Unsupported or conflicting scoped changes return `strategy: blocked`; `auto` never falls back to whole-document replacement.
 - Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
 - `status` and `diff` are read-only; `merge` writes only local files and supports `--abort`.
 

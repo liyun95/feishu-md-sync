@@ -18,6 +18,8 @@ Options:
 - `--confirm-destructive` - required with `--strategy document-replace --write`.
 - `--confirm-collaboration-risk` - required when replacing or deleting existing blocks.
 - `--confirm-untracked-remote` - required before adopting an existing remote document without a publish receipt.
+
+`auto` may return `blocked`; it does not select `document-replace` automatically. A block-patch plan can contain ordinary text operations and table replacements in the same publish.
 - `--format <format>` - `pretty` or `json`.
 
 Dry-run an existing document update:
@@ -112,6 +114,8 @@ Options:
 - `--format <format>` - `pretty` or `json`.
 
 `diff` compares current remote Markdown to the local publish draft after applying the selected publish profile.
+
+For supported HTML tables, JSON and pretty output also include table identity, added row keys, updated row keys, and changed column indexes.
 
 ## `merge`
 

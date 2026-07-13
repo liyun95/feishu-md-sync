@@ -34,6 +34,12 @@ The readback state did not match the desired write state.
 
 Do not retry destructive writes blindly. Inspect the Feishu document and rerun a dry-run or `status`.
 
+## `strategy: blocked`
+
+`auto` found at least one change that cannot be matched or written safely. Review the listed blocker. Common table blockers include duplicate or empty first-column keys, row deletion/reorder, merged cells, nested lists, and a teammate edit inside the same target table.
+
+Resolve the local or remote conflict and rerun the dry-run. Whole-document replacement remains available only when you deliberately select `--strategy document-replace --confirm-destructive`.
+
 ## Auth Or API Errors
 
 Check:
