@@ -16,35 +16,37 @@ lark-cli auth login --domain docs,wiki,drive
 lark-cli auth status
 ```
 
-Install dependencies and build this CLI:
+Install the published CLI with Node.js 20 or newer:
 
 ```bash
-npm install
-npm run build
+npm install --global feishu-md-sync@latest
+feishu-md-sync --help
 ```
 
-Inside a repo checkout, run commands through `npm exec -- feishu-md-sync`. The selected `lark-cli` identity must have access to the target document, Drive folder, or Wiki parent.
+For a one-off run without a global install, use `npx --yes feishu-md-sync@latest --help`.
+
+The selected `lark-cli` identity must have access to the target document, Drive folder, or Wiki parent.
 
 Preview a publish plan:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <docx-url-or-token>
+feishu-md-sync publish ./doc.md --target <docx-url-or-token>
 ```
 
 Write to an existing remote document for the first time after reviewing the plan:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write --confirm-untracked-remote
+feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write --confirm-untracked-remote
 ```
 
 Handle remote edits before publishing:
 
 ```bash
-npm exec -- feishu-md-sync status ./doc.md --target <docx-url-or-token>
-npm exec -- feishu-md-sync diff ./doc.md --target <docx-url-or-token>
-npm exec -- feishu-md-sync pull --target <docx-url-or-token> --output doc.remote.md --write-receipt
-npm exec -- feishu-md-sync merge ./doc.md --target <docx-url-or-token>
-npm exec -- feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write
+feishu-md-sync status ./doc.md --target <docx-url-or-token>
+feishu-md-sync diff ./doc.md --target <docx-url-or-token>
+feishu-md-sync pull --target <docx-url-or-token> --output doc.remote.md --write-receipt
+feishu-md-sync merge ./doc.md --target <docx-url-or-token>
+feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write
 ```
 
 When the merge already makes the local publish draft match the remote document, the final `publish --write` is a no-op remote write: it refreshes the local receipt and merge base snapshot without changing Feishu content.
@@ -52,13 +54,13 @@ When the merge already makes the local publish draft match the remote document, 
 Preview creating a new document under a Drive folder or Wiki parent:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <wiki-parent-url> --create
+feishu-md-sync publish ./doc.md --target <wiki-parent-url> --create
 ```
 
 Execute guarded whole-document replacement only when you intentionally accept the risk:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write --strategy document-replace --confirm-destructive
+feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write --strategy document-replace --confirm-destructive
 ```
 
 ## Safety Model
@@ -78,6 +80,7 @@ This protects comments, anchors, block identity, and teammate edits from acciden
 Root scripts delegate to the CLI and docs workspaces:
 
 ```bash
+npm install
 npm run dev -- <args>
 npm run typecheck
 npm test

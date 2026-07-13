@@ -29,16 +29,22 @@ lark-cli auth status
 
 ## Install `feishu-md-sync`
 
-Clone this repo and install from its root:
+With Node.js 20 or newer, install the published CLI:
 
 ```bash
-git clone https://github.com/liyun95/feishu-md-sync.git
-cd feishu-md-sync
-npm install
-npm run build
+npm install --global feishu-md-sync@latest
+feishu-md-sync --help
 ```
 
-Inside a repo checkout, run commands through `npm exec -- feishu-md-sync`. After global installation or `npm link`, you can use `feishu-md-sync` directly.
+For a one-off run without a global install:
+
+```bash
+npx --yes feishu-md-sync@latest --help
+```
+
+The commands below assume a global installation so they can use `feishu-md-sync` directly.
+
+To develop the CLI itself from source, clone the repository and follow the root README's `Develop` section.
 
 ## Prepare Test Documents
 
@@ -77,7 +83,7 @@ API permissions alone are not enough; the selected identity also needs resource 
 
 Use the test document URL or doc token as `<target>` in the commands below.
 
-The commands below omit `--profile`, so the default profile is used. In a fresh checkout, that default is `none`.
+The commands below omit `--profile`, so the default profile is used. In a fresh setup, that default is `none`.
 
 Run one final auth check:
 
@@ -92,15 +98,15 @@ For bot identity, CI, App ID, App Secret, and repository-local `.env` defaults, 
 Start with a read-only status check:
 
 ```bash
-npm exec -- feishu-md-sync status ./doc.md --target <target>
+feishu-md-sync status ./doc.md --target <target>
 ```
 
-Expected result: first run usually reports `untracked`, because this local checkout has no receipt for the remote document yet.
+Expected result: first run usually reports `untracked`, because the current working directory has no receipt for the remote document yet.
 
 Inspect the content difference:
 
 ```bash
-npm exec -- feishu-md-sync diff ./doc.md --target <target>
+feishu-md-sync diff ./doc.md --target <target>
 ```
 
 Expected result: the diff shows `This line was written locally.` as an added line.
@@ -110,7 +116,7 @@ Expected result: the diff shows `This line was written locally.` as an added lin
 Preview the publish plan. This does not write to Feishu:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <target>
+feishu-md-sync publish ./doc.md --target <target>
 ```
 
 Expected result: output shows `mode: dry-run`; the Feishu document does not change.
@@ -118,7 +124,7 @@ Expected result: output shows `mode: dry-run`; the Feishu document does not chan
 Write after reviewing the plan:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <target> --write --confirm-untracked-remote
+feishu-md-sync publish ./doc.md --target <target> --write --confirm-untracked-remote
 ```
 
 Expected result: output shows `mode: write`; the Feishu document now contains `This line was written locally.`
@@ -128,7 +134,7 @@ The first write to an existing remote document requires `--confirm-untracked-rem
 Check status again:
 
 ```bash
-npm exec -- feishu-md-sync status ./doc.md --target <target>
+feishu-md-sync status ./doc.md --target <target>
 ```
 
 Expected result: `clean`.
@@ -138,19 +144,19 @@ Expected result: `clean`.
 If teammates edited the Feishu document after your last publish, `status` reports `remote-changed`. Pull a reviewable remote snapshot:
 
 ```bash
-npm exec -- feishu-md-sync pull --target <target> --output doc.remote.md --write-receipt
+feishu-md-sync pull --target <target> --output doc.remote.md --write-receipt
 ```
 
 Merge Feishu edits back into your local authoring file:
 
 ```bash
-npm exec -- feishu-md-sync merge ./doc.md --target <target>
+feishu-md-sync merge ./doc.md --target <target>
 ```
 
 After a successful merge, run `status` again. If the local publish draft already matches the remote but the receipt is stale, close the loop with a no-op publish write:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <target> --write
+feishu-md-sync publish ./doc.md --target <target> --write
 ```
 
 This refreshes the local publish receipt and merge base snapshot without changing Feishu content.
@@ -160,7 +166,7 @@ If a merge writes conflict markers, resolve them locally, then run `status`, `di
 Abort the last in-place merge:
 
 ```bash
-npm exec -- feishu-md-sync merge ./doc.md --abort
+feishu-md-sync merge ./doc.md --abort
 ```
 
 ## Use The Zilliz Profile
@@ -168,7 +174,7 @@ npm exec -- feishu-md-sync merge ./doc.md --abort
 Use `--profile zilliz` when your local Markdown is authored in Milvus wording but the Feishu document is for Zilliz Cloud publishing:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <target> --profile zilliz
+feishu-md-sync publish ./doc.md --target <target> --profile zilliz
 ```
 
 If you do not want product-name transforms, omit `--profile` or use `--profile none`.
@@ -178,7 +184,7 @@ If you do not want product-name transforms, omit `--profile` or use `--profile n
 Create under a Drive folder or Wiki parent:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target <folder-or-wiki-parent> --create --write
+feishu-md-sync publish ./doc.md --target <folder-or-wiki-parent> --create --write
 ```
 
 ## Pull A Remote Snapshot
@@ -186,7 +192,7 @@ npm exec -- feishu-md-sync publish ./doc.md --target <folder-or-wiki-parent> --c
 Save a reviewable remote snapshot without changing the local source file:
 
 ```bash
-npm exec -- feishu-md-sync pull --target <target> --output doc.remote.md
+feishu-md-sync pull --target <target> --output doc.remote.md
 ```
 
 ## Supported Targets
@@ -194,7 +200,7 @@ npm exec -- feishu-md-sync pull --target <target> --output doc.remote.md
 Use any of these forms:
 
 ```bash
-npm exec -- feishu-md-sync publish ./doc.md --target DocToken
-npm exec -- feishu-md-sync publish ./doc.md --target https://example.feishu.cn/docx/DocToken
-npm exec -- feishu-md-sync publish ./doc.md --target 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
+feishu-md-sync publish ./doc.md --target DocToken
+feishu-md-sync publish ./doc.md --target https://example.feishu.cn/docx/DocToken
+feishu-md-sync publish ./doc.md --target 'https://example.feishu.cn/wiki/WikiNodeToken?renamingWikiNode=true'
 ```

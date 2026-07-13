@@ -22,13 +22,11 @@ PR #29 merged the onboarding baseline:
 - Normal CI and `live-feishu` passed for PR #29.
 - Live CI uses `LARK_TEST_APP_ID`, `LARK_TEST_APP_SECRET`, and `FEISHU_MD_SYNC_TEST_DOC`; it does not use a generic production-shaped secret.
 
-## npm Release Readiness
-
-Current branch: `codex/npm-release-readiness`.
+## npm Release
 
 The initial npm artifact audit found that a local `dist/` could retain removed modules. Before this branch, `npm pack --dry-run` contained 279 files, including retired command and workflow code.
 
-This branch adds:
+PR #30 added:
 
 - a clean-before-build invariant for `packages/cli/dist/`
 - an npm package smoke test that derives expected output from current `src/**/*.ts`
@@ -41,19 +39,16 @@ This branch adds:
 
 The cleaned artifact contains 74 files: 70 generated JavaScript/declaration files plus `package.json`, `README.md`, `LICENSE`, and `NOTICE`.
 
-## Release Operator Steps
+`feishu-md-sync@0.1.0` is published on npm with SLSA provenance:
 
-After this branch is merged through a pull request:
+- GitHub Release: <https://github.com/liyun95/feishu-md-sync/releases/tag/v0.1.0>
+- npm package: <https://www.npmjs.com/package/feishu-md-sync>
+- Primary installation: `npm install --global feishu-md-sync@latest`
+- Registry install and `--help` were verified from a clean temporary directory.
 
-1. Create a protected GitHub environment named `npm`.
-2. Add a short-lived `NPM_PUBLISH_TOKEN` environment secret for the first publication because the package does not exist yet.
-3. Publish GitHub Release `v0.1.0`; `.github/workflows/release.yml` verifies the tag, tests the artifact, and publishes with provenance.
-4. Configure npm Trusted Publishing for `liyun95/feishu-md-sync`, workflow `release.yml`, environment `npm`, action `npm publish`.
-5. Delete `NPM_PUBLISH_TOKEN` so later releases use OIDC only.
-6. Verify `npm view feishu-md-sync` and `npx --yes feishu-md-sync@0.1.0 --help`.
-7. Update Quickstart from source checkout installation to the published npm installation path in a follow-up docs PR.
+The first publish used the protected `npm` GitHub environment and a short-lived bootstrap token. Configure npm Trusted Publishing for `release.yml` and then delete `NPM_PUBLISH_TOKEN` so future releases use OIDC only.
 
-Do not publish or create the GitHub Release from an unmerged feature branch.
+PR #31 contains a repository-checkout build fix so a clean `tsc` build preserves the executable bit required by `npm exec -- feishu-md-sync` on Unix-like systems. Registry-installed `0.1.0` was already executable because npm applies bin permissions during installation.
 
 ## Future Feature Candidates
 
