@@ -609,8 +609,8 @@ function blockPatchAdapter(input: {
     }),
     fetchDocBlocks: async () => ({ blocks: input.blocks }),
     replaceDocument: async () => {},
-    replaceBlock: async ({ blockId, markdown }) => {
-      calls.push(`replace:${blockId}:${markdown}`);
+    replaceBlock: async ({ blockId, content }) => {
+      calls.push(`replace:${blockId}:${content}`);
       written = true;
     },
     insertBlocksAfter: async ({ blockId, markdown }) => {

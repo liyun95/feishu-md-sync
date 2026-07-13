@@ -250,7 +250,8 @@ async function applyBlockPatch(input: {
       await input.adapter.replaceBlock({
         doc: input.doc,
         blockId: operation.remoteBlockId,
-        markdown: markdownForWritableBlocks([block])
+        content: markdownForWritableBlocks([block]),
+        format: 'markdown'
       });
       continue;
     }

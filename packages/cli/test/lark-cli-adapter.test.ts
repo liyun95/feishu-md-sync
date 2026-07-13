@@ -2,6 +2,50 @@ import { describe, expect, it } from 'vitest';
 import { LarkCliAdapter } from '../src/adapters/lark-cli-adapter.js';
 
 describe('LarkCliAdapter', () => {
+  it('resolves docx targets without invoking lark-cli', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      exec: async (args) => {
+        calls.push(args);
+        return { stdout: '{}', stderr: '' };
+      }
+    });
+
+    await expect(adapter.resolveDocumentId({
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toBe('doc_token');
+    expect(calls).toEqual([]);
+  });
+
+  it('resolves wiki nodes to their underlying docx token', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      exec: async (args) => {
+        calls.push(args);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: { node: { obj_type: 'docx', obj_token: 'doc_token' } }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.resolveDocumentId({
+      target: { kind: 'wiki', token: 'wiki_token' }
+    })).resolves.toBe('doc_token');
+    expect(calls).toEqual([[
+      'api',
+      'GET',
+      '/open-apis/wiki/v2/spaces/get_node',
+      '--params',
+      '{"token":"wiki_token"}',
+      '--format',
+      'json'
+    ]]);
+  });
+
   it('fetches an existing doc as markdown through lark-cli docs +fetch', async () => {
     const calls: string[][] = [];
     const adapter = new LarkCliAdapter({
@@ -133,7 +177,7 @@ describe('LarkCliAdapter', () => {
     ]);
   });
 
-  it('updates blocks through lark-cli docs +update markdown commands', async () => {
+  it('updates blocks through format-aware lark-cli docs +update commands', async () => {
     const calls: string[][] = [];
     const adapter = new LarkCliAdapter({
       identity: 'bot',
@@ -143,7 +187,12 @@ describe('LarkCliAdapter', () => {
       }
     });
 
-    await adapter.replaceBlock({ doc: 'doc_token', blockId: 'p1', markdown: 'New paragraph.' });
+    await adapter.replaceBlock({
+      doc: 'doc_token',
+      blockId: 'p1',
+      content: '<table><tr><td>Value</td></tr></table>',
+      format: 'xml'
+    });
     await adapter.insertBlocksAfter({ doc: 'doc_token', blockId: 'p1', markdown: '- New item' });
     await adapter.deleteBlocks({ doc: 'doc_token', blockIds: ['p2', 'p3'] });
 
@@ -158,9 +207,9 @@ describe('LarkCliAdapter', () => {
         '--block-id',
         'p1',
         '--doc-format',
-        'markdown',
+        'xml',
         '--content',
-        'New paragraph.',
+        '<table><tr><td>Value</td></tr></table>',
         '--format',
         'json',
         '--as',
