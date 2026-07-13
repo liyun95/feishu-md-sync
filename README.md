@@ -77,6 +77,28 @@ This protects comments, anchors, block identity, and teammate edits from acciden
 
 Scoped publishing also recognizes reconstructable HTML tables. It reports row additions and updates, combines them with text-block changes, and replaces only the matched table block after `--confirm-collaboration-risk`. Unsupported or conflicting changes produce `strategy: blocked`; `auto` never falls back to whole-document replacement.
 
+## Editable Whiteboard Assets
+
+Whiteboard sync is opt-in. Keep the published Markdown portable by referencing a PNG, and place an editable SVG beside it with the same basename:
+
+```text
+article.md -> ![Architecture](./assets/architecture.png)
+assets/architecture.png
+assets/architecture.svg
+```
+
+The image reference must be on its own Markdown line. The first publish matches that position to one existing remote image or Whiteboard block; later publishes update the same Whiteboard token. Preview before writing:
+
+```bash
+feishu-md-sync status article.md --target "$TARGET" --profile none --sync-whiteboards
+feishu-md-sync diff article.md --target "$TARGET" --profile none --sync-whiteboards
+feishu-md-sync publish article.md --target "$TARGET" --profile none --sync-whiteboards
+feishu-md-sync publish article.md --target "$TARGET" --profile none --sync-whiteboards \
+  --write --confirm-untracked-remote --confirm-collaboration-risk
+```
+
+This feature does not render or upload the PNG, and images without a same-name SVG remain ordinary images. Remote Whiteboard edits fail closed. After review, overwrite one remotely changed asset explicitly with `--confirm-remote-whiteboard-overwrite assets/architecture.png`. SVG import preserves supported shapes, lines, paths, groups, symbols, and text as editable Whiteboard nodes where Feishu supports them; native smart-connector binding is not guaranteed.
+
 ## Develop
 
 Root scripts delegate to the CLI and docs workspaces:

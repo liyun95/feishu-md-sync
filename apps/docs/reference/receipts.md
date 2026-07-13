@@ -16,6 +16,8 @@ New-core receipt locations:
 
 Version 2 receipts also record the resolved Docx identity and a verified remote semantic snapshot. This lets the planner distinguish a conflicting edit inside the target table from an unrelated remote edit elsewhere in the document.
 
+Version 3 extends that semantic baseline with tracked Whiteboard assets. It is written when `publish --sync-whiteboards --write` completes verification.
+
 Stored data includes:
 
 - target kind and token
@@ -27,7 +29,18 @@ Stored data includes:
 - local base snapshot path and hash
 - resolved Docx document ID
 - remote semantic snapshot path and hash
+- Whiteboard asset entries in version 3
 - update timestamp
+
+Each version 3 Whiteboard entry records:
+
+- normalized PNG asset key and sibling SVG path
+- local SVG hash
+- Feishu Whiteboard token and document block ID
+- normalized remote raw-state hash
+- placement fingerprint for the semantic image position
+
+These values let later runs distinguish a local SVG update from a remote Whiteboard edit and verify that updates retain the same remote identity. Whiteboard entries are persisted only after raw-state and document-block readback succeeds.
 
 ## Local Base Snapshots
 
@@ -64,7 +77,7 @@ The remote semantic baseline is stored alongside the local base:
 .sync/feishu-md-sync/bases/<target-kind>-<target-token>-remote-semantic.json
 ```
 
-Execution-only Feishu block IDs are removed before this snapshot is written. A legacy version 1 receipt is upgraded only when its recorded remote raw hash still matches the current remote document.
+Execution-only Feishu block IDs are removed from the general semantic snapshot before it is written. Version 3 stores the Whiteboard block IDs separately because safe Whiteboard updates must retain that exact identity. A legacy version 1 receipt is upgraded only when its recorded remote raw hash still matches the current remote document.
 
 To adopt an existing document that is already synchronized, use a confirmed no-op publish:
 

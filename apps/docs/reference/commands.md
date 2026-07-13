@@ -18,9 +18,13 @@ Options:
 - `--confirm-destructive` - required with `--strategy document-replace --write`.
 - `--confirm-collaboration-risk` - required when replacing or deleting existing blocks.
 - `--confirm-untracked-remote` - required before adopting an existing remote document without a publish receipt.
+- `--sync-whiteboards` - include eligible same-name local SVG assets in planning and publishing.
+- `--confirm-remote-whiteboard-overwrite <asset-key>` - allow overwriting one remotely changed Whiteboard after review. Repeat for multiple assets.
+- `--format <format>` - `pretty` or `json`.
 
 `auto` may return `blocked`; it does not select `document-replace` automatically. A block-patch plan can contain ordinary text operations and table replacements in the same publish.
-- `--format <format>` - `pretty` or `json`.
+
+`--sync-whiteboards` works only for existing docx or Wiki documents with `auto` or `block-patch`. It is rejected with `--create` and `document-replace`.
 
 Dry-run an existing document update:
 
@@ -44,6 +48,22 @@ Allow whole-document replacement only when intentional:
 
 ```bash
 feishu-md-sync publish ./doc.md --target DocToken --strategy document-replace --write --confirm-destructive
+```
+
+Preview and publish eligible Whiteboard assets:
+
+```bash
+feishu-md-sync publish ./article.md --target DocToken --profile none --sync-whiteboards
+feishu-md-sync publish ./article.md --target DocToken --profile none --sync-whiteboards \
+  --write --confirm-untracked-remote --confirm-collaboration-risk
+```
+
+When the plan reports `remote-whiteboard-changed`, review the remote board and confirm only the intended asset:
+
+```bash
+feishu-md-sync publish ./article.md --target DocToken --profile none --sync-whiteboards \
+  --write --confirm-collaboration-risk \
+  --confirm-remote-whiteboard-overwrite assets/architecture.png
 ```
 
 ## Profiles
@@ -91,6 +111,7 @@ Options:
 
 - `--target <url-or-token>` - existing docx or Wiki node URL/token.
 - `--profile <profile>` - `zilliz`, `milvus`, or `none`.
+- `--sync-whiteboards` - include per-asset Whiteboard state using local SVG and receipt baselines.
 - `--format <format>` - `pretty` or `json`.
 
 States:
@@ -111,11 +132,14 @@ Options:
 
 - `--target <url-or-token>` - existing docx or Wiki node URL/token.
 - `--profile <profile>` - `zilliz`, `milvus`, or `none`.
+- `--sync-whiteboards` - include per-asset Whiteboard state and planned action.
 - `--format <format>` - `pretty` or `json`.
 
 `diff` compares current remote Markdown to the local publish draft after applying the selected publish profile.
 
 For supported HTML tables, JSON and pretty output also include table identity, added row keys, updated row keys, and changed column indexes.
+
+With `--sync-whiteboards`, output includes each asset key, state (`clean`, `local-changed`, `remote-changed`, `conflict`, `untracked`, or `missing`), and recommended action.
 
 ## `merge`
 

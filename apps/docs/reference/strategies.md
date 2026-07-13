@@ -14,11 +14,21 @@ The CLI can update the document through supported block-level operations.
 
 It can also include `table-replace` operations. Table plans identify the section, table ordinal, added row keys, and updated cells before replacing only the matched table block.
 
+With `--sync-whiteboards`, the same plan may also contain:
+
+- `whiteboard-create` - replace one corresponding remote image block with a Whiteboard.
+- `whiteboard-adopt` - adopt and verify one existing corresponding Whiteboard.
+- `whiteboard-update` - overwrite the SVG content of the already tracked Whiteboard while retaining its token and block identity.
+
+Text, table, and Whiteboard operations are planned together. Any Whiteboard blocker makes the complete publish `blocked`; the CLI does not silently publish only the other scopes.
+
 ## `blocked`
 
 `auto` returns `blocked` when any local change is unsupported, ambiguous, or conflicts with a remote edit in the same managed scope. Supported operations may still be shown for review, but no write starts until every blocker is resolved.
 
 `blocked` does not fall back to `document-replace` automatically.
+
+Whiteboard blockers include missing or invalid local assets, ambiguous remote placement, an unavailable tracked Whiteboard, unsupported SVG constructs, and remote edits without an asset-specific overwrite confirmation.
 
 ## `document-replace`
 
@@ -36,6 +46,10 @@ feishu-md-sync publish ./doc.md \
 
 Use it only after reviewing the dry-run and accepting the collaboration risk.
 
+`--sync-whiteboards` is intentionally rejected with `document-replace`; Whiteboard identity is managed only through scoped operations.
+
 ## `create-document`
 
 The target is a Drive folder or Wiki parent and `publish --create` is requested. The CLI creates a new Feishu document under that parent.
+
+Whiteboard sync is not supported during document creation in the first version. Create the document and its image/Whiteboard slot first, then run a separate publish with `--sync-whiteboards`.

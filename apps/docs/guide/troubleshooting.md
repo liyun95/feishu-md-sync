@@ -40,6 +40,40 @@ Do not retry destructive writes blindly. Inspect the Feishu document and rerun a
 
 Resolve the local or remote conflict and rerun the dry-run. Whole-document replacement remains available only when you deliberately select `--strategy document-replace --confirm-destructive`.
 
+## `remote-whiteboard-changed` or `whiteboard-conflict`
+
+The tracked Feishu Whiteboard changed after the last verified receipt. `remote-whiteboard-changed` means only the remote board changed; `whiteboard-conflict` means both the local SVG and remote board changed.
+
+Inspect the remote board before deciding. There is no automatic Whiteboard pull or merge. To make the local SVG authoritative for one reviewed asset, rerun publish with its exact normalized PNG key:
+
+```bash
+feishu-md-sync publish ./article.md --target DocToken --profile none --sync-whiteboards \
+  --write --confirm-collaboration-risk \
+  --confirm-remote-whiteboard-overwrite assets/architecture.png
+```
+
+Repeat the option for each independently reviewed asset. Do not use a broad confirmation in place of asset-specific review.
+
+## `inline-whiteboard-unsupported`
+
+The PNG and same-name SVG exist, but the image is embedded in prose. Put the image reference on its own line:
+
+```md
+![Architecture](./assets/architecture.png)
+```
+
+## `invalid Whiteboard SVG`
+
+The sibling SVG is malformed or uses a construct that cannot be imported safely. Ensure it is self-contained, has a `viewBox`, and uses supported shapes, paths, groups, symbols, text, and basic transforms. Remove scripts, embedded images, external references, filters, masks, clipping, patterns, radial gradients, and matrix/skew transforms.
+
+## Whiteboard correspondence is ambiguous or missing
+
+The local standalone image must map to exactly one remote image or Whiteboard block at the same semantic position. This feature does not upload the PNG or create a missing image slot. Add or move the ordinary image in Feishu, then rerun the dry-run.
+
+## `4003101: doc data is not ready ... whiteboard`
+
+Feishu may keep a newly created or recently updated Whiteboard in an asynchronous apply window. The CLI fails closed and does not write a receipt for that attempt. Wait for Feishu to finish applying the previous Whiteboard change, then rerun the same publish command; the Whiteboard update uses an asset- and board-specific idempotency token.
+
 ## Auth Or API Errors
 
 Check:
