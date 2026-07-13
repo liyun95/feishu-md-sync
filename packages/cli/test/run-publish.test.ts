@@ -252,6 +252,53 @@ describe('runPublish', () => {
     });
   });
 
+  it('replaces code blocks as XML so the language survives readback', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '```python\nprint("new")\n```', 'utf8');
+    let written = false;
+    const calls: Array<{ format: string; content: string }> = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: written ? '```python\nprint("new")\n```' : '```python\nprint("old")\n```'
+      }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+          codeBlock('code1', written ? 'print("new")' : 'print("old")', 49)
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ format, content }) => {
+        calls.push({ format, content });
+        written = true;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(calls).toEqual([{
+      format: 'xml',
+      content: '<pre lang="python"><code>print("new")</code></pre>'
+    }]);
+  });
+
   it('writes a block-patch create with the planned insert anchor', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
@@ -737,6 +784,17 @@ function textBlock(blockId: string, text: string): { block_id: string; block_typ
     block_type: 2,
     text: {
       elements: [{ text_run: { content: text, text_element_style: {} } }]
+    }
+  };
+}
+
+function codeBlock(blockId: string, content: string, language: number) {
+  return {
+    block_id: blockId,
+    block_type: 14,
+    code: {
+      elements: [{ text_run: { content, text_element_style: {} } }],
+      style: { language }
     }
   };
 }
