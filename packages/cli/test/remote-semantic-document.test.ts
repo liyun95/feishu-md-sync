@@ -47,7 +47,53 @@ describe('remote semantic document', () => {
       expect.objectContaining({ kind: 'list', ordered: false, items: expect.any(Array) })
     ]);
   });
+
+  it('accepts Feishu merge metadata for ordinary unmerged cells', () => {
+    const document = remoteSemanticDocument(tableBlocks([
+      { row_span: 1, col_span: 1 },
+      { row_span: 1, col_span: 1 },
+      { row_span: 1, col_span: 1 },
+      { row_span: 1, col_span: 1 }
+    ]), 'doc_token');
+    const table = document.nodes.find((node) => node.kind === 'table');
+
+    expect(table?.kind === 'table' ? table.unsupported : []).toEqual([]);
+  });
+
+  it('blocks tables whose merge metadata spans multiple cells', () => {
+    const document = remoteSemanticDocument(tableBlocks([
+      { row_span: 1, col_span: 2 },
+      { row_span: 1, col_span: 1 },
+      { row_span: 1, col_span: 1 },
+      { row_span: 1, col_span: 1 }
+    ]), 'doc_token');
+    const table = document.nodes.find((node) => node.kind === 'table');
+
+    expect(table?.kind === 'table' ? table.unsupported : []).toContain('merged cells are unsupported');
+  });
 });
+
+function tableBlocks(mergeInfo: unknown[]): FeishuBlock[] {
+  return [
+    { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+    {
+      block_id: 'table1',
+      block_type: 31,
+      table: {
+        property: { row_size: 2, column_size: 2, merge_info: mergeInfo },
+        cells: ['c1', 'c2', 'c3', 'c4']
+      }
+    },
+    { block_id: 'c1', block_type: 32, children: ['c1p'] },
+    text('c1p', 'Parameter'),
+    { block_id: 'c2', block_type: 32, children: ['c2p'] },
+    text('c2p', 'Description'),
+    { block_id: 'c3', block_type: 32, children: ['c3p'] },
+    text('c3p', 'build_algo'),
+    { block_id: 'c4', block_type: 32, children: ['c4p'] },
+    text('c4p', 'Build algorithm.')
+  ];
+}
 
 function text(blockId: string, content: string, style: Record<string, unknown> = {}): FeishuBlock {
   return {

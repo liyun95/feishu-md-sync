@@ -80,7 +80,7 @@ function remoteTable(block: FeishuBlock, locator: SemanticLocator): SemanticTabl
   if (rows === 0 || columns === 0) addUnsupported(unsupported, 'table has no rows or columns');
   if (cells.length !== rows * columns) addUnsupported(unsupported, 'inconsistent table cell count');
   const mergeInfo = property?.merge_info;
-  if (Array.isArray(mergeInfo) && mergeInfo.some((item) => item !== null && item !== undefined)) {
+  if (Array.isArray(mergeInfo) && mergeInfo.some(isMergedCellInfo)) {
     addUnsupported(unsupported, 'merged cells are unsupported');
   }
 
@@ -227,6 +227,13 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function isMergedCellInfo(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  const info = asRecord(value);
+  if (!info) return true;
+  return info.row_span !== 1 || info.col_span !== 1;
 }
 
 function isFeishuBlock(value: unknown): value is FeishuBlock {
