@@ -36,6 +36,7 @@ export function remoteSemanticDocument(blocks: FeishuBlock[], documentId: string
   for (const block of direct) {
     if (isSupportedTextBlock(block)) {
       const markdown = feishuBlocksToMarkdown([block]).trim();
+      if (!markdown) continue;
       if (block.block_type >= 3 && block.block_type <= 8) {
         const level = block.block_type - 2;
         const title = markdown.replace(/^#{1,6}\s+/, '').trim();

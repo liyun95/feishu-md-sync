@@ -71,6 +71,18 @@ describe('remote semantic document', () => {
     expect(table?.locator.sectionPath).toEqual(['Index params']);
   });
 
+  it('ignores empty Feishu text blocks', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['empty', 'p1'] },
+      text('empty', ''),
+      text('p1', 'Visible paragraph.')
+    ], 'doc_token');
+
+    expect(document.nodes).toEqual([
+      expect.objectContaining({ kind: 'text', markdown: 'Visible paragraph.' })
+    ]);
+  });
+
   it('blocks tables whose merge metadata spans multiple cells', () => {
     const document = remoteSemanticDocument(tableBlocks([
       { row_span: 1, col_span: 2 },

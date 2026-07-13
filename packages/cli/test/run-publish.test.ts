@@ -116,6 +116,42 @@ describe('runPublish', () => {
     }]);
   });
 
+  it('finds the leading title after YAML frontmatter', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '---\ntitle: GPU_CAGRA\n---\n\n# GPU_CAGRA\n\nMilvus stores vector data.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '# GPU_CAGRA\n\nMilvus stores vectors.' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['p1'] },
+          textBlock('p1', 'Milvus stores vectors.')
+        ]
+      }),
+      replaceDocument: async () => {}
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toEqual([{
+      kind: 'update',
+      remoteBlockId: 'p1',
+      locator: { sectionPath: [], kind: 'text', ordinal: 0 },
+      desiredMarkdown: 'Milvus stores vector data.'
+    }]);
+  });
+
   it('refreshes the publish receipt on no-op when write is requested', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
