@@ -203,7 +203,7 @@ function nextLocator(
   kind: SemanticLocator['kind'],
   ordinals: Map<string, number>
 ): SemanticLocator {
-  const stablePath = [...sectionPath];
+  const stablePath = sectionPath.filter((part): part is string => typeof part === 'string');
   const key = `${kind}:${JSON.stringify(stablePath)}`;
   const ordinal = ordinals.get(key) ?? 0;
   ordinals.set(key, ordinal + 1);

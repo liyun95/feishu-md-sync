@@ -145,7 +145,10 @@ function parseList(node: HtmlNode, unsupported: string[]): SemanticCellBlock {
   const items = elementChildren(node).filter((child) => child.tagName === 'li').map((item) => {
     const nested = elementChildren(item).some((child) => child.tagName === 'ul' || child.tagName === 'ol');
     if (nested) addUnsupported(unsupported, 'nested lists are unsupported');
-    return parseInlines(childNodes(item).filter((child) => child.tagName !== 'ul' && child.tagName !== 'ol'), {}, unsupported);
+    const inlineNodes = childNodes(item)
+      .filter((child) => child.tagName !== 'ul' && child.tagName !== 'ol')
+      .flatMap((child) => child.tagName === 'p' ? childNodes(child) : [child]);
+    return parseInlines(inlineNodes, {}, unsupported);
   });
 
   return {

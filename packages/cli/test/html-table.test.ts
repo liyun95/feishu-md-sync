@@ -8,7 +8,7 @@ describe('HTML table semantic parser', () => {
         <tr><th><p>Parameter</p></th><th><p>Description</p></th><th><p>Default</p></th></tr>
         <tr>
           <td><p><code>build_algo</code></p></td>
-          <td><p>Possible values:</p><ul><li><code>IVF_PQ</code>: Higher quality.</li><li><code>NN_DESCENT</code>: Faster.</li></ul></td>
+          <td><p>Possible values:</p><ul><li><p><code>IVF_PQ</code>: Higher quality.</p></li><li><p><code>NN_DESCENT</code>: Faster.</p></li></ul></td>
           <td><p><code>IVF_PQ</code></p></td>
         </tr>
         <tr>

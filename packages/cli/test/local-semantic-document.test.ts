@@ -29,6 +29,20 @@ Closing text.
     expect(document.nodes.filter((node) => node.kind === 'text').length).toBeGreaterThan(1);
   });
 
+  it('compacts skipped heading levels in table locators', () => {
+    const document = localSemanticDocument(`
+## Index params
+
+<table>
+  <tr><th>Parameter</th><th>Description</th></tr>
+  <tr><td><code>ef</code></td><td>Accuracy trade-off.</td></tr>
+</table>
+`);
+
+    const table = document.nodes.find((node) => node.kind === 'table');
+    expect(table?.locator.sectionPath).toEqual(['Index params']);
+  });
+
   it('marks non-table HTML containers as opaque', () => {
     const document = localSemanticDocument('<div class="alert note">\n\nNote body.\n\n</div>');
     expect(document.nodes).toContainEqual(expect.objectContaining({

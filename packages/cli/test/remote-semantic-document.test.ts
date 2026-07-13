@@ -60,6 +60,17 @@ describe('remote semantic document', () => {
     expect(table?.kind === 'table' ? table.unsupported : []).toEqual([]);
   });
 
+  it('compacts skipped heading levels in table locators', () => {
+    const blocks = tableBlocks([]);
+    blocks[0].children = ['h2', 'table1'];
+    blocks.splice(1, 0, heading('h2', 4, 'Index params'));
+
+    const document = remoteSemanticDocument(blocks, 'doc_token');
+    const table = document.nodes.find((node) => node.kind === 'table');
+
+    expect(table?.locator.sectionPath).toEqual(['Index params']);
+  });
+
   it('blocks tables whose merge metadata spans multiple cells', () => {
     const document = remoteSemanticDocument(tableBlocks([
       { row_span: 1, col_span: 2 },
