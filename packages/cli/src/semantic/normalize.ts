@@ -37,7 +37,7 @@ function stripExecutionValue(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
 
   return Object.fromEntries(Object.entries(value).flatMap(([key, child]) => {
-    if (key === 'remoteBlockId') return [];
+    if (key === 'remoteBlockId' || key === 'remoteToken') return [];
     return [[key, stripExecutionValue(child)]];
   }));
 }

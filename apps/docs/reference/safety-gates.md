@@ -7,6 +7,7 @@
 | Destructive confirmation | `publish --strategy document-replace` | Prevent silent whole-document replacement. |
 | Collaboration-risk confirmation | `publish` block updates/deletes | Make comment, anchor, and block identity risk explicit. |
 | Untracked-remote confirmation | `publish` against an existing remote without receipt | Prevent accidental adoption or overwrite of a document the CLI has not tracked before. |
+| Whiteboard remote-overwrite confirmation | `publish --sync-whiteboards` after remote board edits | Require confirmation for the exact asset key instead of overwriting a teammate's board edit. |
 | Pull overwrite gate | `pull` | Prevent a remote snapshot from replacing an existing local file without `--overwrite`. |
 | Merge abort state | `merge` | Allow local recovery after in-place merge writes. |
 | Readback verification | `publish` writes | Prove Feishu content matches the intended publish draft after writing. |
@@ -26,6 +27,9 @@
 - Existing remote without a receipt requires `--confirm-untracked-remote`.
 - Updating or deleting existing blocks requires `--confirm-collaboration-risk`.
 - Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
+- Creating or adopting an untracked Whiteboard requires both `--confirm-untracked-remote` and `--confirm-collaboration-risk`.
+- Any Whiteboard write requires `--confirm-collaboration-risk` because the image block or board content changes.
+- A remotely changed Whiteboard blocks the complete publish unless its normalized PNG key is explicitly passed with `--confirm-remote-whiteboard-overwrite <asset-key>`.
 - A remote change inside the same managed text or table scope blocks the write.
 - A remote change outside locally changed scopes produces a warning but does not block the disjoint scoped write.
 
@@ -40,7 +44,7 @@
 
 ## Status And Diff Gates
 
-`status` and `diff` are read-only. For HTML tables and semantic receipts, they also fetch Docx blocks to report scope-aware conflicts and row-level changes. They never write files, remote content, or receipts.
+`status` and `diff` are read-only. For HTML tables, semantic receipts, and `--sync-whiteboards`, they also fetch Docx blocks to report scope-aware conflicts, row-level changes, and per-asset Whiteboard state. They never write files, remote content, or receipts.
 
 Use `publish` dry-run for the detailed write plan.
 

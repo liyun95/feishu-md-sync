@@ -58,6 +58,11 @@ export function remoteSemanticDocument(blocks: FeishuBlock[], documentId: string
       continue;
     }
 
+    if (block.block_type === 27 || block.block_type === 43) {
+      nodes.push(remoteAsset(block, nextLocator(headingPath, 'asset', ordinals)));
+      continue;
+    }
+
     nodes.push({
       kind: 'opaque',
       locator: nextLocator(headingPath, 'opaque', ordinals),
@@ -68,6 +73,20 @@ export function remoteSemanticDocument(blocks: FeishuBlock[], documentId: string
   }
 
   return { nodes };
+}
+
+function remoteAsset(block: FeishuBlock, locator: SemanticLocator): SemanticNode {
+  const representation = block.block_type === 43 ? 'whiteboard' : 'image';
+  const value = asRecord(block[representation]) ?? (representation === 'whiteboard' ? asRecord(block.board) : undefined);
+  const token = typeof value?.token === 'string' ? value.token : undefined;
+  return {
+    kind: 'asset',
+    locator,
+    representation,
+    remoteBlockId: block.block_id,
+    remoteToken: token,
+    ...(token ? {} : { unsupported: [`remote ${representation} token missing`] })
+  };
 }
 
 function remoteTable(block: FeishuBlock, locator: SemanticLocator): SemanticTable {

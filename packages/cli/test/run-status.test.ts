@@ -1,10 +1,12 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
-import { hashText, writePublishReceipt } from '../src/receipts/publish-receipt.js';
+import { hashText, writeLocalBaseSnapshot, writePublishReceipt } from '../src/receipts/publish-receipt.js';
+import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
 import { runStatus } from '../src/status/run-status.js';
+import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runStatus', () => {
   it('reports untracked when no publish receipt exists even if content matches remote', async () => {
@@ -193,6 +195,69 @@ describe('runStatus', () => {
       ordinal: 0
     });
   });
+
+  it('reports a local SVG change when Whiteboard status is enabled', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-whiteboard-'));
+    const assets = join(dir, 'assets');
+    const file = join(dir, 'doc.md');
+    const markdown = '![CAGRA](./assets/cagra.png)';
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    await mkdir(assets);
+    await writeFile(file, markdown, 'utf8');
+    await writeFile(join(assets, 'cagra.png'), 'png', 'utf8');
+    await writeFile(join(assets, 'cagra.svg'), '<svg viewBox="0 0 10 10"><text>CAGRA v2</text></svg>', 'utf8');
+    await seedWhiteboardReceipt(dir, markdown, remoteMarkdown);
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '2' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+        { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: { nodes: [{ text: 'CAGRA v1' }] } }),
+      updateWhiteboard: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.state).toBe('local-changed');
+    expect(result.localChanged).toBe(true);
+    expect(result.remoteChanged).toBe(false);
+    expect(result.whiteboards).toEqual([expect.objectContaining({
+      assetKey: 'assets/cagra.png',
+      state: 'local-changed',
+      action: 'update existing whiteboard'
+    })]);
+  });
+
+  it('fails closed when explicit Whiteboard analysis throws', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-whiteboard-error-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, 'Milvus stores vectors.', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Milvus stores vectors.' }),
+      resolveDocumentId: async () => { throw new Error('block analysis unavailable'); },
+      replaceDocument: async () => {}
+    };
+
+    await expect(runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      syncWhiteboards: true,
+      adapter
+    })).rejects.toThrow('block analysis unavailable');
+  });
 });
 
 function statusTableBlocks(description: string) {
@@ -234,6 +299,47 @@ async function seedPublishReceipt(cwd: string, publishDraft: string, remoteSnaps
       publishDraftHash: hashText(publishDraft),
       remoteSnapshotHash: hashText(remoteSnapshot),
       updatedAt: '2026-07-09T00:00:00.000Z'
+    }
+  });
+}
+
+async function seedWhiteboardReceipt(cwd: string, markdown: string, remoteMarkdown: string): Promise<void> {
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd, target, markdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd,
+    target,
+    document: { nodes: [{
+      kind: 'asset',
+      locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+      representation: 'whiteboard',
+      remoteBlockId: 'wb_block',
+      remoteToken: 'wb_token'
+    }] }
+  });
+  await writePublishReceipt({
+    cwd,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(markdown),
+      publishDraftHash: hashText(markdown),
+      remoteSnapshotHash: hashText(remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'assets/cagra.png',
+        pngPath: 'assets/cagra.png',
+        svgPath: 'assets/cagra.svg',
+        svgHash: hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>'),
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: whiteboardRemoteStateHash({ nodes: [{ text: 'CAGRA v1' }] }),
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-13T00:00:00.000Z'
     }
   });
 }

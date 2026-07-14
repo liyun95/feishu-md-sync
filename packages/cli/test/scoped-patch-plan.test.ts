@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planScopedPatch } from '../src/publish/scoped-patch-plan.js';
-import type { SemanticCell, SemanticDocument, SemanticTable, SemanticTextBlock } from '../src/semantic/types.js';
+import type { SemanticAssetNode, SemanticCell, SemanticDocument, SemanticTable, SemanticTextBlock } from '../src/semantic/types.js';
 
 describe('scoped patch plan', () => {
   it('combines a text update and table replacement', () => {
@@ -83,6 +83,23 @@ describe('scoped patch plan', () => {
       message: expect.stringContaining('source table deletion is unsupported')
     }));
   });
+
+  it('leaves resource asset slots to the Whiteboard planner', () => {
+    const local = document(asset('image'));
+    const remote = document(asset('whiteboard', 'wb1', 'wb_token'));
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: local,
+      localCurrent: local,
+      remoteBase: remote,
+      remoteCurrent: remote,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
+  });
 });
 
 function document(...nodes: SemanticDocument['nodes']): SemanticDocument {
@@ -96,6 +113,21 @@ function text(markdown: string, ordinal: number, remoteBlockId?: string): Semant
     blockType: 2,
     markdown,
     remoteBlockId
+  };
+}
+
+function asset(
+  representation: SemanticAssetNode['representation'],
+  remoteBlockId?: string,
+  remoteToken?: string
+): SemanticAssetNode {
+  return {
+    kind: 'asset',
+    locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+    representation,
+    source: representation === 'image' ? './diagram.png' : undefined,
+    remoteBlockId,
+    remoteToken
   };
 }
 

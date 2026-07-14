@@ -42,10 +42,36 @@
 
 The first column must contain a unique, non-empty key for every data row. The CLI reports a row-level diff, but the first implementation writes by replacing that one table block. This requires `--confirm-collaboration-risk` because comments or anchors inside the table may be affected.
 
+## Editable Whiteboard Assets
+
+Whiteboard sync uses a PNG/SVG sibling convention:
+
+```text
+article.md -> ![Architecture](./assets/architecture.png)
+assets/architecture.png
+assets/architecture.svg
+```
+
+Run `status`, `diff`, or `publish` with `--sync-whiteboards`. The PNG reference must be a standalone Markdown block; an image embedded in prose is blocked when a same-name SVG exists. Remote HTTP images, data URLs, and non-PNG references are not candidates.
+
+The first publish requires exactly one corresponding image or Whiteboard block in the existing remote document. To avoid guessing between interchangeable positions, the first version blocks a section containing multiple untracked asset slots; place them under separate headings or establish receipts one at a time. Neighboring text must also match during initial adoption, so adopt the asset before making adjacent text changes. An image block is replaced by a Whiteboard; an existing Whiteboard is adopted. Later publishes update the same Whiteboard token.
+
+The supported editable SVG subset includes:
+
+- shapes: `rect`, `circle`, `ellipse`, and `polygon`
+- lines and paths: `line`, `polyline`, and `path`
+- text: `text` and `tspan`
+- grouping and reusable local symbols: `g`, `a`, `defs`, `symbol`, and `use`
+- basic `translate`, `rotate`, and `scale` transforms
+
+The SVG must be well-formed, self-contained, and declare a `viewBox`. Dry-run blocks scripts, `foreignObject`, embedded images, external references, filters, patterns, clipping, masks, radial gradients, unknown graphical elements, and `matrix`/skew transforms.
+
+The CLI does not create SVGs, render SVG to PNG, or upload PNG bytes. Ordinary images without a same-name SVG stay untouched. Feishu imports supported SVG elements as editable nodes, but native smart-connector binding is not guaranteed.
+
 ## Known Limitations
 
 - Feishu to Markdown export is best-effort.
 - Unsupported Feishu block types may not round-trip through Markdown.
-- Local image upload is not part of the new-core publish surface yet.
+- PNG rendering and upload are outside the Whiteboard sync feature.
 - Paragraph wrapping may not round-trip byte-for-byte.
 - The merge algorithm is deterministic and line-based, not semantic Markdown merge.

@@ -59,4 +59,27 @@ Closing text.
     });
     expect(document.nodes.filter((node) => node.kind === 'text')).toHaveLength(1);
   });
+
+  it('represents a standalone Markdown image as an asset scope', () => {
+    const document = localSemanticDocument('# Section\n\n![Diagram](./diagram.png)');
+
+    expect(document.nodes.at(-1)).toMatchObject({
+      kind: 'asset',
+      representation: 'image',
+      alt: 'Diagram',
+      source: './diagram.png',
+      locator: { sectionPath: ['Section'], kind: 'asset', ordinal: 0 }
+    });
+  });
+
+  it('keeps an inline image inside the ordinary text scope', () => {
+    const document = localSemanticDocument('See ![Diagram](./diagram.png) for details.');
+
+    expect(document.nodes).toEqual([
+      expect.objectContaining({
+        kind: 'text',
+        markdown: 'See ![Diagram](./diagram.png) for details.'
+      })
+    ]);
+  });
 });

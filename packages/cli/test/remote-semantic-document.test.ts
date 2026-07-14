@@ -94,6 +94,44 @@ describe('remote semantic document', () => {
 
     expect(table?.kind === 'table' ? table.unsupported : []).toContain('merged cells are unsupported');
   });
+
+  it('represents image and Whiteboard resource blocks as asset scopes', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['h1', 'image1', 'wb1'] },
+      heading('h1', 3, 'Architecture'),
+      { block_id: 'image1', block_type: 27, image: { token: 'image_token' } },
+      { block_id: 'wb1', block_type: 43, whiteboard: { token: 'wb_token' } }
+    ], 'doc_token');
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'asset',
+      representation: 'image',
+      remoteBlockId: 'image1',
+      remoteToken: 'image_token',
+      locator: { sectionPath: ['Architecture'], kind: 'asset', ordinal: 0 }
+    }));
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'asset',
+      representation: 'whiteboard',
+      remoteBlockId: 'wb1',
+      remoteToken: 'wb_token',
+      locator: { sectionPath: ['Architecture'], kind: 'asset', ordinal: 1 }
+    }));
+  });
+
+  it('reads the board token field returned by the Docx blocks API', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['wb1'] },
+      { block_id: 'wb1', block_type: 43, board: { token: 'wb_token' } }
+    ], 'doc_token');
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'asset',
+      representation: 'whiteboard',
+      remoteBlockId: 'wb1',
+      remoteToken: 'wb_token'
+    }));
+  });
 });
 
 function tableBlocks(mergeInfo: unknown[]): FeishuBlock[] {

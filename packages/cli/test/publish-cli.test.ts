@@ -88,6 +88,43 @@ describe('publish CLI', () => {
     expect(result.stdout).toContain('--confirm-untracked-remote');
   });
 
+  it('documents Whiteboard opt-in and asset-specific overwrite confirmation', async () => {
+    const result = await runCli(['publish', '--help']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--sync-whiteboards');
+    expect(result.stdout).toContain('--confirm-remote-whiteboard-overwrite <asset-key>');
+  });
+
+  it('rejects Whiteboard sync with create mode before doing IO', async () => {
+    const result = await runCli([
+      'publish',
+      'missing.md',
+      '--target',
+      'https://example.feishu.cn/drive/folder/fldcn8qL4qcQk4wabc123456789',
+      '--create',
+      '--sync-whiteboards'
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--sync-whiteboards is not supported with --create');
+  });
+
+  it('rejects Whiteboard sync with document replacement before doing IO', async () => {
+    const result = await runCli([
+      'publish',
+      'missing.md',
+      '--target',
+      'doccn123456789012345678901234',
+      '--strategy',
+      'document-replace',
+      '--sync-whiteboards'
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--sync-whiteboards is not supported with --strategy document-replace');
+  });
+
   it('dry-runs new document creation for a Drive folder URL without lark-cli IO', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-publish-cli-'));
     const file = join(dir, 'doc.md');

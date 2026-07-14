@@ -310,4 +310,133 @@ describe('LarkCliAdapter', () => {
 
     await expect(adapter.fetchDocMarkdown({ doc: 'doc_token' })).rejects.toThrow('lark-cli failed: permission denied');
   });
+
+  it('replaces an image block with an inline SVG Whiteboard and returns its identity', async () => {
+    const calls: Array<{ args: string[]; stdin?: string }> = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'user',
+      exec: async (args, input) => {
+        calls.push({ args, stdin: input?.stdin });
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              document: {
+                new_blocks: [{ block_id: 'wb_block', block_type: 'whiteboard', block_token: 'wb_token' }]
+              }
+            }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.replaceImageWithWhiteboard({
+      doc: 'doc_token',
+      blockId: 'image_block',
+      svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
+    })).resolves.toEqual({ blockId: 'wb_block', whiteboardToken: 'wb_token' });
+    expect(calls).toEqual([{
+      args: [
+        'docs', '+update', '--doc', 'doc_token', '--command', 'block_replace', '--block-id', 'image_block',
+        '--doc-format', 'xml', '--content', '-', '--format', 'json', '--as', 'user'
+      ],
+      stdin: '<whiteboard type="svg"><svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg></whiteboard>'
+    }]);
+  });
+
+  it('queries raw Whiteboard state through the official shortcut', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'user',
+      exec: async (args) => {
+        calls.push(args);
+        return {
+          stdout: JSON.stringify({ ok: true, data: { raw: { nodes: [{ id: 'node-1', text: 'CAGRA' }] } } }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.queryWhiteboard({ whiteboardToken: 'wb_token' })).resolves.toEqual({
+      raw: { nodes: [{ id: 'node-1', text: 'CAGRA' }] }
+    });
+    expect(calls).toEqual([[
+      'whiteboard', '+query', '--whiteboard-token', 'wb_token', '--output_as', 'raw', '--format', 'json', '--as', 'user'
+    ]]);
+  });
+
+  it('rejects an empty raw Whiteboard query result', async () => {
+    const adapter = new LarkCliAdapter({
+      exec: async () => ({
+        stdout: JSON.stringify({ ok: true, data: { raw: undefined } }),
+        stderr: ''
+      })
+    });
+
+    await expect(adapter.queryWhiteboard({ whiteboardToken: 'wb_token' }))
+      .rejects.toThrow('lark-cli whiteboard +query did not return raw node state');
+  });
+
+  it('rejects raw Whiteboard metadata without a nodes array', async () => {
+    const adapter = new LarkCliAdapter({
+      exec: async () => ({
+        stdout: JSON.stringify({ ok: true, data: { raw: { version: 1 } } }),
+        stderr: ''
+      })
+    });
+
+    await expect(adapter.queryWhiteboard({ whiteboardToken: 'wb_token' }))
+      .rejects.toThrow('lark-cli whiteboard +query did not return raw node state');
+  });
+
+  it('updates a Whiteboard from SVG through stdin with overwrite and idempotency', async () => {
+    const calls: Array<{ args: string[]; stdin?: string }> = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'bot',
+      exec: async (args, input) => {
+        calls.push({ args, stdin: input?.stdin });
+        return { stdout: JSON.stringify({ ok: true, data: { result: 'success' } }), stderr: '' };
+      }
+    });
+
+    await adapter.updateWhiteboard({
+      whiteboardToken: 'wb_token',
+      svg: '<svg viewBox="0 0 10 10"><text>CAGRA</text></svg>',
+      idempotencyToken: 'fms-1234567890'
+    });
+
+    expect(calls).toEqual([{
+      args: [
+        'whiteboard', '+update', '--whiteboard-token', 'wb_token', '--input_format', 'svg', '--source', '-',
+        '--overwrite', '--idempotent-token', 'fms-1234567890', '--format', 'json', '--as', 'bot'
+      ],
+      stdin: '<svg viewBox="0 0 10 10"><text>CAGRA</text></svg>'
+    }]);
+  });
+
+  it('rejects ambiguous Whiteboard identities returned by document update', async () => {
+    const adapter = new LarkCliAdapter({
+      exec: async () => ({
+        stdout: JSON.stringify({
+          ok: true,
+          data: {
+            document: {
+              new_blocks: [
+                { block_id: 'wb1', block_type: 'whiteboard', block_token: 'token1' },
+                { block_id: 'wb2', block_type: 43, block_token: 'token2' }
+              ]
+            }
+          }
+        }),
+        stderr: ''
+      })
+    });
+
+    await expect(adapter.replaceImageWithWhiteboard({
+      doc: 'doc_token',
+      blockId: 'image_block',
+      svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
+    })).rejects.toThrow('lark-cli docs +update returned 2 Whiteboard blocks; expected exactly one');
+  });
 });

@@ -92,9 +92,33 @@ Use `--profile zilliz` when local Markdown uses Milvus wording but the Feishu do
 - The first write to an existing untracked document also requires `--confirm-untracked-remote`.
 - Block-patch updates or deletions that may affect comments, anchors, or block identity require `--confirm-collaboration-risk`.
 - Reconstructable HTML tables support row additions and updates keyed by a unique first column. The first implementation replaces only the matched table block and uses the same collaboration-risk confirmation.
+- `--sync-whiteboards` opt-in syncs a standalone PNG reference from Markdown to a same-name local SVG source and preserves the remote Whiteboard token across updates.
+- A remotely changed Whiteboard fails closed until that exact asset key is confirmed with `--confirm-remote-whiteboard-overwrite <asset-key>`.
 - Unsupported or conflicting scoped changes return `strategy: blocked`; `auto` never falls back to whole-document replacement.
 - Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
 - `status` and `diff` are read-only; `merge` writes only local files and supports `--abort`.
+
+## Editable Whiteboard Assets
+
+Use a portable PNG reference in Markdown and keep its editable SVG source beside it:
+
+```text
+article.md -> ![Architecture](./assets/architecture.png)
+assets/architecture.png
+assets/architecture.svg
+```
+
+Only a standalone image line is eligible. The remote document must already contain exactly one image or Whiteboard block at the corresponding position.
+
+```bash
+feishu-md-sync status article.md --target "$TARGET" --profile none --sync-whiteboards
+feishu-md-sync diff article.md --target "$TARGET" --profile none --sync-whiteboards
+feishu-md-sync publish article.md --target "$TARGET" --profile none --sync-whiteboards
+feishu-md-sync publish article.md --target "$TARGET" --profile none --sync-whiteboards \
+  --write --confirm-untracked-remote --confirm-collaboration-risk
+```
+
+The CLI validates and imports the SVG; it does not render or upload PNG bytes. Images without a sibling SVG are untouched. `--sync-whiteboards` is not supported with `--create` or `--strategy document-replace`. See the docs site for the supported SVG subset and remote-conflict workflow.
 
 ## Development
 

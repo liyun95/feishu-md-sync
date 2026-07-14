@@ -1,14 +1,25 @@
 import { execFile } from 'node:child_process';
 import type { FeishuBlock } from '../feishu/types.js';
 import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
-import type { CreatedDocument, FeishuAdapter, RemoteBlocks, RemoteMarkdown } from './feishu-adapter.js';
+import type {
+  CreatedDocument,
+  CreatedWhiteboard,
+  FeishuAdapter,
+  RemoteBlocks,
+  RemoteMarkdown,
+  RemoteWhiteboard
+} from './feishu-adapter.js';
 
 export type LarkCliExecResult = {
   stdout: string;
   stderr: string;
 };
 
-export type LarkCliExecutor = (args: string[]) => Promise<LarkCliExecResult>;
+export type LarkCliExecInput = {
+  stdin?: string;
+};
+
+export type LarkCliExecutor = (args: string[], input?: LarkCliExecInput) => Promise<LarkCliExecResult>;
 export type LarkCliIdentity = 'auto' | 'bot' | 'user';
 
 export class LarkCliAdapter implements FeishuAdapter {
@@ -148,6 +159,68 @@ export class LarkCliAdapter implements FeishuAdapter {
     ], this.identity)));
   }
 
+  async replaceImageWithWhiteboard(input: {
+    doc: string;
+    blockId: string;
+    svg: string;
+  }): Promise<CreatedWhiteboard> {
+    const parsed = parseLarkCliJson(await this.exec(withIdentity([
+      'docs',
+      '+update',
+      '--doc',
+      input.doc,
+      '--command',
+      'block_replace',
+      '--block-id',
+      input.blockId,
+      '--doc-format',
+      'xml',
+      '--content',
+      '-',
+      '--format',
+      'json'
+    ], this.identity), {
+      stdin: `<whiteboard type="svg">${input.svg}</whiteboard>`
+    }));
+    return createdWhiteboardFromData(parsed.data);
+  }
+
+  async queryWhiteboard(input: { whiteboardToken: string }): Promise<RemoteWhiteboard> {
+    const parsed = parseLarkCliJson(await this.exec(withIdentity([
+      'whiteboard',
+      '+query',
+      '--whiteboard-token',
+      input.whiteboardToken,
+      '--output_as',
+      'raw',
+      '--format',
+      'json'
+    ], this.identity)));
+    return { raw: whiteboardRawFromData(parsed.data) };
+  }
+
+  async updateWhiteboard(input: {
+    whiteboardToken: string;
+    svg: string;
+    idempotencyToken: string;
+  }): Promise<void> {
+    parseLarkCliJson(await this.exec(withIdentity([
+      'whiteboard',
+      '+update',
+      '--whiteboard-token',
+      input.whiteboardToken,
+      '--input_format',
+      'svg',
+      '--source',
+      '-',
+      '--overwrite',
+      '--idempotent-token',
+      input.idempotencyToken,
+      '--format',
+      'json'
+    ], this.identity), { stdin: input.svg }));
+  }
+
   async createDocument(input: { title: string; markdown: string; parentToken: string }): Promise<CreatedDocument> {
     const data = parseLarkCliJson(await this.exec(withIdentity([
       'docs',
@@ -223,15 +296,16 @@ function larkCliIdentityFromEnv(): LarkCliIdentity {
   return value === 'bot' || value === 'user' ? value : 'auto';
 }
 
-function runLarkCli(args: string[]): Promise<LarkCliExecResult> {
+function runLarkCli(args: string[], input: LarkCliExecInput = {}): Promise<LarkCliExecResult> {
   return new Promise((resolve, reject) => {
-    execFile('lark-cli', args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+    const child = execFile('lark-cli', args, { encoding: 'utf8' }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr.trim() || error.message));
         return;
       }
       resolve({ stdout, stderr });
     });
+    if (input.stdin !== undefined) child.stdin?.end(input.stdin);
   });
 }
 
@@ -282,6 +356,63 @@ function documentFromData(data: unknown): Record<string, unknown> | undefined {
   if (!data || typeof data !== 'object' || !('document' in data)) return undefined;
   const document = (data as { document?: unknown }).document;
   return document && typeof document === 'object' ? document as Record<string, unknown> : undefined;
+}
+
+function createdWhiteboardFromData(data: unknown): CreatedWhiteboard {
+  const document = data && typeof data === 'object' && !Array.isArray(data)
+    ? (data as { document?: unknown }).document
+    : undefined;
+  const newBlocks = document && typeof document === 'object' && !Array.isArray(document)
+    ? (document as { new_blocks?: unknown }).new_blocks
+    : undefined;
+  const whiteboards = Array.isArray(newBlocks) ? newBlocks.filter(isCreatedWhiteboard) : [];
+  if (whiteboards.length !== 1) {
+    throw new Error(`lark-cli docs +update returned ${whiteboards.length} Whiteboard blocks; expected exactly one`);
+  }
+  const whiteboard = whiteboards[0];
+  return {
+    blockId: whiteboard.block_id,
+    whiteboardToken: whiteboard.block_token
+  };
+}
+
+function isCreatedWhiteboard(value: unknown): value is { block_id: string; block_token: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const block = value as { block_id?: unknown; block_type?: unknown; block_token?: unknown };
+  return (block.block_type === 'whiteboard' || block.block_type === 43 || block.block_type === '43') &&
+    typeof block.block_id === 'string' &&
+    typeof block.block_token === 'string';
+}
+
+function whiteboardRawFromData(data: unknown): unknown {
+  let raw: unknown;
+  if (Array.isArray(data)) {
+    raw = data;
+  } else if (typeof data === 'string') {
+    raw = parseEmbeddedJson(data);
+  } else if (!data || typeof data !== 'object') {
+    throw new Error('lark-cli whiteboard +query did not return raw node state.');
+  } else {
+    const record = data as Record<string, unknown>;
+    if ('raw' in record) raw = record.raw;
+    else if (typeof record.content === 'string') raw = parseEmbeddedJson(record.content);
+    else raw = data;
+  }
+  const hasNodeState = Array.isArray(raw)
+    ? raw.length > 0
+    : Boolean(raw && typeof raw === 'object' && Array.isArray((raw as { nodes?: unknown }).nodes));
+  if (!hasNodeState) {
+    throw new Error('lark-cli whiteboard +query did not return raw node state.');
+  }
+  return raw;
+}
+
+function parseEmbeddedJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error('lark-cli whiteboard +query returned invalid raw JSON.');
+  }
 }
 
 function blockPageFromData(data: unknown): { items: FeishuBlock[]; hasMore: boolean; pageToken?: string } {

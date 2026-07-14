@@ -1,11 +1,13 @@
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { parseHtmlTable } from './html-table.js';
+import { splitMarkdownImageBlocks } from './markdown-image.js';
 import { semanticHash } from './normalize.js';
 import type { SemanticDocument, SemanticLocator, SemanticNode } from './types.js';
 
 type LocalSegment =
   | { kind: 'markdown'; content: string }
+  | { kind: 'asset'; alt: string; source: string }
   | { kind: 'table'; content: string }
   | { kind: 'opaque'; content: string; description: string };
 
@@ -26,6 +28,16 @@ export function localSemanticDocument(markdown: string): SemanticDocument {
   }
 
   for (const segment of splitLocalSegments(body)) {
+    if (segment.kind === 'asset') {
+      nodes.push({
+        kind: 'asset',
+        locator: nextLocator(headingPath, 'asset', ordinals),
+        representation: 'image',
+        alt: segment.alt,
+        source: segment.source
+      });
+      continue;
+    }
     if (segment.kind === 'table') {
       nodes.push(parseHtmlTable(segment.content, nextLocator(headingPath, 'table', ordinals)));
       continue;
@@ -115,7 +127,14 @@ function splitLocalSegments(markdown: string): LocalSegment[] {
 }
 
 function pushMarkdown(segments: LocalSegment[], content: string): void {
-  if (content.trim()) segments.push({ kind: 'markdown', content });
+  for (const segment of splitMarkdownImageBlocks(content)) {
+    if (segment.kind === 'image') {
+      segments.push({ kind: 'asset', alt: segment.alt, source: segment.source });
+      continue;
+    }
+    const markdown = segment.content;
+    if (markdown.trim()) segments.push({ kind: 'markdown', content: markdown });
+  }
 }
 
 function nextLocator(

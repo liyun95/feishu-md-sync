@@ -16,6 +16,15 @@ export type CreatedDocument = {
   revision?: string;
 };
 
+export type CreatedWhiteboard = {
+  blockId: string;
+  whiteboardToken: string;
+};
+
+export type RemoteWhiteboard = {
+  raw: unknown;
+};
+
 export type FeishuAdapter = {
   resolveDocumentId?(input: { target: PublishReceiptTarget }): Promise<string>;
   fetchDocMarkdown(input: { doc: string }): Promise<RemoteMarkdown>;
@@ -29,5 +38,16 @@ export type FeishuAdapter = {
   }): Promise<void>;
   insertBlocksAfter?(input: { doc: string; blockId: string; markdown: string }): Promise<void>;
   deleteBlocks?(input: { doc: string; blockIds: string[] }): Promise<void>;
+  replaceImageWithWhiteboard?(input: {
+    doc: string;
+    blockId: string;
+    svg: string;
+  }): Promise<CreatedWhiteboard>;
+  queryWhiteboard?(input: { whiteboardToken: string }): Promise<RemoteWhiteboard>;
+  updateWhiteboard?(input: {
+    whiteboardToken: string;
+    svg: string;
+    idempotencyToken: string;
+  }): Promise<void>;
   createDocument(input: { title: string; markdown: string; parentToken: string }): Promise<CreatedDocument>;
 };
