@@ -38,7 +38,32 @@ Do not retry destructive writes blindly. Inspect the Feishu document and rerun a
 
 `auto` found at least one change that cannot be matched or written safely. Review the listed blocker. Common table blockers include duplicate or empty first-column keys, row deletion/reorder, merged cells, nested lists, and a teammate edit inside the same target table.
 
+Common Callout blockers include `callout-type-change`, unsupported changed body content, and `remote-callout-conflict` when local and remote changed the same child block. Keep the canonical `<div class="alert note|warning">` wrapper, resolve the overlapping body edit, or move unsupported content outside the Callout before rerunning the dry-run.
+
 Resolve the local or remote conflict and rerun the dry-run. Whole-document replacement remains available only when you deliberately select `--strategy document-replace --confirm-destructive`.
+
+## `Cannot identify remote Callout type from title ...`
+
+The official Markdown export contains a Callout title that is neither a configured title nor an English default. Standalone `pull` and target-based `merge` have no publish semantic baseline, so they refuse to flatten or guess the wrapper.
+
+Add the exact localized titles to `feishu-md-sync.config.json`, then rerun:
+
+```json
+{
+  "callouts": {
+    "noteTitle": "说明",
+    "warningTitle": "警告"
+  }
+}
+```
+
+A tracked publish can continue to recognize a later customized remote title from its semantic receipt while preserving that title during body updates.
+
+## Partial scoped write
+
+The write stopped after one operation failed. Operations already verified in Feishu are not rolled back, and no new publish receipt is written.
+
+Inspect the remote document, then rerun the same dry-run and publish. The planner reads current Feishu state and skips children that already match. Do not switch to whole-document replacement merely to clear the partial state.
 
 ## `remote-whiteboard-changed` or `whiteboard-conflict`
 

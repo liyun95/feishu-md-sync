@@ -22,7 +22,7 @@ Options:
 - `--confirm-remote-whiteboard-overwrite <asset-key>` - allow overwriting one remotely changed Whiteboard after review. Repeat for multiple assets.
 - `--format <format>` - `pretty` or `json`.
 
-`auto` may return `blocked`; it does not select `document-replace` automatically. A block-patch plan can contain ordinary text operations and table replacements in the same publish.
+`auto` may return `blocked`; it does not select `document-replace` automatically. A block-patch plan can contain ordinary text operations, Callout child operations, and table replacements in the same publish.
 
 `--sync-whiteboards` works only for existing docx or Wiki documents with `auto` or `block-patch`. It is rejected with `--create` and `document-replace`.
 
@@ -66,6 +66,18 @@ feishu-md-sync publish ./article.md --target DocToken --profile none --sync-whit
   --confirm-remote-whiteboard-overwrite assets/architecture.png
 ```
 
+Publish a canonical note Callout through the same command:
+
+```html
+<div class="alert note">
+
+Use load-time CPU adaptation.
+
+</div>
+```
+
+Use `alert warning` for warnings. The body is locally managed; the existing remote title, emoji, colors, and Callout container are preserved. Creating a new Callout uses the configured title and the built-in note or warning presentation. Changing `note` to `warning`, or changing unsupported body content, returns a blocked plan.
+
 ## Profiles
 
 Omit `--profile` to use the configured default. In a fresh setup, the default profile is `none`.
@@ -100,6 +112,8 @@ feishu-md-sync pull --target DocToken --output doc.remote.md
 ```
 
 `pull` uses `lark-cli docs +fetch --doc-format markdown` for the remote export. The custom layer handles target parsing, profile filtering, overwrite protection, local write verification, and optional receipt writing.
+
+Recognized Feishu Callouts are written as canonical `<div class="alert note|warning">` HTML without the presentation title. An unrecognized title fails closed; configure the workspace title before pulling a localized or previously customized untracked Callout.
 
 ## `status`
 
@@ -139,6 +153,16 @@ Options:
 
 For supported HTML tables, JSON and pretty output also include table identity, added row keys, updated row keys, and changed column indexes.
 
+Callouts are reported as their own scoped category. For example:
+
+```text
+callout[note]: Build index [0]
+  ~ paragraph 2
+  + bullet 3
+```
+
+Child changes in the same Callout are compared independently. A teammate edit to a different child is reported as an unrelated remote change; an edit to the same child blocks publish.
+
 With `--sync-whiteboards`, output includes each asset key, state (`clean`, `local-changed`, `remote-changed`, `conflict`, `untracked`, or `missing`), and recommended action.
 
 ## `merge`
@@ -170,6 +194,8 @@ local content
 remote content
 >>>>>>> REMOTE
 ```
+
+Remote Callouts are canonicalized before the line merge. As with `pull`, target-based merge fails closed when an untracked custom presentation title cannot be recognized from workspace configuration.
 
 ## `doctor auth`
 

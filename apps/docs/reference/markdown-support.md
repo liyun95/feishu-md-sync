@@ -11,6 +11,7 @@
 - Fenced code blocks
 - Tables
 - Tables through Feishu Markdown import/export
+- Milvus-style note and warning Callouts
 
 ## Supported Inline Formatting
 
@@ -42,6 +43,29 @@
 
 The first column must contain a unique, non-empty key for every data row. The CLI reports a row-level diff, but the first implementation writes by replacing that one table block. This requires `--confirm-collaboration-risk` because comments or anchors inside the table may be affected.
 
+## Scoped Callouts
+
+Use canonical local HTML without a presentation title:
+
+```html
+<div class="alert note">
+
+Body content with **bold**, *italic*, `inline code`, and an [absolute link](https://milvus.io).
+
+- First item
+- Second item
+
+</div>
+```
+
+Use `alert warning` for warnings. Supported body blocks are paragraphs, headings, one-level ordered or unordered lists, ordinary line breaks, bold, italic, inline code, and absolute HTTP(S) links.
+
+The local file manages only body children. Existing Feishu title text, emoji, background, border, text color, and Callout container identity are preserved. New notes use `📘 Notes` with orange presentation; new warnings use `❗ Warning` with red presentation unless titles are configured for the workspace.
+
+The first version blocks a changed Callout containing fenced code, tables, images or Whiteboards, nested Callouts or HTML containers, nested lists, checkboxes, blockquotes, dividers, relative links, or other unsupported blocks. An unchanged unsupported remote Callout remains opaque and is preserved. Changing between `note` and `warning` is blocked.
+
+Tracked Callouts compare body children independently. Disjoint local and remote child edits can coexist; overlapping child edits conflict. Deleting a tracked Callout is supported only when that Callout is unchanged remotely and requires `--confirm-collaboration-risk`.
+
 ## Editable Whiteboard Assets
 
 Whiteboard sync uses a PNG/SVG sibling convention:
@@ -72,6 +96,7 @@ The CLI does not create SVGs, render SVG to PNG, or upload PNG bytes. Ordinary i
 
 - Feishu to Markdown export is best-effort.
 - Unsupported Feishu block types may not round-trip through Markdown.
+- Untracked custom Callout titles require workspace configuration for `pull` and target-based `merge`.
 - PNG rendering and upload are outside the Whiteboard sync feature.
 - Paragraph wrapping may not round-trip byte-for-byte.
 - The merge algorithm is deterministic and line-based, not semantic Markdown merge.
