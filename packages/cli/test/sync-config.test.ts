@@ -2,7 +2,12 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadSyncConfig, resolvePublishProfile } from '../src/config/sync-config.js';
+import {
+  DEFAULT_CALLOUT_CONFIG,
+  loadSyncConfig,
+  resolveCalloutConfig,
+  resolvePublishProfile
+} from '../src/config/sync-config.js';
 
 describe('sync config', () => {
   it('falls back to none when no config and no CLI profile exist', async () => {
@@ -42,6 +47,37 @@ describe('sync config', () => {
     );
     expect(() => resolvePublishProfile({ cliProfile: 'cloud', config: { profiles: {} } })).toThrow(
       'Invalid --profile cloud. Expected zilliz, milvus, or none.'
+    );
+  });
+
+  it('uses English Callout titles by default', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-config-'));
+    const config = await loadSyncConfig({ cwd: dir });
+
+    expect(resolveCalloutConfig(config)).toEqual(DEFAULT_CALLOUT_CONFIG);
+  });
+
+  it('loads workspace Callout title overrides', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-config-'));
+    await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
+      callouts: { noteTitle: '说明', warningTitle: '警告' }
+    }), 'utf8');
+
+    const config = await loadSyncConfig({ cwd: dir });
+    expect(resolveCalloutConfig(config)).toEqual({
+      noteTitle: '说明',
+      warningTitle: '警告'
+    });
+  });
+
+  it('rejects non-string Callout titles', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-config-'));
+    await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
+      callouts: { noteTitle: false }
+    }), 'utf8');
+
+    await expect(loadSyncConfig({ cwd: dir })).rejects.toThrow(
+      'callouts.noteTitle must be a non-empty string.'
     );
   });
 });
