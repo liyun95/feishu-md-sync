@@ -106,6 +106,34 @@ describe('Callout publish planning', () => {
     expect(conflict.blockers).toContainEqual(expect.objectContaining({ code: 'remote-callout-conflict' }));
   });
 
+  it('deletes the first tracked Callout without treating the next Callout as a type change', () => {
+    const plan = planCalloutChanges({
+      parentBlockId: 'page',
+      localBase: document(
+        note(['Note body']),
+        note(['Warning body'], { type: 'warning', ordinal: 1 })
+      ),
+      localCurrent: document(
+        note(['Warning body'], { type: 'warning' })
+      ),
+      remoteBase: document(
+        note(['Note body'], { remote: true, remoteId: 'note-callout' }),
+        note(['Warning body'], { remote: true, type: 'warning', ordinal: 1, remoteId: 'warning-callout' })
+      ),
+      remoteCurrent: document(
+        note(['Note body'], { remote: true, remoteId: 'note-callout' }),
+        note(['Warning body'], { remote: true, type: 'warning', ordinal: 1, remoteId: 'warning-callout' })
+      ),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([expect.objectContaining({
+      kind: 'callout-delete',
+      blockIds: ['note-callout']
+    })]);
+  });
+
   it('treats local and remote deletion as a no-op', () => {
     const plan = planCalloutChanges({
       parentBlockId: 'page',
@@ -180,26 +208,32 @@ describe('Callout publish planning', () => {
 
 function note(
   bodies: string[],
-  options: { remote?: boolean; type?: CalloutType } = {}
+  options: { remote?: boolean; type?: CalloutType; ordinal?: number; remoteId?: string } = {}
 ): SemanticCallout {
+  const type = options.type ?? 'note';
+  const remoteId = options.remoteId ?? 'callout';
+  const childPrefix = options.remoteId ? `${remoteId}-child` : 'child';
   return {
     kind: 'callout',
-    locator: { sectionPath: ['Build index'], kind: 'callout', ordinal: 0 },
-    calloutType: options.type ?? 'note',
-    title: options.remote ? { markdown: 'Notes', remoteBlockId: 'title' } : undefined,
+    locator: { sectionPath: ['Build index'], kind: 'callout', ordinal: options.ordinal ?? 0 },
+    calloutType: type,
+    title: options.remote ? {
+      markdown: type === 'note' ? 'Notes' : 'Warning',
+      remoteBlockId: options.remoteId ? `${remoteId}-title` : 'title'
+    } : undefined,
     children: bodies.map((markdown, ordinal) => ({
       ordinal,
       blockType: 2,
       markdown,
-      ...(options.remote ? { remoteBlockId: `child${ordinal}` } : {})
+      ...(options.remote ? { remoteBlockId: `${childPrefix}${ordinal}` } : {})
     })),
-    ...(options.remote ? { remoteBlockId: 'callout', shell: { emojiId: '📘' } } : {}),
+    ...(options.remote ? { remoteBlockId: remoteId, shell: { emojiId: type === 'note' ? '📘' : '❗' } } : {}),
     unsupported: []
   };
 }
 
-function document(callout: SemanticCallout): SemanticDocument {
-  return { nodes: [callout] };
+function document(...callouts: SemanticCallout[]): SemanticDocument {
+  return { nodes: callouts };
 }
 
 function documentWithNeighbors(callout: SemanticCallout, previous = 'Previous text'): SemanticDocument {

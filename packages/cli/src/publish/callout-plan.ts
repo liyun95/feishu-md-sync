@@ -116,15 +116,20 @@ export function planCalloutChanges(input: {
       planRemoteToDesired(remote, local, operations, blockers);
     }
   } else {
-    const keys = new Set([
-      ...callouts(input.localBase).map((node) => locatorKey(node.locator)),
-      ...callouts(input.localCurrent).map((node) => locatorKey(node.locator))
-    ]);
-    for (const key of keys) {
-      const localBase = findCalloutByKey(input.localBase, key);
-      const localCurrent = findCalloutByKey(input.localCurrent, key);
-      const remoteBase = findCalloutByKey(input.remoteBase, key);
-      const remoteCurrentRaw = findCalloutByKey(input.remoteCurrent, key);
+    const localPairs = alignTrackedCallouts(input.localBase, input.localCurrent);
+    const remotePairs = alignTrackedCallouts(input.remoteBase, input.remoteCurrent);
+    const remoteByBase = new Map(remotePairs.flatMap((pair) => {
+      return pair.base ? [[locatorKey(pair.base.locator), pair] as const] : [];
+    }));
+    const remoteAdditions = remotePairs.flatMap((pair) => !pair.base && pair.current ? [pair.current] : []);
+    for (const pair of localPairs) {
+      const localBase = pair.base;
+      const localCurrent = pair.current;
+      const remotePair = localBase ? remoteByBase.get(locatorKey(localBase.locator)) : undefined;
+      const remoteBase = remotePair?.base;
+      const remoteCurrentRaw = remotePair?.current ?? (!localBase && localCurrent
+        ? remoteAdditions.find((candidate) => locatorKey(candidate.locator) === locatorKey(localCurrent.locator))
+        : undefined);
       const remoteCurrent = remoteCurrentRaw && remoteBase?.calloutType
         ? { ...remoteCurrentRaw, calloutType: remoteBase.calloutType }
         : remoteCurrentRaw;
@@ -411,15 +416,92 @@ function changedCalloutLocators(
   tracked: boolean
 ): SemanticLocator[] {
   if (!tracked || !baseline) return callouts(current).map((node) => node.locator);
-  const before = new Map(callouts(baseline).map((node) => [locatorKey(node.locator), node]));
-  const after = new Map(callouts(current).map((node) => [locatorKey(node.locator), node]));
-  const keys = new Set([...before.keys(), ...after.keys()]);
-  return [...keys].flatMap((key) => {
-    const left = before.get(key);
-    const right = after.get(key);
-    if (left && right && calloutContentHash(left) === calloutContentHash(right)) return [];
-    return [right?.locator ?? left?.locator].filter((locator): locator is SemanticLocator => Boolean(locator));
+  return alignTrackedCallouts(baseline, current).flatMap((pair) => {
+    if (pair.base && pair.current && calloutContentHash(pair.base) === calloutContentHash(pair.current)) return [];
+    const locator = pair.current?.locator ?? pair.base?.locator;
+    return locator ? [locator] : [];
   });
+}
+
+type TrackedCalloutPair = {
+  base?: SemanticCallout;
+  current?: SemanticCallout;
+};
+
+function alignTrackedCallouts(
+  baseline: SemanticDocument | undefined,
+  current: SemanticDocument | undefined
+): TrackedCalloutPair[] {
+  const bases = callouts(baseline);
+  const currents = callouts(current);
+  const currentByBase = new Map<SemanticCallout, SemanticCallout>();
+  const matchedCurrents = new Set<SemanticCallout>();
+
+  matchUniqueCallouts(bases, currents, currentByBase, matchedCurrents, (base, candidate) => {
+    return sameSectionPath(base.locator, candidate.locator) &&
+      sameCalloutType(base, candidate) &&
+      calloutContentHash(base) === calloutContentHash(candidate);
+  });
+
+  for (const base of bases) {
+    if (currentByBase.has(base)) continue;
+    const candidate = currents.find((currentCallout) => {
+      return !matchedCurrents.has(currentCallout) &&
+        locatorKey(currentCallout.locator) === locatorKey(base.locator) &&
+        sameCalloutType(base, currentCallout);
+    });
+    if (candidate) matchCallouts(base, candidate, currentByBase, matchedCurrents);
+  }
+
+  matchUniqueCallouts(bases, currents, currentByBase, matchedCurrents, (base, candidate) => {
+    return sameSectionPath(base.locator, candidate.locator) && sameCalloutType(base, candidate);
+  });
+
+  for (const base of bases) {
+    if (currentByBase.has(base)) continue;
+    const candidate = currents.find((currentCallout) => {
+      return !matchedCurrents.has(currentCallout) && locatorKey(currentCallout.locator) === locatorKey(base.locator);
+    });
+    if (candidate) matchCallouts(base, candidate, currentByBase, matchedCurrents);
+  }
+
+  return [
+    ...bases.map((base) => ({ base, current: currentByBase.get(base) })),
+    ...currents.filter((candidate) => !matchedCurrents.has(candidate)).map((candidate) => ({ current: candidate }))
+  ];
+}
+
+function matchUniqueCallouts(
+  bases: SemanticCallout[],
+  currents: SemanticCallout[],
+  currentByBase: Map<SemanticCallout, SemanticCallout>,
+  matchedCurrents: Set<SemanticCallout>,
+  matches: (base: SemanticCallout, current: SemanticCallout) => boolean
+): void {
+  for (const base of bases) {
+    if (currentByBase.has(base)) continue;
+    const candidates = currents.filter((candidate) => !matchedCurrents.has(candidate) && matches(base, candidate));
+    if (candidates.length !== 1) continue;
+    const candidate = candidates[0]!;
+    const competingBases = bases.filter((other) => !currentByBase.has(other) && matches(other, candidate));
+    if (competingBases.length !== 1) continue;
+    matchCallouts(base, candidate, currentByBase, matchedCurrents);
+  }
+}
+
+function matchCallouts(
+  base: SemanticCallout,
+  current: SemanticCallout,
+  currentByBase: Map<SemanticCallout, SemanticCallout>,
+  matchedCurrents: Set<SemanticCallout>
+): void {
+  currentByBase.set(base, current);
+  matchedCurrents.add(current);
+}
+
+function sameSectionPath(left: SemanticLocator, right: SemanticLocator): boolean {
+  return left.sectionPath.length === right.sectionPath.length &&
+    left.sectionPath.every((part, index) => part === right.sectionPath[index]);
 }
 
 function structureHash(children: SemanticCalloutChild[]): string {
