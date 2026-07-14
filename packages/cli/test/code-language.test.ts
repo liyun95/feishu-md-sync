@@ -26,6 +26,10 @@ describe('Code block languages', () => {
     expect(codeLanguageForId(id)).toBe(language);
   });
 
+  it('accepts the alternate Feishu Python language ID', () => {
+    expect(codeLanguageForId(50)).toBe('python');
+  });
+
   it.each([
     ['', 'plaintext'],
     ['py', 'python'],
@@ -34,7 +38,9 @@ describe('Code block languages', () => {
     ['yml', 'yaml'],
     ['curl', 'bash'],
     ['conf', 'plaintext'],
-    ['log', 'plaintext']
+    ['log', 'plaintext'],
+    ['promql', 'plaintext'],
+    ['rest', 'bash']
   ])('resolves %j to %s', (source, expected) => {
     expect(resolveCodeLanguage(source).resolvedLanguage).toBe(expected);
   });

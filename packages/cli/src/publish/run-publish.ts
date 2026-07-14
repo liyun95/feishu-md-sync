@@ -46,7 +46,7 @@ import {
   type WhiteboardOperation,
   type WhiteboardPlan
 } from '../whiteboards/whiteboard-plan.js';
-import { findPageBlock } from './block-state.js';
+import { findPageBlock, renderableDirectChildBlocks } from './block-state.js';
 import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
 import type { CalloutOperation } from './callout-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
@@ -304,10 +304,10 @@ export async function analyzeExistingPublish(input: {
   const localSource = input.localSource ?? await readFile(input.file, 'utf8');
   const transform = applyPublishTransformForProfile(localSource, input.profile);
   const resolvedDocumentId = input.adapter.resolveDocumentId
-    ? await input.adapter.resolveDocumentId({ target: input.target })
+    ? await withRateLimitRetry(() => input.adapter.resolveDocumentId!({ target: input.target }))
     : input.target.token;
   const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
-  const remoteRaw = await input.adapter.fetchDocMarkdown({ doc: resolvedDocumentId });
+  const remoteRaw = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({ doc: resolvedDocumentId }));
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
 
   if (input.strategy === 'document-replace') {
@@ -364,7 +364,7 @@ export async function analyzeExistingPublish(input: {
 
   let remoteBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>;
   try {
-    remoteBlocks = await input.adapter.fetchDocBlocks({ doc: resolvedDocumentId });
+    remoteBlocks = await withRateLimitRetry(() => input.adapter.fetchDocBlocks!({ doc: resolvedDocumentId }));
   } catch (error) {
     const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
     const remote = { ...remoteRaw, markdown: normalized.markdown };
@@ -394,9 +394,10 @@ export async function analyzeExistingPublish(input: {
     };
   }
   const page = findPageBlock(remoteBlocks.blocks, resolvedDocumentId);
+  const remoteCodeMetadata = await fetchRemoteCodeMetadata(input.adapter, resolvedDocumentId, remoteBlocks.blocks);
   const remoteBaseHint = await trackedRemoteSemanticBaseline({ cwd: input.cwd, receipt });
   const remoteCurrent = applyTrackedCalloutTypes(
-    remoteSemanticDocument(remoteBlocks.blocks, resolvedDocumentId, callouts),
+    remoteSemanticDocument(remoteBlocks.blocks, resolvedDocumentId, callouts, remoteCodeMetadata),
     remoteBaseHint
   );
   const normalized = canonicalizeRemoteCalloutMarkdown({
@@ -676,7 +677,7 @@ function blockedScopedPatch(message: string): ScopedPatchPlan {
   };
 }
 
-function partitionScopedOperations(operations: ScopedPatchOperation[]): {
+export function partitionScopedOperations(operations: ScopedPatchOperation[]): {
   updates: ScopedPatchOperation[];
   creates: ScopedPatchOperation[];
   moves: ScopedPatchOperation[];
@@ -696,7 +697,10 @@ function partitionScopedOperations(operations: ScopedPatchOperation[]): {
     } else if (operation.kind === 'create' || operation.kind === 'callout-create' ||
       operation.kind === 'callout-child-create' || operation.kind === 'code-create') {
       result.creates.push(operation);
-    } else if (operation.kind === 'code-move' || operation.kind === 'code-section-reconcile') {
+    } else if (operation.kind === 'code-section-reconcile') {
+      result.moves.push({ ...operation, phase: 'place' });
+      result.deletes.push({ ...operation, phase: 'delete' });
+    } else if (operation.kind === 'code-move') {
       result.moves.push(operation);
     } else if (operation.kind === 'table-replace') result.tables.push(operation);
     else result.deletes.push(operation);
@@ -719,6 +723,7 @@ async function applyScopedOperations(input: {
   for (let index = 0; index < input.operations.length; index += 1) {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
+    let codeMutationCompleted = false;
     try {
       if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
         operation.kind === 'code-move' || operation.kind === 'code-delete' ||
@@ -728,6 +733,7 @@ async function applyScopedOperations(input: {
           doc: input.doc,
           operation: operation as CodeBlockOperation
         });
+        codeMutationCompleted = true;
       } else if (operation.kind === 'update') {
         await input.adapter.replaceBlock({
           doc: input.doc,
@@ -778,10 +784,39 @@ async function applyScopedOperations(input: {
         const unsupported: never = operation;
         throw new Error(`Unsupported scoped operation: ${String(unsupported)}`);
       }
-      const blocks = await input.adapter.fetchDocBlocks({ doc: input.doc });
-      verifyOperation(operation, blocks.blocks, input.doc, input.callouts);
+      if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
+        operation.kind === 'code-move' || operation.kind === 'code-delete' ||
+        operation.kind === 'code-section-reconcile') {
+        verifyCodeOperation(operation, await fetchRemoteSemantic(input.adapter, input.doc, input.callouts));
+      } else {
+        const blocks = await input.adapter.fetchDocBlocks({ doc: input.doc });
+        verifyOperation(operation, blocks.blocks, input.doc, input.callouts);
+      }
       completed.push(summary);
     } catch (error) {
+      if (error instanceof PartialWriteError) {
+        throw new PartialWriteError({
+          completedOperations: [...completed, ...error.completedOperations],
+          failedOperation: error.failedOperation,
+          pendingOperations: [
+            ...error.pendingOperations,
+            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+            ...(input.pendingAfter ?? [])
+          ],
+          cause: error
+        });
+      }
+      if (codeMutationCompleted) {
+        throw new PartialWriteError({
+          completedOperations: [...completed, summary],
+          failedOperation: { kind: 'code-readback', locator: operation.locator },
+          pendingOperations: [
+            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+            ...(input.pendingAfter ?? [])
+          ],
+          cause: error
+        });
+      }
       if (completed.length === 0) throw error;
       throw new PartialWriteError({
         completedOperations: completed,
@@ -829,7 +864,12 @@ async function applyCodeOperation(input: {
 
   const before = await fetchRemoteSemantic(input.adapter, input.doc);
   if (operation.kind === 'code-create') {
-    const anchor = resolveAnchorBlockId(before, operation.afterLocator, input.doc);
+    const anchor = resolveAnchorBlockId(
+      before,
+      operation.afterLocator,
+      input.doc,
+      operation.afterCodeFingerprint
+    );
     await withRateLimitRetry(() => insertBlocksAfter({
       doc: input.doc,
       blockId: anchor,
@@ -851,7 +891,13 @@ async function applyCodeOperation(input: {
     return;
   }
   if (operation.kind === 'code-move') {
-    const anchor = resolveAnchorBlockId(before, operation.afterLocator, input.doc);
+    const anchor = resolveAnchorBlockId(
+      before,
+      operation.afterLocator,
+      input.doc,
+      operation.afterCodeFingerprint,
+      remote.remoteBlockId
+    );
     await withRateLimitRetry(() => moveBlocksAfter!({
       doc: input.doc,
       blockId: anchor,
@@ -871,63 +917,167 @@ async function applyCodeSectionReconcile(input: {
   deleteBlocks: NonNullable<FeishuAdapter['deleteBlocks']>;
   moveBlocksAfter: NonNullable<FeishuAdapter['moveBlocksAfter']>;
 }): Promise<void> {
-  for (const desired of input.operation.desiredCodes) {
-    let current = await fetchRemoteSemantic(input.adapter, input.doc);
-    let remote = findUniqueCodeByManagedFields(current, desired.code) ?? findCodeByLocator(current, desired.code.locator);
-    if (!remote) {
-      const anchor = resolveAnchorBlockId(current, desired.afterLocator, input.doc);
-      await withRateLimitRetry(() => input.insertBlocksAfter({
-        doc: input.doc,
-        blockId: anchor,
-        content: renderCodeBlockXml(desired.code),
-        format: 'xml'
-      }));
-      current = await fetchRemoteSemantic(input.adapter, input.doc);
-      remote = findUniqueCodeByManagedFields(current, desired.code) ?? findCodeByLocator(current, desired.code.locator);
-      if (!remote) throw new Error('Code section reconcile could not resolve the created block.');
-    } else if (!codeManagedEqual(remote, desired.code)) {
-      if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot replace a block without an ID.');
-      await withRateLimitRetry(() => input.replaceBlock({
-        doc: input.doc,
-        blockId: remote!.remoteBlockId!,
-        content: renderCodeBlockXml({ ...desired.code, caption: remote!.caption }),
-        format: 'xml'
-      }));
-      current = await fetchRemoteSemantic(input.adapter, input.doc);
-      remote = findUniqueCodeByManagedFields(current, desired.code) ?? findCodeByLocator(current, desired.code.locator);
-      if (!remote) throw new Error('Code section reconcile could not resolve the replaced block.');
+  const completed: PublishWriteOperationSummary[] = [];
+  try {
+    const beforePhase = await fetchRemoteSemantic(input.adapter, input.doc);
+    const unrelatedBefore = codeScopeHashOutsideSections(beforePhase, input.operation.sectionPaths);
+
+    if (input.operation.phase === 'delete') {
+      const obsoleteIds = findObsoleteCodeIdsForReconcile(
+        beforePhase,
+        input.operation.desiredCodes.map(({ code }) => code),
+        input.operation.sectionPaths
+      );
+      if (obsoleteIds.length > 0) {
+        await withRateLimitRetry(() => input.deleteBlocks({ doc: input.doc, blockIds: obsoleteIds }));
+        completed.push({ kind: 'code-reconcile-delete', locator: input.operation.locator });
+      }
+      const afterDeletion = await fetchRemoteSemantic(input.adapter, input.doc);
+      assertUnrelatedCodeScopesUnchanged(unrelatedBefore, afterDeletion, input.operation.sectionPaths);
+      return;
     }
 
-    const anchor = resolveAnchorBlockId(current, desired.afterLocator, input.doc);
-    if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot move a block without an ID.');
-    if (!sameLocator(remote.locator, desired.code.locator)) {
-      await withRateLimitRetry(() => input.moveBlocksAfter({
-        doc: input.doc,
-        blockId: anchor,
-        sourceBlockIds: [remote!.remoteBlockId!]
-      }));
+    const exactMatches = assignCodeReconcileExactMatches(
+      beforePhase,
+      input.operation.desiredCodes.map(({ code }) => code),
+      input.operation.sectionPaths
+    );
+    const reservedExactIds = new Set(exactMatches.values());
+    const consumedRemoteBlockIds = new Set<string>();
+    for (const [desiredIndex, desired] of input.operation.desiredCodes.entries()) {
+      let current = await fetchRemoteSemantic(input.adapter, input.doc);
+      const exactMatchId = exactMatches.get(desiredIndex);
+      const unavailableIds = new Set([...consumedRemoteBlockIds, ...reservedExactIds]);
+      if (exactMatchId) unavailableIds.delete(exactMatchId);
+      let remote = exactMatchId
+        ? codeNodes(current).find((candidate) => candidate.remoteBlockId === exactMatchId)
+        : findCodeReconcileCandidate(
+          current,
+          desired.code,
+          input.operation.sectionPaths,
+          unavailableIds
+        );
+      if (!remote) {
+        const anchor = resolveAnchorBlockId(
+          current,
+          desired.afterLocator,
+          input.doc,
+          desired.afterCodeFingerprint
+        );
+        await withRateLimitRetry(() => input.insertBlocksAfter({
+          doc: input.doc,
+          blockId: anchor,
+          content: renderCodeBlockXml(desired.code),
+          format: 'xml'
+        }));
+        completed.push({ kind: 'code-reconcile-create', locator: desired.code.locator });
+        current = await fetchRemoteSemantic(input.adapter, input.doc);
+        remote = findCodeReconcileCandidate(
+          current,
+          desired.code,
+          input.operation.sectionPaths,
+          unavailableIds
+        );
+        if (!remote) throw new Error('Code section reconcile could not resolve the created block.');
+      } else if (!codeManagedEqual(remote, desired.code)) {
+        if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot replace a block without an ID.');
+        await withRateLimitRetry(() => input.replaceBlock({
+          doc: input.doc,
+          blockId: remote!.remoteBlockId!,
+          content: renderCodeBlockXml({ ...desired.code, caption: remote!.caption }),
+          format: 'xml'
+        }));
+        completed.push({ kind: 'code-reconcile-update', locator: desired.code.locator });
+        current = await fetchRemoteSemantic(input.adapter, input.doc);
+        remote = findCodeReconcileCandidate(
+          current,
+          desired.code,
+          input.operation.sectionPaths,
+          unavailableIds
+        );
+        if (!remote) throw new Error('Code section reconcile could not resolve the replaced block.');
+      }
+
+      if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot move a block without an ID.');
+      if (remote.caption !== undefined) {
+        desired.code = { ...desired.code, caption: remote.caption };
+      }
+      consumedRemoteBlockIds.add(remote.remoteBlockId);
+      if (reconcileCandidateNeedsMove(
+        current,
+        remote,
+        desired.afterLocator,
+        desired.afterCodeFingerprint
+      )) {
+        const anchor = resolveAnchorBlockId(
+          current,
+          desired.afterLocator,
+          input.doc,
+          desired.afterCodeFingerprint,
+          remote.remoteBlockId
+        );
+        await withRateLimitRetry(() => input.moveBlocksAfter({
+          doc: input.doc,
+          blockId: anchor,
+          sourceBlockIds: [remote!.remoteBlockId!]
+        }));
+        completed.push({ kind: 'code-reconcile-move', locator: desired.code.locator });
+      }
     }
+    const afterPlacement = await fetchRemoteSemantic(input.adapter, input.doc);
+    assertUnrelatedCodeScopesUnchanged(unrelatedBefore, afterPlacement, input.operation.sectionPaths);
+  } catch (error) {
+    if (error instanceof PartialWriteError || completed.length === 0) throw error;
+    throw new PartialWriteError({
+      completedOperations: completed,
+      failedOperation: { kind: 'code-section-reconcile', locator: input.operation.locator },
+      cause: error
+    });
   }
+}
 
-  const afterPlacement = await fetchRemoteSemantic(input.adapter, input.doc);
-  const desiredCounts = fingerprintCounts(input.operation.desiredCodes.map(({ code }) => code));
-  const seen = new Map<string, number>();
-  const obsolete = codeNodes(afterPlacement).filter((code) => {
-    if (!input.operation.sectionPaths.some((section) => sameSectionPath(code.locator.sectionPath, section))) return false;
-    const fingerprint = codeManagedFingerprint(code);
-    const count = (seen.get(fingerprint) ?? 0) + 1;
-    seen.set(fingerprint, count);
-    return count > (desiredCounts.get(fingerprint) ?? 0);
+export function findObsoleteCodeIdsForReconcile(
+  document: SemanticDocument,
+  desiredCodes: SemanticCodeBlock[],
+  sectionPaths: string[][]
+): string[] {
+  return sectionPaths.flatMap((section) => {
+    const desiredCounts = fingerprintCounts(desiredCodes.filter((code) => {
+      return sameSectionPath(code.locator.sectionPath, section);
+    }));
+    const seen = new Map<string, number>();
+    return codeNodes(document)
+      .filter((code) => sameSectionPath(code.locator.sectionPath, section))
+      .flatMap((code) => {
+        const fingerprint = codeManagedFingerprint(code);
+        const count = (seen.get(fingerprint) ?? 0) + 1;
+        seen.set(fingerprint, count);
+        return count > (desiredCounts.get(fingerprint) ?? 0) && code.remoteBlockId
+          ? [code.remoteBlockId]
+          : [];
+      });
   });
-  const obsoleteIds = obsolete.flatMap((code) => code.remoteBlockId ? [code.remoteBlockId] : []);
-  if (obsoleteIds.length > 0) {
-    await withRateLimitRetry(() => input.deleteBlocks({ doc: input.doc, blockIds: obsoleteIds }));
+}
+
+function codeScopeHashOutsideSections(document: SemanticDocument, sectionPaths: string[][]): string {
+  return semanticHash(codeNodes(document)
+    .filter((code) => !sectionPaths.some((section) => sameSectionPath(code.locator.sectionPath, section)))
+    .map((code) => stripExecutionMetadata(code)));
+}
+
+function assertUnrelatedCodeScopesUnchanged(
+  expectedHash: string,
+  document: SemanticDocument,
+  sectionPaths: string[][]
+): void {
+  if (codeScopeHashOutsideSections(document, sectionPaths) !== expectedHash) {
+    throw new Error('Code section reconcile changed an unrelated Code scope.');
   }
 }
 
 const CODE_WRITE_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000];
 
-async function withRateLimitRetry<T>(operation: () => Promise<T>): Promise<T> {
+export async function withRateLimitRetry<T>(operation: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await operation();
@@ -952,11 +1102,45 @@ function resolveRemoteCode(document: SemanticDocument, operation: Exclude<CodeBl
   return matched;
 }
 
-function resolveAnchorBlockId(document: SemanticDocument, locator: SemanticLocator | undefined, pageBlockId: string): string {
+function resolveAnchorBlockId(
+  document: SemanticDocument,
+  locator: SemanticLocator | undefined,
+  pageBlockId: string,
+  codeFingerprint?: string,
+  excludeBlockId?: string
+): string {
   if (!locator) return pageBlockId;
-  const node = document.nodes.find((candidate) => sameLocator(candidate.locator, locator));
+  const fingerprintCandidates = codeFingerprint
+    ? codeNodes(document).filter((code) => {
+      return code.remoteBlockId !== excludeBlockId &&
+        codeManagedFingerprint(code) === codeFingerprint &&
+        sameSectionPath(code.locator.sectionPath, locator.sectionPath);
+    })
+    : [];
+  const locatorCandidate = document.nodes.find((candidate) => {
+    return candidate.remoteBlockId !== excludeBlockId && sameLocator(candidate.locator, locator);
+  });
+  const node = codeFingerprint
+    ? fingerprintCandidates.length === 1
+      ? fingerprintCandidates[0]
+      : locatorCandidate?.kind === 'code' && codeManagedFingerprint(locatorCandidate) === codeFingerprint
+        ? locatorCandidate
+        : undefined
+    : locatorCandidate;
   if (!node?.remoteBlockId) throw new Error(`Code block anchor is no longer resolvable at ${locatorKey(locator)}.`);
   return node.remoteBlockId;
+}
+
+function findUniqueCodeByFingerprint(
+  document: SemanticDocument,
+  fingerprint: string,
+  sectionPath?: string[]
+): SemanticCodeBlock | undefined {
+  const matches = codeNodes(document).filter((code) => {
+    return codeManagedFingerprint(code) === fingerprint &&
+      (!sectionPath || sameSectionPath(code.locator.sectionPath, sectionPath));
+  });
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function codeNodes(document: SemanticDocument): SemanticCodeBlock[] {
@@ -970,6 +1154,54 @@ function findCodeByLocator(document: SemanticDocument, locator: SemanticLocator)
 function findUniqueCodeByManagedFields(document: SemanticDocument, desired: SemanticCodeBlock): SemanticCodeBlock | undefined {
   const matches = codeNodes(document).filter((code) => codeManagedEqual(code, desired));
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function findCodeReconcileCandidate(
+  document: SemanticDocument,
+  desired: SemanticCodeBlock,
+  sectionPaths: string[][],
+  consumedRemoteBlockIds: ReadonlySet<string> = new Set()
+): SemanticCodeBlock | undefined {
+  const candidates = codeNodes(document).filter((code) => {
+    return sectionPaths.some((section) => sameSectionPath(code.locator.sectionPath, section)) &&
+      (!code.remoteBlockId || !consumedRemoteBlockIds.has(code.remoteBlockId));
+  });
+  const managedMatches = candidates.filter((code) => codeManagedEqual(code, desired));
+  if (managedMatches.length === 1) return managedMatches[0];
+  const locatorMatches = candidates.filter((code) => sameLocator(code.locator, desired.locator));
+  return locatorMatches.length === 1 ? locatorMatches[0] : undefined;
+}
+
+export function assignCodeReconcileExactMatches(
+  document: SemanticDocument,
+  desiredCodes: SemanticCodeBlock[],
+  sectionPaths: string[][]
+): Map<number, string> {
+  const assignments = new Map<number, string>();
+  const used = new Set<string>();
+  for (const [index, desired] of desiredCodes.entries()) {
+    const candidates = codeNodes(document).filter((candidate) => {
+      return Boolean(candidate.remoteBlockId) &&
+        !used.has(candidate.remoteBlockId!) &&
+        sectionPaths.some((section) => sameSectionPath(candidate.locator.sectionPath, section)) &&
+        codeManagedEqual(candidate, desired);
+    });
+    const locatorMatch = candidates.find((candidate) => sameLocator(candidate.locator, desired.locator));
+    const match = locatorMatch ?? (candidates.length === 1 ? candidates[0] : undefined);
+    if (!match?.remoteBlockId) continue;
+    assignments.set(index, match.remoteBlockId);
+    used.add(match.remoteBlockId);
+  }
+  return assignments;
+}
+
+export function reconcileCandidateNeedsMove(
+  document: SemanticDocument,
+  code: SemanticCodeBlock,
+  afterLocator: SemanticLocator | undefined,
+  afterCodeFingerprint?: string
+): boolean {
+  return !codePlacementMatches(document, code, afterLocator, afterCodeFingerprint);
 }
 
 function codeManagedEqual(left: SemanticCodeBlock, right: SemanticCodeBlock): boolean {
@@ -1185,16 +1417,65 @@ function verifyOperation(
   }
 
   const candidates = remote.nodes.filter((node): node is SemanticTextBlock => {
-    return node.kind === 'text' && sameSection(node.locator, operation.locator);
+    return node.kind === 'text' && sameLocator(node.locator, operation.locator);
   });
-  if (!candidates.some((node) => canonicalMarkdown(node.markdown) === canonicalMarkdown(operation.desiredMarkdown))) {
+  const matched = candidates.find((node) => {
+    return canonicalMarkdown(node.markdown) === canonicalMarkdown(operation.desiredMarkdown);
+  });
+  if (!matched) {
     throw new Error('scoped readback verification failed: remote text differs from desired text');
+  }
+  if (operation.kind === 'create' && (!matched.remoteBlockId || !textCreatePlacementMatches(
+    blocks,
+    documentId,
+    matched.remoteBlockId,
+    operation.insertAfterBlockId
+  ))) {
+    throw new Error('scoped readback verification failed: remote text placement differs from desired order');
   }
 }
 
+export function textCreatePlacementMatches(
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  documentId: string,
+  createdBlockId: string,
+  insertAfterBlockId: string
+): boolean {
+  const page = findPageBlock(blocks, documentId);
+  const direct = renderableDirectChildBlocks(blocks, page);
+  const createdIndex = direct.findIndex((block) => block.block_id === createdBlockId);
+  if (createdIndex < 0) return false;
+  if (insertAfterBlockId === page.block_id) return createdIndex === 0;
+  return createdIndex > 0 && direct[createdIndex - 1]?.block_id === insertAfterBlockId;
+}
+
 function verifyCodeOperation(operation: CodeBlockOperation, remote: SemanticDocument): void {
-  if (operation.kind === 'code-delete') return;
+  if (operation.kind === 'code-delete') {
+    if (operation.remoteBlockId && codeNodes(remote).some((code) => code.remoteBlockId === operation.remoteBlockId)) {
+      throw new Error('Code block readback still contains the deleted block ID.');
+    }
+    return;
+  }
   if (operation.kind === 'code-section-reconcile') {
+    if (operation.phase !== 'delete') {
+      const consumed = new Set<string>();
+      for (const desired of operation.desiredCodes) {
+        const matches = codeNodes(remote).filter((candidate) => {
+          return codeManagedEqual(candidate, desired.code) &&
+            sameSectionPath(candidate.locator.sectionPath, desired.code.locator.sectionPath) &&
+            (!candidate.remoteBlockId || !consumed.has(candidate.remoteBlockId)) &&
+            codePlacementMatches(remote, candidate, desired.afterLocator, desired.afterCodeFingerprint);
+        });
+        if (matches.length !== 1) {
+          throw new Error('Code section reconcile placement readback differs from the desired Code block.');
+        }
+        if (desired.code.caption !== undefined && matches[0]!.caption !== desired.code.caption) {
+          throw new Error('Code section reconcile readback did not preserve the remote caption.');
+        }
+        if (matches[0]!.remoteBlockId) consumed.add(matches[0]!.remoteBlockId!);
+      }
+      return;
+    }
     for (const section of operation.sectionPaths) {
       const desired = operation.desiredCodes
         .map(({ code }) => code)
@@ -1210,13 +1491,60 @@ function verifyCodeOperation(operation: CodeBlockOperation, remote: SemanticDocu
     return;
   }
   const desired = operation.desiredCode;
-  const matched = findCodeByLocator(remote, operation.locator) ?? findUniqueCodeByManagedFields(remote, desired);
+  const expectedLocator = operation.kind === 'code-update' ? operation.sourceLocator : operation.locator;
+  const matched = findCodeByLocator(remote, expectedLocator);
   if (!matched || !codeManagedEqual(matched, desired)) {
     throw new Error('Code block readback differs from the desired content or language.');
   }
   if (desired.caption !== undefined && matched.caption !== desired.caption) {
     throw new Error('Code block readback did not preserve the remote caption.');
   }
+  if (operation.kind === 'code-create' || operation.kind === 'code-move') {
+    verifyCodePlacement(remote, matched, operation.afterLocator, operation.afterCodeFingerprint);
+  }
+}
+
+function verifyCodePlacement(
+  document: SemanticDocument,
+  code: SemanticCodeBlock,
+  afterLocator: SemanticLocator | undefined,
+  afterCodeFingerprint?: string
+): void {
+  if (!codePlacementMatches(document, code, afterLocator, afterCodeFingerprint)) {
+    throw new Error('Code block placement readback differs from the desired predecessor.');
+  }
+}
+
+function codePlacementMatches(
+  document: SemanticDocument,
+  code: SemanticCodeBlock,
+  afterLocator: SemanticLocator | undefined,
+  afterCodeFingerprint?: string
+): boolean {
+  const codeIndex = document.nodes.indexOf(code);
+  if (codeIndex < 0) return false;
+  if (!afterLocator) {
+    return codeIndex === 0;
+  }
+  const anchor = afterCodeFingerprint
+    ? (() => {
+      const candidates = codeNodes(document).filter((candidate) => {
+        return candidate.remoteBlockId !== code.remoteBlockId &&
+          codeManagedFingerprint(candidate) === afterCodeFingerprint &&
+          sameSectionPath(candidate.locator.sectionPath, afterLocator.sectionPath);
+      });
+      if (candidates.length === 1) return candidates[0];
+      const locatorCandidate = document.nodes.find((candidate) => {
+        return candidate.remoteBlockId !== code.remoteBlockId && sameLocator(candidate.locator, afterLocator);
+      });
+      return locatorCandidate?.kind === 'code' && codeManagedFingerprint(locatorCandidate) === afterCodeFingerprint
+        ? locatorCandidate
+        : undefined;
+    })()
+    : document.nodes.find((node) => {
+      return node.remoteBlockId !== code.remoteBlockId && sameLocator(node.locator, afterLocator);
+    });
+  return Boolean(anchor && document.nodes.indexOf(anchor) + 1 === codeIndex);
 }
 
 function verifyCalloutOperation(
@@ -1280,14 +1608,24 @@ function locatorKey(locator: SemanticLocator): string {
   return `${locator.kind}:${JSON.stringify(locator.sectionPath)}:${locator.ordinal}`;
 }
 
-async function fetchRemoteSemantic(
+export async function fetchRemoteSemantic(
   adapter: FeishuAdapter,
   documentId: string,
   callouts: CalloutConfig = DEFAULT_CALLOUT_CONFIG
 ): Promise<SemanticDocument> {
   if (!adapter.fetchDocBlocks) throw new Error('Configured Feishu adapter cannot fetch Docx blocks.');
-  const blocks = await adapter.fetchDocBlocks({ doc: documentId });
-  return remoteSemanticDocument(blocks.blocks, documentId, callouts);
+  const blocks = await withRateLimitRetry(() => adapter.fetchDocBlocks!({ doc: documentId }));
+  const codeMetadata = await fetchRemoteCodeMetadata(adapter, documentId, blocks.blocks);
+  return remoteSemanticDocument(blocks.blocks, documentId, callouts, codeMetadata);
+}
+
+async function fetchRemoteCodeMetadata(
+  adapter: FeishuAdapter,
+  documentId: string,
+  blocks: import('../feishu/types.js').FeishuBlock[]
+): Promise<import('../adapters/feishu-adapter.js').RemoteCodeMetadata[]> {
+  if (!blocks.some((block) => block.block_type === 14) || !adapter.fetchDocCodeMetadata) return [];
+  return withRateLimitRetry(() => adapter.fetchDocCodeMetadata!({ doc: documentId }));
 }
 
 async function recordPublishReceiptV2(input: {

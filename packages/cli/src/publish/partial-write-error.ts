@@ -3,7 +3,14 @@ import type { SemanticLocator } from '../semantic/types.js';
 import type { WhiteboardOperation } from '../whiteboards/whiteboard-plan.js';
 
 export type PublishWriteOperationSummary = {
-  kind: ScopedPatchOperation['kind'] | WhiteboardOperation['kind'];
+  kind:
+    | ScopedPatchOperation['kind']
+    | WhiteboardOperation['kind']
+    | 'code-reconcile-create'
+    | 'code-reconcile-update'
+    | 'code-reconcile-move'
+    | 'code-reconcile-delete'
+    | 'code-readback';
   locator?: SemanticLocator;
   assetKey?: string;
 };

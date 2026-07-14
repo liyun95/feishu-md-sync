@@ -116,8 +116,22 @@ function splitLocalSegments(markdown: string, codeBlocks: CodeBlockConfig): Loca
     const tail = markdown.slice(cursor);
     const openingIndex = tail.search(/<(table|div)\b/i);
     const code = findNextFencedCode(markdown, cursor, codeBlocks);
+    const indentedCode = findNextIndentedFence(markdown, cursor);
     const htmlIndex = openingIndex === -1 ? -1 : cursor + openingIndex;
-    if (code && (htmlIndex === -1 || code.start < htmlIndex)) {
+    if (indentedCode &&
+      (!code || indentedCode.start < code.start) &&
+      (htmlIndex === -1 || indentedCode.start < htmlIndex)) {
+      pushMarkdown(segments, markdown.slice(cursor, indentedCode.start));
+      segments.push({
+        kind: 'opaque',
+        content: markdown.slice(indentedCode.start, indentedCode.end),
+        description: 'unsupported indented fenced Code block'
+      });
+      cursor = indentedCode.end;
+      continue;
+    }
+    if (code && (htmlIndex === -1 || code.start < htmlIndex) &&
+      (!indentedCode || code.start < indentedCode.start)) {
       pushMarkdown(segments, markdown.slice(cursor, code.start));
       segments.push({
         kind: 'code',
@@ -166,6 +180,29 @@ function splitLocalSegments(markdown: string, codeBlocks: CodeBlockConfig): Loca
   }
 
   return segments;
+}
+
+function findNextIndentedFence(markdown: string, from: number): { start: number; end: number } | undefined {
+  const pattern = /(^|\n)( {4,})(`{3,}|~{3,})[^\n]*(?:\n|$)/g;
+  pattern.lastIndex = from;
+  const opening = pattern.exec(markdown);
+  if (!opening) return undefined;
+  const start = opening.index + (opening[1] ? 1 : 0);
+  const fence = opening[3]!;
+  const marker = fence[0];
+  let lineStart = pattern.lastIndex;
+  while (lineStart <= markdown.length) {
+    const lineEnd = markdown.indexOf('\n', lineStart);
+    const end = lineEnd === -1 ? markdown.length : lineEnd;
+    const line = markdown.slice(lineStart, end);
+    const closing = line.match(/^ {4,}(`+|~+)[ \t]*$/);
+    if (closing?.[1]?.[0] === marker && closing[1].length >= fence.length) {
+      return { start, end: lineEnd === -1 ? end : lineEnd + 1 };
+    }
+    if (lineEnd === -1) break;
+    lineStart = lineEnd + 1;
+  }
+  return { start, end: markdown.length };
 }
 
 function isCalloutDiv(content: string): boolean {

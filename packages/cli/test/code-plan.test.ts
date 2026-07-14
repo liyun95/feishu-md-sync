@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planCodeBlockChanges } from '../src/code-blocks/code-plan.js';
-import type { SemanticCodeBlock, SemanticDocument, SemanticLocator } from '../src/semantic/types.js';
+import type { SemanticCodeBlock, SemanticDocument, SemanticLocator, SemanticTextBlock } from '../src/semantic/types.js';
 
 describe('Code block planning', () => {
   it('updates locally changed content while preserving the remote caption', () => {
@@ -62,6 +62,47 @@ describe('Code block planning', () => {
     expect(plan.operations.filter((operation) => operation.kind === 'code-move')).toHaveLength(2);
   });
 
+  it('carries Code predecessor identity for same-section reorder anchors', () => {
+    const a = code('Build', 0, 'a\n', 'python');
+    const b = code('Build', 1, 'b\n', 'bash');
+    const localA = code('Build', 1, 'a\n', 'python');
+    const localB = code('Build', 0, 'b\n', 'bash');
+    const remoteA = code('Build', 0, 'a\n', 'python', { remoteBlockId: 'r1' });
+    const remoteB = code('Build', 1, 'b\n', 'bash', { remoteBlockId: 'r2' });
+
+    const moves = planCodeBlockChanges({
+      localBase: document(a, b),
+      localCurrent: document(localB, localA),
+      remoteBase: document(a, b),
+      remoteCurrent: document(remoteA, remoteB),
+      tracked: true
+    }).operations.filter((operation) => operation.kind === 'code-move');
+
+    expect(moves.find((operation) => operation.locator.ordinal === 1)).toMatchObject({
+      afterCodeFingerprint: expect.any(String)
+    });
+  });
+
+  it('detects movement of the only Code block across prose in the same section', () => {
+    const baseCode = code('Build', 0, 'a\n', 'python');
+    const remoteCode = code('Build', 0, 'a\n', 'python', { remoteBlockId: 'r1' });
+    const paragraph = text('Build', 0, 'Paragraph.', 'p1');
+
+    const plan = planCodeBlockChanges({
+      localBase: document(baseCode, paragraph),
+      localCurrent: document(paragraph, baseCode),
+      remoteBase: document(baseCode, paragraph),
+      remoteCurrent: document(remoteCode, paragraph),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'code-move',
+      afterLocator: paragraph.locator
+    }));
+  });
+
   it('plans create and delete without whole-document replacement', () => {
     const base = document(code('Build', 0, 'old\n', 'python'));
     const local = document(code('Build', 0, 'new\n', 'go'), code('Build', 1, 'extra\n', 'bash'));
@@ -80,6 +121,52 @@ describe('Code block planning', () => {
       tracked: true
     });
     expect(deletion.operations).toContainEqual(expect.objectContaining({ kind: 'code-delete' }));
+  });
+
+  it('preserves identity when adopting an untracked reordered Code sequence', () => {
+    const local = document(
+      code('Build', 0, 'b\n', 'bash'),
+      code('Build', 1, 'a\n', 'python')
+    );
+    const remote = document(
+      code('Build', 0, 'a\n', 'python', { remoteBlockId: 'r1', caption: 'A caption' }),
+      code('Build', 1, 'b\n', 'bash', { remoteBlockId: 'r2', caption: 'B caption' })
+    );
+
+    const plan = planCodeBlockChanges({ localCurrent: local, remoteCurrent: remote, tracked: false });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toHaveLength(2);
+    expect(plan.operations.every((operation) => operation.kind === 'code-move')).toBe(true);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'code-move',
+      remoteBlockId: 'r2',
+      desiredCode: expect.objectContaining({ caption: 'B caption' })
+    }));
+  });
+
+  it('reserves an exact untracked match before pairing a reordered edited block', () => {
+    const local = document(
+      code('Build', 0, 'b edited\n', 'bash'),
+      code('Build', 1, 'a\n', 'python')
+    );
+    const remote = document(
+      code('Build', 0, 'a\n', 'python', { remoteBlockId: 'r1', caption: 'A caption' }),
+      code('Build', 1, 'b\n', 'bash', { remoteBlockId: 'r2', caption: 'B caption' })
+    );
+
+    const plan = planCodeBlockChanges({ localCurrent: local, remoteCurrent: remote, tracked: false });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'code-update',
+      remoteBlockId: 'r2',
+      desiredCode: expect.objectContaining({ content: 'b edited\n', caption: 'B caption' })
+    }));
+    expect(plan.operations).not.toContainEqual(expect.objectContaining({
+      kind: 'code-update',
+      remoteBlockId: 'r1'
+    }));
   });
 
   it('uses section reconcile for a moved and rewritten block', () => {
@@ -110,6 +197,30 @@ describe('Code block planning', () => {
       .toContainEqual(expect.objectContaining({ code: 'caption-correspondence-ambiguous' }));
   });
 
+  it('preserves a safely matched captioned block while reconciling another block', () => {
+    const base = document(
+      code('Build', 0, 'rewrite me\n', 'python'),
+      code('Search', 0, 'keep me\n', 'bash')
+    );
+    const local = document(
+      code('Search', 0, 'keep me\n', 'bash'),
+      code('Search', 1, 'rewritten\n', 'go')
+    );
+    const remoteBase = document(
+      code('Build', 0, 'rewrite me\n', 'python'),
+      code('Search', 0, 'keep me\n', 'bash', { caption: 'Keep caption' })
+    );
+    const remote = document(
+      code('Build', 0, 'rewrite me\n', 'python', { remoteBlockId: 'r1' }),
+      code('Search', 0, 'keep me\n', 'bash', { caption: 'Keep caption', remoteBlockId: 'r2' })
+    );
+
+    const plan = planCodeBlockChanges({ localBase: base, localCurrent: local, remoteBase, remoteCurrent: remote, tracked: true });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({ kind: 'code-section-reconcile' }));
+  });
+
   it('turns local parsing issues into first-class blockers', () => {
     const broken = code('Build', 0, 'x\n', 'milvusql');
     broken.issues = [{ code: 'unsupported-code-language', message: 'unsupported Code block language: milvusql' }];
@@ -117,10 +228,31 @@ describe('Code block planning', () => {
     expect(planCodeBlockChanges({ localCurrent: document(broken), remoteCurrent: document(), tracked: false }).blockers)
       .toContainEqual(expect.objectContaining({ code: 'unsupported-code-language' }));
   });
+
+  it('fails closed for unsupported remote Code languages', () => {
+    const remote = code('Build', 0, 'x\n', 'plaintext', { remoteBlockId: 'r1' });
+    remote.issues = [{ code: 'unsupported-code-language', message: 'unsupported remote language' }];
+
+    expect(planCodeBlockChanges({
+      localCurrent: document(code('Build', 0, 'x\n', 'python')),
+      remoteCurrent: document(remote),
+      tracked: false
+    }).blockers).toContainEqual(expect.objectContaining({ code: 'unsupported-code-language' }));
+  });
 });
 
-function document(...codes: SemanticCodeBlock[]): SemanticDocument {
-  return { nodes: codes };
+function document(...nodes: SemanticDocument['nodes']): SemanticDocument {
+  return { nodes };
+}
+
+function text(section: string, ordinal: number, markdown: string, remoteBlockId?: string): SemanticTextBlock {
+  return {
+    kind: 'text',
+    locator: { sectionPath: [section], kind: 'text', ordinal },
+    blockType: 2,
+    markdown,
+    remoteBlockId
+  };
 }
 
 function code(

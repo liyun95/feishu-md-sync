@@ -36,7 +36,7 @@ function renderBlock(block: FeishuBlock, callouts: CalloutConfig): string {
     const code = block.code as { elements?: TextElement[]; style?: { language?: number } } | undefined;
     const lang = codeLanguageForId(code?.style?.language ?? 1);
     const content = renderElements(code?.elements);
-    return `\`\`\`${lang}\n${content}${content.endsWith('\n') ? '' : '\n'}\`\`\``;
+    return `\`\`\`${lang}\n${content}\n\`\`\``;
   }
 
   if (block.block_type === 31) {

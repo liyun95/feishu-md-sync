@@ -65,6 +65,23 @@ describe('runDiff', () => {
     expect(result.status.contentMatchesRemote).toBe(true);
   });
 
+  it('does not report a raw diff for equivalent Code language aliases', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-code-alias-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '```curl\ncurl example.com\n```', 'utf8');
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: diffAdapter('```bash\ncurl example.com\n```')
+    });
+
+    expect(result.hasDiff).toBe(false);
+    expect(result.diff).toBe('');
+  });
+
   it('still returns a diff when status is diverged', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-diff-'));
     const file = join(dir, 'doc.md');

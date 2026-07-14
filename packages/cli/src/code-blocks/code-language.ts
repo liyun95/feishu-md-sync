@@ -38,7 +38,6 @@ const LANGUAGE_IDS = {
   powershell: 47,
   protobuf: 48,
   python: 49,
-  r: 50,
   ruby: 52,
   rust: 53,
   scss: 55,
@@ -67,7 +66,10 @@ const BUILT_IN_ALIASES: Record<string, string> = {
   conf: 'plaintext',
   config: 'plaintext',
   log: 'plaintext',
+  promql: 'plaintext',
   curl: 'bash',
+  rest: 'bash',
+  restful: 'bash',
   sh: 'shell',
   zsh: 'shell',
   cxx: 'cpp',
@@ -88,6 +90,7 @@ const BUILT_IN_ALIASES: Record<string, string> = {
 const LANGUAGE_BY_ID = new Map<number, string>(
   Object.entries(LANGUAGE_IDS).map(([language, id]) => [id, language])
 );
+LANGUAGE_BY_ID.set(50, 'python');
 
 export const DEFAULT_CODE_BLOCK_CONFIG: CodeBlockConfig = {
   languageAliases: {}

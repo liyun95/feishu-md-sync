@@ -43,6 +43,26 @@
 
 The first column must contain a unique, non-empty key for every data row. The CLI reports a row-level diff, but the first implementation writes by replacing that one table block. This requires `--confirm-collaboration-risk` because comments or anchors inside the table may be affected.
 
+## Scoped Code Blocks
+
+Top-level CommonMark-style fenced Code blocks use the normal `publish` workflow:
+
+````markdown
+```python
+client.create_index(...)
+```
+````
+
+Backtick and tilde fences of length three or greater are supported. The first info-string token is the language; additional attributes are blocked in the first version. CRLF is normalized to LF. The one newline required to place the closing fence on its own line is structural; spaces, tabs, indentation, internal blank lines, and any additional trailing blank lines remain significant.
+
+Local Markdown manages Code content and resolved language. Feishu manages the optional caption. Existing captions are preserved during updates and moves; new Code blocks have no caption. A caption-only remote edit does not conflict with local content or language changes.
+
+Tracked Code blocks support creation, content or language updates, deletion, same-section and cross-section movement, and Code-only section reconcile for large rewrites. Content and language use field-level three-way comparison. Different local and remote edits to different fields merge; different edits to the same field block the complete publish.
+
+Pure movement preserves block identity through `block_move_after`. When correspondence is no longer one-to-one, section reconcile reconstructs only Code blocks in the affected heading scopes. It does not rewrite prose, lists, tables, Callouts, images, or Whiteboards. Remote Code drift or an unmatched captioned block blocks reconcile instead of falling back to whole-document replacement.
+
+The first version supports only body-level Code blocks. Fenced Code nested inside Callouts, table cells, or lists is outside this scope.
+
 ## Scoped Callouts
 
 Use canonical local HTML without a presentation title:
@@ -96,6 +116,7 @@ The CLI does not create SVGs, render SVG to PNG, or upload PNG bytes. Ordinary i
 
 - Feishu to Markdown export is best-effort.
 - Unsupported Feishu block types may not round-trip through Markdown.
+- Nested Code blocks are not first-class publish scopes in the first version.
 - Untracked custom Callout titles require workspace configuration for `pull` and target-based `merge`.
 - PNG rendering and upload are outside the Whiteboard sync feature.
 - Paragraph wrapping may not round-trip byte-for-byte.

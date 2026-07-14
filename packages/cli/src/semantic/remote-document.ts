@@ -1,5 +1,6 @@
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
-import { codeLanguageForId } from '../code-blocks/code-language.js';
+import { codeLanguageForId, resolveCodeLanguage } from '../code-blocks/code-language.js';
+import type { RemoteCodeMetadata } from '../adapters/feishu-adapter.js';
 import { calloutTypeForTitle } from '../callouts/callout-presentation.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
@@ -34,17 +35,23 @@ const TEXT_KEY_BY_TYPE: Record<number, string> = {
 export function remoteSemanticDocument(
   blocks: FeishuBlock[],
   documentId: string,
-  callouts: CalloutConfig = DEFAULT_CALLOUT_CONFIG
+  callouts: CalloutConfig = DEFAULT_CALLOUT_CONFIG,
+  codeMetadata: RemoteCodeMetadata[] = []
 ): SemanticDocument {
   const page = findPageBlock(blocks, documentId);
   const direct = renderableDirectChildBlocks(blocks, page);
   const nodes: SemanticNode[] = [];
   const headingPath: string[] = [];
   const ordinals = new Map<string, number>();
+  const codeMetadataById = new Map(codeMetadata.map((metadata) => [metadata.blockId, metadata]));
 
   for (const block of direct) {
     if (block.block_type === 14) {
-      nodes.push(remoteCodeBlock(block, nextLocator(headingPath, 'code', ordinals)));
+      nodes.push(remoteCodeBlock(
+        block,
+        nextLocator(headingPath, 'code', ordinals),
+        block.block_id ? codeMetadataById.get(block.block_id) : undefined
+      ));
       continue;
     }
     if (isSupportedTextBlock(block)) {
@@ -93,32 +100,41 @@ export function remoteSemanticDocument(
   return { nodes };
 }
 
-function remoteCodeBlock(block: FeishuBlock, locator: SemanticLocator): SemanticCodeBlock {
+function remoteCodeBlock(
+  block: FeishuBlock,
+  locator: SemanticLocator,
+  metadata: RemoteCodeMetadata | undefined
+): SemanticCodeBlock {
   const code = asRecord(block.code);
   const style = asRecord(code?.style);
   const elements = Array.isArray(code?.elements) ? code.elements.filter(isTextElement) : [];
   const content = elements.map((element) => element.text_run?.content ?? '').join('');
-  const languageId = numberValue(style?.language) || 1;
   const issues: SemanticCodeBlock['issues'] = [];
   let resolvedLanguage = 'plaintext';
+  let sourceLanguage = metadata?.language ?? '';
   try {
-    resolvedLanguage = codeLanguageForId(languageId);
+    if (metadata?.language) {
+      resolvedLanguage = resolveCodeLanguage(metadata.language).resolvedLanguage;
+    } else {
+      resolvedLanguage = codeLanguageForId(numberValue(style?.language) || 1);
+      sourceLanguage = resolvedLanguage;
+    }
   } catch (error) {
     issues.push({
       code: 'unsupported-code-language',
       message: error instanceof Error ? error.message : String(error)
     });
   }
-  const caption = typeof style?.caption === 'string'
+  const caption = metadata?.caption ?? (typeof style?.caption === 'string'
     ? style.caption
     : typeof code?.caption === 'string'
       ? code.caption
-      : undefined;
+      : undefined);
   return {
     kind: 'code',
     locator,
     content,
-    sourceLanguage: resolvedLanguage,
+    sourceLanguage,
     resolvedLanguage,
     caption,
     remoteBlockId: block.block_id,

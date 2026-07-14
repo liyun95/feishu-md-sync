@@ -31,6 +31,32 @@ describe('runMerge', () => {
     await expect(readFile(file, 'utf8')).resolves.toBe('```curl\ncurl new\n```\n');
   });
 
+  it('preserves an alias on the corresponding Code block after a remote insertion', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-code-'));
+    const file = join(cwd, 'doc.md');
+    const basePath = join(cwd, 'base.md');
+    const remotePath = join(cwd, 'remote.md');
+    const base = '# Build\n\n```curl\ncurl old\n```\n';
+    await writeFile(file, base, 'utf8');
+    await writeFile(basePath, base, 'utf8');
+    await writeFile(remotePath, '# Build\n\n```python\nprint(1)\n```\n\n```bash\ncurl old\n```\n', 'utf8');
+
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      remotePath,
+      basePath,
+      profile: 'none',
+      mode: 'write',
+      adapter: mergeAdapter('')
+    });
+
+    expect(result.state).toBe('merged');
+    const merged = await readFile(file, 'utf8');
+    expect(merged).toContain('```python\nprint(1)\n```');
+    expect(merged).toContain('```curl\ncurl old\n```');
+  });
+
   it('check mode canonicalizes a target Callout and reports a clean remote-only body edit', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-callout-'));
     const file = join(cwd, 'doc.md');

@@ -10,6 +10,12 @@ export type RemoteBlocks = {
   blocks: FeishuBlock[];
 };
 
+export type RemoteCodeMetadata = {
+  blockId: string;
+  language: string;
+  caption?: string;
+};
+
 export type CreatedDocument = {
   documentId: string;
   url?: string;
@@ -29,6 +35,7 @@ export type FeishuAdapter = {
   resolveDocumentId?(input: { target: PublishReceiptTarget }): Promise<string>;
   fetchDocMarkdown(input: { doc: string }): Promise<RemoteMarkdown>;
   fetchDocBlocks?(input: { doc: string }): Promise<RemoteBlocks>;
+  fetchDocCodeMetadata?(input: { doc: string }): Promise<RemoteCodeMetadata[]>;
   replaceDocument(input: { doc: string; markdown: string }): Promise<void>;
   replaceBlock?(input: {
     doc: string;

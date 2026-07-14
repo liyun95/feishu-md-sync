@@ -46,6 +46,7 @@ Area labels identify the affected subsystem. They do not determine the version n
 | `area:release` | npm packaging, publishing, versions, and release automation. |
 | `area:table` | Markdown and Feishu table support. |
 | `area:whiteboard` | SVG assets and Feishu Whiteboard support. |
+| `area:code-block` | Fenced Markdown Code parsing, planning, and scoped Feishu publishing. |
 | `agent` | Agent-facing workflows and integrations. |
 
 Add more area labels only when a stable subsystem needs its own release-history filter.
@@ -101,6 +102,6 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 | Version | Included work | State |
 | --- | --- | --- |
 | `v0.1.0` | New CLI surface, lark-cli onboarding, and initial npm packaging. | Published |
-| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, and editable Whiteboard assets. | Planned |
+| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Planned |
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.

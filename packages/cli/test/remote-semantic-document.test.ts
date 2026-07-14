@@ -233,6 +233,28 @@ describe('remote semantic document', () => {
       remoteBlockId: 'code1'
     }));
   });
+
+  it('uses full-XML Code metadata when the blocks API omits language and caption', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+      {
+        block_id: 'code1',
+        block_type: 14,
+        code: {
+          elements: [{ text_run: { content: 'print(1)', text_element_style: {} } }],
+          style: { wrap: false }
+        }
+      }
+    ], 'doc_token', undefined, [{ blockId: 'code1', language: 'python', caption: 'Example' }]);
+
+    expect(document.nodes[0]).toMatchObject({
+      kind: 'code',
+      content: 'print(1)',
+      sourceLanguage: 'python',
+      resolvedLanguage: 'python',
+      caption: 'Example'
+    });
+  });
 });
 
 function calloutBlocks(title: string): FeishuBlock[] {

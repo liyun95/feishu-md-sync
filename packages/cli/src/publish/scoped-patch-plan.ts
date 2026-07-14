@@ -104,7 +104,13 @@ export function planScopedPatch(input: {
 
   for (const node of input.localCurrent.nodes) {
     if (node.kind !== 'opaque') continue;
-    if (!input.tracked) {
+    if (node.description === 'unsupported indented fenced Code block') {
+      blockers.push({
+        code: 'unsupported-local-change',
+        locator: node.locator,
+        message: `unsupported local change: ${node.description}`
+      });
+    } else if (!input.tracked) {
       warnings.push(`adopting opaque local scope: ${node.description}`);
     } else if (localChanged.has(locatorKey(node.locator))) {
       blockers.push({
@@ -304,7 +310,10 @@ function planTextScopes(input: {
     remoteBlocks: remoteEntries.map((entry) => entry.block),
     desiredBlocks: desiredEntries.map((entry) => entry.block)
   });
-  if (!textPlan.safeToWrite) return { operations: [], fallbackReason: textPlan.fallbackReason };
+  if (!textPlan.safeToWrite) {
+    if (textSequenceEquivalent(remoteEntries, desiredEntries)) return { operations: [] };
+    return { operations: [], fallbackReason: textPlan.fallbackReason };
+  }
 
   const operations = textPlan.operations.flatMap((operation): ScopedPatchOperation[] => {
     if (operation.kind === 'update') {
@@ -356,11 +365,33 @@ function planTextScopes(input: {
   return { operations };
 }
 
+function textSequenceEquivalent(remoteEntries: PlanningEntry[], desiredEntries: PlanningEntry[]): boolean {
+  const remoteText = remoteEntries.filter((entry): entry is PlanningEntry & { node: SemanticTextBlock } => {
+    return entry.node.kind === 'text';
+  });
+  const desiredText = desiredEntries.filter((entry): entry is PlanningEntry & { node: SemanticTextBlock } => {
+    return entry.node.kind === 'text';
+  });
+  return remoteText.length === desiredText.length && remoteText.every((entry, index) => {
+    const desired = desiredText[index];
+    return Boolean(desired &&
+      entry.node.blockType === desired.node.blockType &&
+      locatorKey(entry.node.locator) === locatorKey(desired.node.locator) &&
+      textRepresentationsEquivalent(entry.node.markdown, desired.node.markdown));
+  });
+}
+
 type PlanningEntry = { node: SemanticNode; block: FeishuBlock };
 
 function planningEntries(document: SemanticDocument): PlanningEntry[] {
   return document.nodes.flatMap((node): PlanningEntry[] => {
-    if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout' || node.kind === 'code') return [];
+    if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout') return [];
+    if (node.kind === 'code') {
+      return [{
+        node,
+        block: placeholderBlock('__FMS_CODE_BLOCK__', node.remoteBlockId)
+      }];
+    }
     if (node.kind === 'table') {
       return [{
         node,

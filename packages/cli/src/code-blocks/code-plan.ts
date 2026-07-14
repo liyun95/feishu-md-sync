@@ -17,6 +17,7 @@ export type CodeCreateOperation = {
   kind: 'code-create';
   locator: SemanticLocator;
   afterLocator?: SemanticLocator;
+  afterCodeFingerprint?: string;
   desiredCode: SemanticCodeBlock;
 };
 
@@ -25,6 +26,7 @@ export type CodeMoveOperation = {
   locator: SemanticLocator;
   sourceLocator: SemanticLocator;
   afterLocator?: SemanticLocator;
+  afterCodeFingerprint?: string;
   remoteBlockId?: string;
   desiredCode: SemanticCodeBlock;
 };
@@ -38,9 +40,14 @@ export type CodeDeleteOperation = {
 
 export type CodeSectionReconcileOperation = {
   kind: 'code-section-reconcile';
+  phase?: 'place' | 'delete';
   locator: SemanticLocator;
   sectionPaths: string[][];
-  desiredCodes: Array<{ code: SemanticCodeBlock; afterLocator?: SemanticLocator }>;
+  desiredCodes: Array<{
+    code: SemanticCodeBlock;
+    afterLocator?: SemanticLocator;
+    afterCodeFingerprint?: string;
+  }>;
   remoteCodes: SemanticCodeBlock[];
 };
 
@@ -78,10 +85,9 @@ export function planCodeBlockChanges(input: {
   remoteCurrent: SemanticDocument;
   tracked: boolean;
 }): CodeBlockPlan {
-  const blockers: CodePlanBlocker[] = localCodes(input.localCurrent).flatMap((code) => code.issues.map((issue) => ({
-    ...issue,
-    locator: code.locator
-  })));
+  const blockers: CodePlanBlocker[] = [input.localCurrent, input.remoteCurrent].flatMap((document) => {
+    return localCodes(document).flatMap((code) => code.issues.map((issue) => ({ ...issue, locator: code.locator })));
+  });
   if (blockers.length > 0) return finish([], blockers, []);
   if (!input.tracked || !input.localBase || !input.remoteBase) {
     return planUntracked(input.localCurrent, input.remoteCurrent, blockers);
@@ -109,7 +115,8 @@ export function planCodeBlockChanges(input: {
 
     if (!local) {
       if (!remote) continue;
-      if (!managedEqual(remoteBase, remote) || !samePosition(remoteBase, remote)) {
+      if (!managedEqual(remoteBase, remote) ||
+        !samePlacement(input.remoteBase, remoteBase, input.remoteCurrent, remote)) {
         blockers.push({
           ...blocker('remote-code-conflict', localBase.locator, 'remote Code block changed while local deleted it'),
           field: 'deletion'
@@ -138,9 +145,9 @@ export function planCodeBlockChanges(input: {
       blockers.push(...merged.blockers);
       continue;
     }
-    const localMoved = !samePosition(localBase, local);
-    const remoteMoved = !samePosition(remoteBase, remote);
-    if (localMoved && remoteMoved && !samePosition(local, remote)) {
+    const localMoved = !samePlacement(input.localBase, localBase, input.localCurrent, local);
+    const remoteMoved = !samePlacement(input.remoteBase, remoteBase, input.remoteCurrent, remote);
+    if (localMoved && remoteMoved && !samePlacement(input.localCurrent, local, input.remoteCurrent, remote)) {
       blockers.push({
         ...blocker('remote-code-conflict', local.locator, 'local and remote moved the same Code block differently'),
         field: 'position'
@@ -169,7 +176,7 @@ export function planCodeBlockChanges(input: {
         kind: 'code-move',
         locator: local.locator,
         sourceLocator: remote.locator,
-        afterLocator: previousLocator(input.localCurrent, local),
+        ...previousPlacement(input.localCurrent, local),
         remoteBlockId: remote.remoteBlockId,
         desiredCode
       });
@@ -184,7 +191,7 @@ export function planCodeBlockChanges(input: {
   if (needsReconcile) {
     const sectionPaths = uniqueSections([...unmatchedBase, ...unmatchedLocal]);
     const remoteScopeChanged = sectionPaths.some((section) => {
-      return !scopeEqual(codesInSection(baseRemote, section), codesInSection(currentRemote, section));
+      return !scopeEqual(input.remoteBase!, input.remoteCurrent, section);
     });
     if (remoteScopeChanged) {
       blockers.push(blocker(
@@ -193,12 +200,12 @@ export function planCodeBlockChanges(input: {
         'remote Code scope changed in a section required for reconcile'
       ));
     } else {
-      const desiredFingerprints = new Set(unmatchedLocal.map(managedFingerprint));
-      const captioned = currentRemote.find((code) => {
-        return Boolean(code.caption) &&
-          sectionPaths.some((section) => sameSection(code.locator.sectionPath, section)) &&
-          !desiredFingerprints.has(managedFingerprint(code));
-      });
+      const captioned = unmatchedBase.flatMap((base) => {
+        const baseIndex = baseLocal.indexOf(base);
+        const remoteBase = findByLocator(baseRemote, base.locator) ?? baseRemote[baseIndex];
+        const remote = remoteBase ? remoteMatches.get(remoteBase) : undefined;
+        return remote?.caption ? [remote] : [];
+      })[0];
       if (captioned) {
         blockers.push(blocker(
           'caption-correspondence-ambiguous',
@@ -209,7 +216,7 @@ export function planCodeBlockChanges(input: {
         removeOperationsForSections(operations, sectionPaths);
         const desiredCodes = currentLocal
           .filter((code) => sectionPaths.some((section) => sameSection(code.locator.sectionPath, section)))
-          .map((code) => ({ code, afterLocator: previousLocator(input.localCurrent, code) }));
+          .map((code) => ({ code, ...previousPlacement(input.localCurrent, code) }));
         operations.push({
           kind: 'code-section-reconcile',
           locator: unmatchedLocal[0]!.locator,
@@ -226,7 +233,7 @@ export function planCodeBlockChanges(input: {
       operations.push({
         kind: 'code-create',
         locator: code.locator,
-        afterLocator: previousLocator(input.localCurrent, code),
+        ...previousPlacement(input.localCurrent, code),
         desiredCode: code
       });
     }
@@ -243,26 +250,63 @@ function planUntracked(
   const operations: CodeBlockOperation[] = [];
   const local = localCodes(localDocument);
   const remote = localCodes(remoteDocument);
+  const assignments = new Map<number, SemanticCodeBlock>();
+  const reservedRemote = new Set<SemanticCodeBlock>();
+  for (const [index, code] of local.entries()) {
+    const fingerprint = managedFingerprint(code);
+    const localCount = local.filter((candidate) => managedFingerprint(candidate) === fingerprint).length;
+    const remoteMatches = remote.filter((candidate) => managedFingerprint(candidate) === fingerprint);
+    if (localCount === 1 && remoteMatches.length === 1) {
+      assignments.set(index, remoteMatches[0]!);
+      reservedRemote.add(remoteMatches[0]!);
+    }
+  }
+  const unmatchedLocalIndexes = local.flatMap((_, index) => assignments.has(index) ? [] : [index]);
+  const unmatchedRemote = remote.filter((candidate) => !reservedRemote.has(candidate));
+  if (unmatchedLocalIndexes.length === 1 && unmatchedRemote.length === 1) {
+    assignments.set(unmatchedLocalIndexes[0]!, unmatchedRemote[0]!);
+    reservedRemote.add(unmatchedRemote[0]!);
+  } else if (unmatchedLocalIndexes.length > 0 && unmatchedRemote.length > 0) {
+    for (const index of unmatchedLocalIndexes) {
+      blockers.push(blocker(
+        'code-correspondence-ambiguous',
+        local[index]!.locator,
+        'untracked edited Code blocks cannot be matched safely after exact identity reservation'
+      ));
+    }
+    return finish([], blockers, []);
+  }
   const usedRemote = new Set<SemanticCodeBlock>();
-  for (const code of local) {
-    const match = findByLocator(remote, code.locator) ?? uniqueByFingerprint(remote, managedFingerprint(code));
+  for (const [index, code] of local.entries()) {
+    const match = assignments.get(index);
     if (!match) {
       operations.push({
         kind: 'code-create',
         locator: code.locator,
-        afterLocator: previousLocator(localDocument, code),
+        ...previousPlacement(localDocument, code),
         desiredCode: code
       });
       continue;
     }
     usedRemote.add(match);
-    if (!managedEqual(code, match)) {
+    const desiredCode = { ...code, caption: match.caption, remoteBlockId: match.remoteBlockId };
+    if (!managedEqual(desiredCode, match)) {
       operations.push({
         kind: 'code-update',
         locator: code.locator,
         sourceLocator: match.locator,
         remoteBlockId: match.remoteBlockId,
-        desiredCode: { ...code, caption: match.caption, remoteBlockId: match.remoteBlockId }
+        desiredCode
+      });
+    }
+    if (!samePlacement(remoteDocument, match, localDocument, code)) {
+      operations.push({
+        kind: 'code-move',
+        locator: code.locator,
+        sourceLocator: match.locator,
+        ...previousPlacement(localDocument, code),
+        remoteBlockId: match.remoteBlockId,
+        desiredCode
       });
     }
   }
@@ -365,17 +409,41 @@ function managedEqual(left: SemanticCodeBlock, right: SemanticCodeBlock): boolea
   return left.content === right.content && left.resolvedLanguage === right.resolvedLanguage;
 }
 
-function samePosition(left: SemanticCodeBlock, right: SemanticCodeBlock): boolean {
-  return locatorKey(left.locator) === locatorKey(right.locator);
+function samePlacement(
+  leftDocument: SemanticDocument,
+  left: SemanticCodeBlock,
+  rightDocument: SemanticDocument,
+  right: SemanticCodeBlock
+): boolean {
+  return placementKey(leftDocument, left) === placementKey(rightDocument, right);
+}
+
+function placementKey(document: SemanticDocument, code: SemanticCodeBlock): string {
+  const index = document.nodes.indexOf(code);
+  const previous = index > 0 ? document.nodes[index - 1] : undefined;
+  const predecessor = !previous
+    ? '<start>'
+    : previous.kind === 'code'
+      ? `code:${managedFingerprint(previous)}`
+      : `${previous.kind}:${locatorKey(previous.locator)}`;
+  return `${JSON.stringify(code.locator.sectionPath)}:${predecessor}`;
 }
 
 function locatorKey(locator: SemanticLocator): string {
   return `${locator.kind}:${JSON.stringify(locator.sectionPath)}:${locator.ordinal}`;
 }
 
-function previousLocator(document: SemanticDocument, code: SemanticCodeBlock): SemanticLocator | undefined {
+function previousPlacement(document: SemanticDocument, code: SemanticCodeBlock): {
+  afterLocator?: SemanticLocator;
+  afterCodeFingerprint?: string;
+} {
   const index = document.nodes.indexOf(code);
-  return index > 0 ? document.nodes[index - 1]?.locator : undefined;
+  const previous = index > 0 ? document.nodes[index - 1] : undefined;
+  if (!previous) return {};
+  return {
+    afterLocator: previous.locator,
+    ...(previous.kind === 'code' ? { afterCodeFingerprint: managedFingerprint(previous) } : {})
+  };
 }
 
 function uniqueSections(codes: SemanticCodeBlock[]): string[][] {
@@ -388,18 +456,17 @@ function uniqueSections(codes: SemanticCodeBlock[]): string[][] {
   });
 }
 
-function codesInSection(codes: SemanticCodeBlock[], section: string[]): SemanticCodeBlock[] {
-  return codes.filter((code) => sameSection(code.locator.sectionPath, section));
-}
-
 function sameSection(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((part, index) => part === right[index]);
 }
 
-function scopeEqual(left: SemanticCodeBlock[], right: SemanticCodeBlock[]): boolean {
+function scopeEqual(leftDocument: SemanticDocument, rightDocument: SemanticDocument, section: string[]): boolean {
+  const left = localCodes(leftDocument).filter((code) => sameSection(code.locator.sectionPath, section));
+  const right = localCodes(rightDocument).filter((code) => sameSection(code.locator.sectionPath, section));
   return left.length === right.length && left.every((code, index) => {
     const candidate = right[index];
-    return Boolean(candidate && managedEqual(code, candidate) && samePosition(code, candidate));
+    return Boolean(candidate && managedEqual(code, candidate) &&
+      samePlacement(leftDocument, code, rightDocument, candidate));
   });
 }
 

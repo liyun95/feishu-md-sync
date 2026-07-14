@@ -280,6 +280,136 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     }
   }, 180_000);
 
+  it('round-trips Code content, language, captions, movement, conflicts, and deletion', async () => {
+    const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
+    const targetIdentity = parseFeishuTarget(target);
+    const cwd = new URL('..', import.meta.url).pathname;
+    const adapter = new LarkCliAdapter();
+    const documentId = await adapter.resolveDocumentId({ target: targetIdentity });
+    const dir = await mkdtemp(join(tmpdir(), 'fms-live-code-'));
+    const file = join(dir, 'doc.md');
+
+    try {
+      await runLarkCli([
+        'docs', '+update', '--doc', documentId, '--command', 'overwrite', '--doc-format', 'xml',
+        '--content', '<h1>Build</h1><pre lang="python" caption="Example"><code>print("old")</code></pre>' +
+          '<h1>Search</h1><pre lang="bash"><code>echo old</code></pre>',
+        '--format', 'json'
+      ]);
+      await rm(publishReceiptPath({ cwd, target: targetIdentity }), { force: true });
+
+      const pull = await runCli([
+        'pull', '--target', target, '--output', file, '--profile', 'none', '--format', 'json'
+      ]);
+      assertCliSuccess(pull, 'pull Code baseline');
+      const pulledBaseline = await readFile(file, 'utf8');
+      const baseline = pulledBaseline.replace(/^<title>[^\n]+<\/title>\n\n/, '');
+      await writeFile(file, baseline, 'utf8');
+      expect(baseline).toContain('```python');
+      expect(baseline).toContain('```bash');
+
+      const adopt = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-untracked-remote', '--format', 'json'
+      ]);
+      assertCliSuccess(adopt, 'adopt Code baseline');
+      expect(adopt.stdout).toContain('"strategy": "no-op"');
+      const adopted = await findCodeBlocks(adapter, documentId);
+      expect(adopted).toHaveLength(2);
+      expect(adopted[0]).toMatchObject({ content: 'print("old")', caption: 'Example' });
+
+      await retryRateLimited(() => adapter.replaceBlock({
+        doc: documentId,
+        blockId: adopted[0]!.blockId,
+        content: '<pre lang="go" caption="Example"><code>print("old")</code></pre>',
+        format: 'xml'
+      }));
+      await writeFile(file, baseline.replace('print("old")', 'print("local")'), 'utf8');
+      const disjoint = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(disjoint, 'merge disjoint Code content and language');
+      const afterDisjoint = await findCodeBlocks(adapter, documentId);
+      expect(afterDisjoint[0]).toMatchObject({ content: 'print("local")', language: 'go', caption: 'Example' });
+
+      await retryRateLimited(() => adapter.replaceBlock({
+        doc: documentId,
+        blockId: afterDisjoint[0]!.blockId,
+        content: '<pre lang="go" caption="Example"><code>print("remote conflict")</code></pre>',
+        format: 'xml'
+      }));
+      await writeFile(file, baseline.replace('print("old")', 'print("local conflict")'), 'utf8');
+      const conflict = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--format', 'json'
+      ]);
+      expect(conflict.status).toBe(1);
+      expect(conflict.stdout).toContain('"code": "remote-code-conflict"');
+
+      const conflicted = await findCodeBlocks(adapter, documentId);
+      await retryRateLimited(() => adapter.replaceBlock({
+        doc: documentId,
+        blockId: conflicted[0]!.blockId,
+        content: '<pre lang="go" caption="Example"><code>print("local")</code></pre>',
+        format: 'xml'
+      }));
+      const localAfterDisjoint = baseline.replace('print("old")', 'print("local")');
+      await writeFile(file, localAfterDisjoint, 'utf8');
+      const refresh = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write', '--format', 'json'
+      ]);
+      assertCliSuccess(refresh, 'refresh Code baseline after conflict recovery');
+
+      const beforeMove = await findCodeBlocks(adapter, documentId);
+      const buildFence = '```python\nprint("local")\n```';
+      const searchFence = '```bash\necho old\n```';
+      const movedMarkdown = localAfterDisjoint
+        .replace(buildFence, '__FMS_CODE_A__')
+        .replace(searchFence, buildFence)
+        .replace('__FMS_CODE_A__', searchFence);
+      await writeFile(file, movedMarkdown, 'utf8');
+      const move = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(move, 'move Code blocks across sections');
+      expect(move.stdout).toContain('"kind": "code-move"');
+      const afterMove = await findCodeBlocks(adapter, documentId);
+      expect(afterMove.map((code) => code.blockId).sort()).toEqual(beforeMove.map((code) => code.blockId).sort());
+
+      const rewrittenFence = '```bash\necho rewritten\n```';
+      const reconciledMarkdown = movedMarkdown
+        .replace(`${searchFence}\n\n`, '')
+        .replace(buildFence, `${buildFence}\n\n${rewrittenFence}`);
+      await writeFile(file, reconciledMarkdown, 'utf8');
+      const reconcile = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(reconcile, 'reconcile moved and rewritten Code block');
+      expect(reconcile.stdout).toContain('"kind": "code-section-reconcile"');
+      const afterReconcile = await findCodeBlocks(adapter, documentId);
+      expect(afterReconcile).toHaveLength(2);
+      expect(afterReconcile).toContainEqual(expect.objectContaining({ content: 'echo rewritten' }));
+      expect(afterReconcile).toContainEqual(expect.objectContaining({
+        content: 'print("local")',
+        caption: 'Example'
+      }));
+
+      const deleteMarkdown = reconciledMarkdown.replace(rewrittenFence, '');
+      await writeFile(file, deleteMarkdown, 'utf8');
+      const deletion = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(deletion, 'delete tracked Code block');
+      expect(deletion.stdout).toContain('"kind": "code-delete"');
+      expect(await findCodeBlocks(adapter, documentId)).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
+
   it('creates and tracks an SVG Whiteboard from an existing image block', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
     const targetIdentity = parseFeishuTarget(target);
@@ -561,4 +691,34 @@ function calloutEmoji(block: FeishuBlock): string | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) && 'emoji_id' in value && typeof value.emoji_id === 'string'
     ? value.emoji_id
     : undefined;
+}
+
+async function findCodeBlocks(adapter: LarkCliAdapter, documentId: string): Promise<Array<{
+  blockId: string;
+  content: string;
+  language?: string;
+  caption?: string;
+}>> {
+  const blocks = await adapter.fetchDocBlocks({ doc: documentId });
+  const metadata = new Map((await adapter.fetchDocCodeMetadata({ doc: documentId })).map((code) => [code.blockId, code]));
+  return blocks.blocks.flatMap((block) => {
+    if (block.block_type !== 14 || !block.block_id) return [];
+    const code = block.code;
+    if (!code || typeof code !== 'object' || Array.isArray(code)) return [];
+    const elements = 'elements' in code && Array.isArray(code.elements) ? code.elements : [];
+    const content = elements.flatMap((element) => {
+      if (!element || typeof element !== 'object' || Array.isArray(element) || !('text_run' in element)) return [];
+      const run = element.text_run;
+      return run && typeof run === 'object' && 'content' in run && typeof run.content === 'string'
+        ? [run.content]
+        : [];
+    }).join('');
+    const details = metadata.get(block.block_id);
+    return [{
+      blockId: block.block_id,
+      content,
+      language: details?.language,
+      caption: details?.caption
+    }];
+  });
 }

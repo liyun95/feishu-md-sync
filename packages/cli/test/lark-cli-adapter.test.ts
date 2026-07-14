@@ -177,6 +177,35 @@ describe('LarkCliAdapter', () => {
     ]);
   });
 
+  it('fetches Code language and caption metadata from full XML', async () => {
+    const adapter = new LarkCliAdapter({
+      identity: 'user',
+      exec: async (args) => {
+        expect(args).toEqual([
+          'docs', '+fetch', '--doc', 'doc_token', '--doc-format', 'xml', '--detail', 'full',
+          '--format', 'json', '--as', 'user'
+        ]);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              document: {
+                content: '<pre id="code1" caption="Example&#xA;" lang="python"><code>print(1)</code></pre>' +
+                  '<pre id="code2" caption="&#xA;" lang="bash"><code>echo ok</code></pre>'
+              }
+            }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.fetchDocCodeMetadata({ doc: 'doc_token' })).resolves.toEqual([
+      { blockId: 'code1', language: 'python', caption: 'Example' },
+      { blockId: 'code2', language: 'bash' }
+    ]);
+  });
+
   it('updates and moves blocks through format-aware lark-cli docs +update commands', async () => {
     const calls: Array<{ args: string[]; stdin?: string }> = [];
     const adapter = new LarkCliAdapter({

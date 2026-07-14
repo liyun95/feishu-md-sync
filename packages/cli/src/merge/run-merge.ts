@@ -200,21 +200,56 @@ function preserveLocalCodeAliases(input: {
   const baseCodes = codeNodes(localSemanticDocument(input.base, input.config));
   const localCodes = codeNodes(localSemanticDocument(input.local, input.config));
   const remoteCodes = codeNodes(localSemanticDocument(input.remote, input.config));
-  return rewriteFencedCodeLanguages(input.remote, (match, index) => {
-    const base = baseCodes[index];
-    const local = localCodes[index];
-    const remote = remoteCodes[index];
-    if (base && local && remote &&
+  const localMatches = matchCodeBlocks(baseCodes, localCodes);
+  const remoteMatches = matchCodeBlocks(baseCodes, remoteCodes);
+  const aliasByRemote = new Map<SemanticCodeBlock, string>();
+  for (const base of baseCodes) {
+    const local = localMatches.get(base);
+    const remote = remoteMatches.get(base);
+    if (local && remote &&
       base.resolvedLanguage === local.resolvedLanguage &&
       base.resolvedLanguage === remote.resolvedLanguage) {
-      return local.sourceLanguage;
+      aliasByRemote.set(remote, local.sourceLanguage);
     }
+  }
+  return rewriteFencedCodeLanguages(input.remote, (match, index) => {
+    const remote = remoteCodes[index];
+    const alias = remote ? aliasByRemote.get(remote) : undefined;
+    if (alias !== undefined) return alias;
     return match.resolvedLanguage;
   });
 }
 
 function codeNodes(document: ReturnType<typeof localSemanticDocument>): SemanticCodeBlock[] {
   return document.nodes.filter((node): node is SemanticCodeBlock => node.kind === 'code');
+}
+
+function matchCodeBlocks(
+  baseline: SemanticCodeBlock[],
+  current: SemanticCodeBlock[]
+): Map<SemanticCodeBlock, SemanticCodeBlock> {
+  const result = new Map<SemanticCodeBlock, SemanticCodeBlock>();
+  const used = new Set<SemanticCodeBlock>();
+  for (const base of baseline) {
+    const available = current.filter((code) => !used.has(code));
+    const fingerprintMatches = available.filter((code) => codeFingerprint(code) === codeFingerprint(base));
+    const match = fingerprintMatches.length === 1
+      ? fingerprintMatches[0]
+      : available.find((code) => locatorKey(code.locator) === locatorKey(base.locator));
+    if (match) {
+      result.set(base, match);
+      used.add(match);
+    }
+  }
+  return result;
+}
+
+function codeFingerprint(code: SemanticCodeBlock): string {
+  return `${code.resolvedLanguage}\u0000${code.content}`;
+}
+
+function locatorKey(locator: SemanticCodeBlock['locator']): string {
+  return `${locator.kind}:${JSON.stringify(locator.sectionPath)}:${locator.ordinal}`;
 }
 
 async function resolveBaseMarkdown(input: {

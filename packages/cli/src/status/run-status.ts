@@ -14,14 +14,15 @@ import {
 } from '../receipts/publish-receipt.js';
 import { readRemoteSemanticSnapshot } from '../receipts/semantic-snapshot.js';
 import { applyPublishTransformForProfile } from '../publish/profile-transform.js';
-import { analyzeExistingPublish } from '../publish/run-publish.js';
+import { analyzeExistingPublish, withRateLimitRetry } from '../publish/run-publish.js';
 import type { SemanticLocator } from '../semantic/types.js';
 import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
 import { summarizeCalloutChanges, type CalloutChangeSummary } from '../callouts/callout-summary.js';
 import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
 import { summarizeCodeBlockChanges, type CodeBlockChangeSummary } from '../code-blocks/code-summary.js';
-import type { CodeBlockConfig } from '../code-blocks/code-language.js';
+import { DEFAULT_CODE_BLOCK_CONFIG, type CodeBlockConfig } from '../code-blocks/code-language.js';
+import { canonicalizeFencedCodeLanguages } from '../code-blocks/code-markdown.js';
 
 export type PublishStatusState = 'untracked' | 'clean' | 'local-changed' | 'remote-changed' | 'diverged';
 
@@ -147,24 +148,29 @@ export async function loadPublishStatusContext(input: {
   target: PublishReceiptTarget;
   profile: PublishProfileName;
   callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusContext> {
   const localSource = await readFile(input.sourcePath, 'utf8');
   const transform = applyPublishTransformForProfile(localSource, input.profile);
   const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
-  const remoteRaw = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
+  const codeBlocks = input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG;
+  const remoteRaw = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({ doc: input.target.token }));
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
   let typeHints: ReturnType<typeof calloutTypeHints> | undefined;
   if (/<callout\b/i.test(remoteRaw.markdown) && input.adapter.fetchDocBlocks) {
     const documentId = input.adapter.resolveDocumentId
-      ? await input.adapter.resolveDocumentId({ target: input.target })
+      ? await withRateLimitRetry(() => input.adapter.resolveDocumentId!({ target: input.target }))
       : input.target.token;
-    const blocks = await input.adapter.fetchDocBlocks({ doc: documentId });
+    const blocks = await withRateLimitRetry(() => input.adapter.fetchDocBlocks!({ doc: documentId }));
+    const codeMetadata = blocks.blocks.some((block) => block.block_type === 14) && input.adapter.fetchDocCodeMetadata
+      ? await withRateLimitRetry(() => input.adapter.fetchDocCodeMetadata!({ doc: documentId }))
+      : [];
     const baseline = receipt?.version === 2 || receipt?.version === 3
       ? await readRemoteSemanticSnapshot({ cwd: input.cwd, snapshot: receipt.remoteSemanticSnapshot })
       : undefined;
     const current = applyTrackedCalloutTypes(
-      remoteSemanticDocument(blocks.blocks, documentId, callouts),
+      remoteSemanticDocument(blocks.blocks, documentId, callouts, codeMetadata),
       baseline
     );
     typeHints = calloutTypeHints(current);
@@ -175,6 +181,8 @@ export async function loadPublishStatusContext(input: {
     typeHints
   });
   const remote = { ...remoteRaw, markdown: normalized.markdown };
+  const publishDraftCanonical = canonicalMarkdown(canonicalizeCodeLanguagesForComparison(transform.markdown, codeBlocks));
+  const remoteCanonical = canonicalMarkdown(canonicalizeCodeLanguagesForComparison(remote.markdown, codeBlocks));
 
   return {
     cwd: input.cwd,
@@ -183,21 +191,29 @@ export async function loadPublishStatusContext(input: {
     profile: input.profile,
     localSource,
     publishDraft: transform.markdown,
-    publishDraftCanonical: canonicalMarkdown(transform.markdown),
+    publishDraftCanonical,
     remoteMarkdown: remote.markdown,
-    remoteCanonical: canonicalMarkdown(remote.markdown),
+    remoteCanonical,
     remoteRevision: remote.revision,
     receipt,
     transformWarnings: [...transform.warnings, ...normalized.warnings]
   };
 }
 
+function canonicalizeCodeLanguagesForComparison(markdown: string, config: CodeBlockConfig): string {
+  try {
+    return canonicalizeFencedCodeLanguages(markdown, config);
+  } catch {
+    return markdown;
+  }
+}
+
 export function statusFromContext(context: PublishStatusContext): PublishStatusResult {
   const localSourceHash = hashText(context.localSource);
   const publishDraftHash = hashText(context.publishDraft);
-  const publishDraftCanonicalHash = canonicalMarkdownHash(context.publishDraft);
+  const publishDraftCanonicalHash = canonicalMarkdownHash(context.publishDraftCanonical);
   const remoteSnapshotHash = hashText(context.remoteMarkdown);
-  const remoteCanonicalHash = canonicalMarkdownHash(context.remoteMarkdown);
+  const remoteCanonicalHash = canonicalMarkdownHash(context.remoteCanonical);
   const contentMatchesRemote = publishDraftCanonicalHash === remoteCanonicalHash;
   const receiptPath = publishReceiptPath({ cwd: context.cwd, target: context.target });
 
@@ -231,8 +247,9 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     };
   }
 
-  const localChanged = context.receipt.publishDraftHash !== publishDraftHash;
+  let localChanged = context.receipt.publishDraftHash !== publishDraftHash;
   const remoteChanged = context.receipt.remoteSnapshotHash !== remoteSnapshotHash;
+  if (localChanged && !remoteChanged && contentMatchesRemote) localChanged = false;
   const state = statusStateFor({ localChanged, remoteChanged });
 
   return {

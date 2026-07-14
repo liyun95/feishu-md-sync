@@ -117,7 +117,7 @@ First warning.
     expect(document.nodes).toContainEqual(expect.objectContaining({
       kind: 'code',
       locator: { sectionPath: ['Build'], kind: 'code', ordinal: 0 },
-      content: 'curl localhost\n',
+      content: 'curl localhost',
       sourceLanguage: 'curl',
       resolvedLanguage: 'bash',
       issues: []
@@ -130,11 +130,21 @@ First warning.
     expect(document.nodes.some((node) => node.kind === 'code')).toBe(false);
   });
 
+  it('keeps four-space-indented fences opaque instead of parsing their body as text', () => {
+    const document = localSemanticDocument('1. item\n\n    ```python\n    print(1)\n    ```\n');
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'opaque',
+      description: 'unsupported indented fenced Code block'
+    }));
+    expect(document.nodes.some((node) => node.kind === 'text' && node.markdown.includes('print(1)'))).toBe(false);
+  });
+
   it('does not mistake HTML-looking Code content for a table', () => {
     const document = localSemanticDocument('```html\n<table><tr><td>x</td></tr></table>\n```');
 
     expect(document.nodes).toEqual([
-      expect.objectContaining({ kind: 'code', content: '<table><tr><td>x</td></tr></table>\n' })
+      expect.objectContaining({ kind: 'code', content: '<table><tr><td>x</td></tr></table>' })
     ]);
   });
 });

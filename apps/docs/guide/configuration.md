@@ -81,6 +81,24 @@ New Callouts use `Notes` and `Warning` by default. To use localized presentation
 
 Configured titles are used when creating new Callouts and when recognizing Feishu Markdown exports. Existing tracked remote titles and styles are preserved during body updates, including titles later customized directly in Feishu. English `Notes`, `Note`, and `Warning` remain recognized as fallbacks.
 
+## Code Block Language Aliases
+
+Top-level fenced Code blocks fail closed when their language cannot be mapped to a Feishu Code language. Add workspace aliases when the repository uses domain-specific fence names:
+
+```json
+{
+  "codeBlocks": {
+    "languageAliases": {
+      "curl": "bash",
+      "conf": "plaintext",
+      "log": "plaintext"
+    }
+  }
+}
+```
+
+Workspace aliases are resolved before built-in aliases. Alias chains are supported, but cycles and unknown targets are rejected. `status`, `diff`, and `merge` compare the resolved language; receipt-aware merge retains the local alias spelling when the remote resolved language has not changed. Standalone `pull` emits the canonical Feishu language.
+
 ## Loading Order
 
 The CLI loads `.env` files from:
@@ -130,7 +148,7 @@ If you later add production automation, use separate names such as `LARK_PROD_AP
 
 For normal pull, status, diff, merge, and publish workflows, request these Feishu app API permissions. This list assumes the official Markdown path and write-capable publish workflows.
 
-Scope-aware status, diff, and table publishing read Docx blocks. Wiki targets are resolved to their underlying Docx object before those block operations.
+Scope-aware status, diff, Code block publishing, and table publishing read Docx blocks. Wiki targets are resolved to their underlying Docx object before those block operations.
 
 | Permission name in Feishu | Needed for |
 | --- | --- |

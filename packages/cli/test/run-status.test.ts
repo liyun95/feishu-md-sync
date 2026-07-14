@@ -170,6 +170,76 @@ describe('runStatus', () => {
     expect(result.publishDraftCanonicalHash).toBe(result.remoteCanonicalHash);
   });
 
+  it('treats equivalent Code language aliases as matching content', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-code-alias-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '```curl\ncurl example.com\n```', 'utf8');
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: statusAdapter('```bash\ncurl example.com\n```')
+    });
+
+    expect(result.contentMatchesRemote).toBe(true);
+    expect(result.publishDraftCanonicalHash).toBe(result.remoteCanonicalHash);
+  });
+
+  it('reports an unsupported Code language as a scoped blocker instead of failing status', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-code-blocker-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '```milvusql\nSELECT 1;\n```', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '```python\nprint(1)\n```' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+        {
+          block_id: 'code1',
+          block_type: 14,
+          code: {
+            elements: [{ text_run: { content: 'print(1)', text_element_style: {} } }],
+            style: { language: 49 }
+          }
+        }
+      ] }),
+      replaceDocument: async () => {}
+    };
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter
+    });
+
+    expect(result.codeBlockers).toContainEqual(expect.objectContaining({
+      code: 'unsupported-code-language'
+    }));
+  });
+
+  it('reports clean for a tracked Code language alias spelling-only change', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-code-alias-tracked-'));
+    const file = join(dir, 'doc.md');
+    const baseline = '```bash\ncurl example.com\n```';
+    await writeFile(file, '```curl\ncurl example.com\n```', 'utf8');
+    await seedPublishReceipt(dir, baseline, baseline);
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: statusAdapter(baseline)
+    });
+
+    expect(result.state).toBe('clean');
+    expect(result.localChanged).toBe(false);
+    expect(result.remoteChanged).toBe(false);
+  });
+
   it('reports table scopes for untracked HTML table changes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-status-table-'));
     const file = join(dir, 'doc.md');

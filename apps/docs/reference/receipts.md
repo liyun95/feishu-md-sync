@@ -42,7 +42,9 @@ Each version 3 Whiteboard entry records:
 
 These values let later runs distinguish a local SVG update from a remote Whiteboard edit and verify that updates retain the same remote identity. Whiteboard entries are persisted only after raw-state and document-block readback succeeds.
 
-Callout baselines live in the existing remote semantic snapshot; Callout support does not introduce a new receipt version. The baseline records the Callout type and body children while treating the Feishu title, emoji, colors, and container presentation as remote-managed. This also lets a tracked Callout keep a customized remote title without losing its `note` or `warning` identity.
+Callout and Code block baselines live in the existing remote semantic snapshot; neither feature introduces a new receipt version. The Code baseline records exact content, canonical language, caption, section, and order. The local base snapshot retains the authoring fence alias, while comparisons use the resolved language. Execution-only block IDs are fetched again during writes rather than treated as durable semantic identity.
+
+The Callout baseline records the Callout type and body children while treating the Feishu title, emoji, colors, and container presentation as remote-managed. This also lets a tracked Callout keep a customized remote title without losing its `note` or `warning` identity.
 
 ## Local Base Snapshots
 
@@ -81,7 +83,7 @@ The remote semantic baseline is stored alongside the local base:
 
 Execution-only Feishu block IDs are removed from the general semantic snapshot before it is written. Version 3 stores the Whiteboard block IDs separately because safe Whiteboard updates must retain that exact identity. A legacy version 1 receipt is upgraded only when its recorded remote raw hash still matches the current remote document.
 
-Scoped writes stop after the first failed operation. The CLI does not roll back already verified operations and does not write a new receipt for a partial write. Inspect the remote result and rerun the same publish; the next plan uses the actual remote state and skips Callout children that already converged.
+Scoped writes stop after the first failed operation. The CLI does not roll back already verified operations and does not write a new receipt for a partial write. Inspect the remote result and rerun the same publish; the next plan uses the actual remote state and skips Callout children or Code operations that already converged.
 
 To adopt an existing document that is already synchronized, use a confirmed no-op publish:
 

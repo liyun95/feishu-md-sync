@@ -77,6 +77,8 @@ This protects comments, anchors, block identity, and teammate edits from acciden
 
 Scoped publishing also recognizes reconstructable HTML tables. It reports row additions and updates, combines them with text-block changes, and replaces only the matched table block after `--confirm-collaboration-risk`. Unsupported or conflicting changes produce `strategy: blocked`; `auto` never falls back to whole-document replacement.
 
+Top-level fenced Code blocks are also first-class publish scopes. The CLI preserves Code content exactly, resolves Markdown language aliases to Feishu languages, keeps existing remote captions, and can create, update, delete, or move Code blocks without replacing the document. Content and language are merged as separate managed fields, so disjoint local and remote edits can coexist; overlapping edits fail closed.
+
 Scoped publishing also supports Milvus-style note and warning Callouts:
 
 ```html

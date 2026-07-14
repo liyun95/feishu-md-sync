@@ -120,6 +120,87 @@ describe('scoped patch plan', () => {
     expect(plan.operations.map((operation) => operation.kind)).toEqual(['update', 'code-update']);
     expect(plan.requiresCollaborationRiskConfirmation).toBe(true);
   });
+
+  it('anchors text created after a Code block to that Code block', () => {
+    const localCurrent = document(
+      text('Before.', 0),
+      code('print(1)', 'python'),
+      text('After.', 1)
+    );
+    const remoteCurrent = document(
+      text('Before.', 0, 'p1'),
+      code('print(1)', 'python', 'code1')
+    );
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localCurrent,
+      remoteCurrent,
+      tracked: false
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'create',
+      insertAfterBlockId: 'code1',
+      desiredMarkdown: 'After.'
+    }));
+  });
+
+  it('leaves unchanged headings to the Code reconciler when Code blocks cross them', () => {
+    const localBase = document(
+      heading('Build', 'h1'),
+      code('echo old', 'bash', undefined, ['Build']),
+      heading('Search', 'h2'),
+      code('print("local")', 'python', undefined, ['Search'])
+    );
+    const localCurrent = document(
+      heading('Build', 'h1'),
+      heading('Search', 'h2'),
+      code('print("local")', 'python', undefined, ['Search']),
+      code('echo rewritten', 'bash', undefined, ['Search'], 1)
+    );
+    const remoteBase = document(
+      heading('Build', 'h1'),
+      code('echo old', 'bash', 'code1', ['Build']),
+      heading('Search', 'h2'),
+      code('print("local")', 'python', 'code2', ['Search'])
+    );
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent,
+      remoteBase,
+      remoteCurrent: remoteBase,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({ kind: 'code-section-reconcile' }));
+    expect(plan.operations.some((operation) => operation.kind === 'update' || operation.kind === 'create' || operation.kind === 'delete')).toBe(false);
+  });
+
+  it('fails closed for an untracked indented fenced Code scope', () => {
+    const localCurrent = document({
+      kind: 'opaque',
+      locator: { sectionPath: [], kind: 'opaque', ordinal: 0 },
+      description: 'unsupported indented fenced Code block',
+      fingerprint: 'opaque-code'
+    });
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localCurrent,
+      remoteCurrent: document(),
+      tracked: false
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'unsupported-local-change',
+      message: expect.stringContaining('unsupported indented fenced Code block')
+    }));
+  });
 });
 
 function document(...nodes: SemanticDocument['nodes']): SemanticDocument {
@@ -136,15 +217,31 @@ function text(markdown: string, ordinal: number, remoteBlockId?: string): Semant
   };
 }
 
-function code(content: string, language: string, remoteBlockId?: string): SemanticCodeBlock {
+function code(
+  content: string,
+  language: string,
+  remoteBlockId?: string,
+  sectionPath: string[] = [],
+  ordinal = 0
+): SemanticCodeBlock {
   return {
     kind: 'code',
-    locator: { sectionPath: [], kind: 'code', ordinal: 0 },
+    locator: { sectionPath, kind: 'code', ordinal },
     content,
     sourceLanguage: language,
     resolvedLanguage: language,
     remoteBlockId,
     issues: []
+  };
+}
+
+function heading(title: string, remoteBlockId?: string): SemanticTextBlock {
+  return {
+    kind: 'text',
+    locator: { sectionPath: [title], kind: 'text', ordinal: 0 },
+    blockType: 3,
+    markdown: `# ${title}`,
+    remoteBlockId
   };
 }
 

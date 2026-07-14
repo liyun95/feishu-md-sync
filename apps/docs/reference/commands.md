@@ -22,7 +22,7 @@ Options:
 - `--confirm-remote-whiteboard-overwrite <asset-key>` - allow overwriting one remotely changed Whiteboard after review. Repeat for multiple assets.
 - `--format <format>` - `pretty` or `json`.
 
-`auto` may return `blocked`; it does not select `document-replace` automatically. A block-patch plan can contain ordinary text operations, Callout child operations, and table replacements in the same publish.
+`auto` may return `blocked`; it does not select `document-replace` automatically. A block-patch plan can contain ordinary text operations, Callout child operations, first-class Code operations, and table replacements in the same publish.
 
 `--sync-whiteboards` works only for existing docx or Wiki documents with `auto` or `block-patch`. It is rejected with `--create` and `document-replace`.
 
@@ -162,6 +162,8 @@ callout[note]: Build index [0]
 ```
 
 Child changes in the same Callout are compared independently. A teammate edit to a different child is reported as an unrelated remote change; an edit to the same child blocks publish.
+
+Code blocks are reported under `scoped.codeBlocks` with content, language, movement, and section-reconcile summaries. Pretty output uses forms such as `code[python]: Build index [0]` and `code-section: Search [0] [reconcile]`.
 
 With `--sync-whiteboards`, output includes each asset key, state (`clean`, `local-changed`, `remote-changed`, `conflict`, `untracked`, or `missing`), and recommended action.
 

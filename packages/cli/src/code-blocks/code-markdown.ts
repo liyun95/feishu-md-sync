@@ -35,10 +35,17 @@ export function findNextFencedCode(
   const fence = opening[3]!;
   const fenceMarker = fence[0] as '`' | '~';
   const fenceLength = fence.length;
+  const openingIndent = (opening[2] ?? '').length;
   const openingLineEnd = normalized.indexOf('\n', start);
   const contentStart = openingLineEnd === -1 ? normalized.length : openingLineEnd + 1;
   const info = (opening[4] ?? '').trim();
   const issues: CodeBlockIssue[] = [];
+  if (isNestedListFence(normalized, start, openingIndent)) {
+    issues.push({
+      code: 'unsupported-code-info-string',
+      message: 'Code blocks nested in lists are unsupported'
+    });
+  }
   const infoTokens = info ? info.split(/\s+/) : [];
   if (infoTokens.length > 1 || (fenceMarker === '`' && info.includes('`'))) {
     issues.push({
@@ -69,7 +76,7 @@ export function findNextFencedCode(
         end: lineEnd === -1 ? end : lineEnd + 1,
         fenceMarker,
         fenceLength,
-        content: normalized.slice(contentStart, lineStart),
+        content: stripStructuralFenceNewline(normalized.slice(contentStart, lineStart)),
         sourceLanguage,
         resolvedLanguage,
         issues
@@ -96,7 +103,27 @@ export function findNextFencedCode(
 }
 
 export function renderFencedCode(input: { sourceLanguage: string; content: string }): string {
-  return `\`\`\`${input.sourceLanguage}\n${input.content}${input.content.endsWith('\n') ? '' : '\n'}\`\`\``;
+  const longestRun = Math.max(0, ...[...input.content.matchAll(/`+/g)].map((match) => match[0].length));
+  const fence = '`'.repeat(Math.max(3, longestRun + 1));
+  return `${fence}${input.sourceLanguage}\n${input.content}\n${fence}`;
+}
+
+function stripStructuralFenceNewline(content: string): string {
+  return content.endsWith('\n') ? content.slice(0, -1) : content;
+}
+
+function isNestedListFence(markdown: string, start: number, openingIndent: number): boolean {
+  if (openingIndent === 0) return false;
+  const precedingLines = markdown.slice(0, start).replace(/\n$/, '').split('\n');
+  for (let index = precedingLines.length - 1; index >= 0; index -= 1) {
+    const line = precedingLines[index] ?? '';
+    if (!line.trim()) continue;
+    if (/^\s*(?:[-+*]|\d+[.)])\s+/.test(line)) return true;
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (indent > 0) continue;
+    return false;
+  }
+  return false;
 }
 
 export function rewriteFencedCodeLanguages(
