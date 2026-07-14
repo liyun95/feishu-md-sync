@@ -118,11 +118,11 @@ describe('Callout publish planning', () => {
       ),
       remoteBase: document(
         note(['Note body'], { remote: true, remoteId: 'note-callout' }),
-        note(['Warning body'], { remote: true, type: 'warning', ordinal: 1, remoteId: 'warning-callout' })
+        note(['Warning remote body'], { remote: true, type: 'warning', ordinal: 1, remoteId: 'warning-callout' })
       ),
       remoteCurrent: document(
         note(['Note body'], { remote: true, remoteId: 'note-callout' }),
-        note(['Warning body'], { remote: true, type: 'warning', ordinal: 1, remoteId: 'warning-callout' })
+        note(['Warning remote body'], { remote: true, type: 'warning', ordinal: 1, remoteId: 'warning-callout' })
       ),
       tracked: true
     });

@@ -223,8 +223,25 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
         content: 'Note local edit.',
         format: 'markdown'
       });
+      const restored = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      expect(restored.find((callout) => callout.title === 'Notes')?.body).toEqual([
+        'Note local v1.', 'Note local edit.'
+      ]);
+      expect(restored.find((callout) => callout.title === 'Warning')?.body).toEqual([
+        'Warning remote edit.', 'Warning second.'
+      ]);
       await writeFile(file, calloutMarkdown({
-        warning: ['Warning first.', 'Warning second.']
+        note: ['Note local v1.', 'Note local edit.'],
+        warning: ['Warning remote edit.', 'Warning second.']
+      }), 'utf8');
+      const refresh = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write', '--format', 'json'
+      ]);
+      assertCliSuccess(refresh, 'refresh resolved Callout baseline');
+      expect(refresh.stdout).toContain('"strategy": "no-op"');
+
+      await writeFile(file, calloutMarkdown({
+        warning: ['Warning remote edit.', 'Warning second.']
       }), 'utf8');
       const deletion = await runCli([
         'publish', file, '--target', target, '--profile', 'none', '--write',
