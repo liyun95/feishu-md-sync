@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { LarkCliAdapter } from '../src/adapters/lark-cli-adapter.js';
 import { parseFeishuTarget } from '../src/core/doc-id.js';
+import type { FeishuBlock } from '../src/feishu/types.js';
 import {
   publishReceiptPath,
   readPublishReceipt,
@@ -12,6 +13,7 @@ import {
 } from '../src/receipts/publish-receipt.js';
 
 const runLive = process.env.FEISHU_MD_SYNC_LIVE === '1';
+const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
 
 describe.skipIf(!runLive)('live Feishu publish', () => {
   it('publishes a Zilliz draft to an existing test doc with guarded document replace', async () => {
@@ -103,6 +105,180 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     assertCliSuccess(status, 'status after mixed scoped publish');
     expect(status.stdout).toContain('"state": "clean"');
   }, 60_000);
+
+  it('round-trips tracked Callout bodies while preserving presentation and container identity', async () => {
+    const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
+    const targetIdentity = parseFeishuTarget(target);
+    const cwd = new URL('..', import.meta.url).pathname;
+    const adapter = new LarkCliAdapter();
+    const documentId = await adapter.resolveDocumentId({ target: targetIdentity });
+    const dir = await mkdtemp(join(tmpdir(), 'fms-live-callout-'));
+    const file = join(dir, 'doc.md');
+    const pulled = join(dir, 'pulled.md');
+    const baseline = calloutMarkdown({
+      note: ['Note first.', 'Note second.'],
+      warning: ['Warning first.', 'Warning second.']
+    });
+
+    try {
+      await runLarkCli([
+        'docs',
+        '+update',
+        '--doc',
+        documentId,
+        '--command',
+        'overwrite',
+        '--doc-format',
+        'xml',
+        '--content',
+        '<callout emoji="📘" background-color="light-orange" border-color="orange"><p>Notes</p><p>Note first.</p><p>Note second.</p></callout>' +
+          '<callout emoji="❗" background-color="light-red" border-color="red"><p>Warning</p><p>Warning first.</p><p>Warning second.</p></callout>',
+        '--format',
+        'json'
+      ]);
+      await rm(publishReceiptPath({ cwd, target: targetIdentity }), { force: true });
+      await writeFile(file, baseline, 'utf8');
+
+      const adopt = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-untracked-remote', '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(adopt, 'adopt Callout baseline');
+      expect(adopt.stdout).toContain('"strategy": "no-op"');
+
+      const adopted = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      const note = adopted.find((callout) => callout.title === 'Notes');
+      const warning = adopted.find((callout) => callout.title === 'Warning');
+      expect(note).toMatchObject({ body: ['Note first.', 'Note second.'] });
+      expect(warning).toMatchObject({ body: ['Warning first.', 'Warning second.'] });
+      if (!note || !warning) throw new Error('live Callout setup did not create note and warning containers');
+      expect(note.emoji).toBeTruthy();
+      expect(warning.emoji).toBeTruthy();
+
+      await writeFile(file, calloutMarkdown({
+        note: ['Note local v1.', 'Note second.'],
+        warning: ['Warning first.', 'Warning second.']
+      }), 'utf8');
+      const bodyUpdate = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(bodyUpdate, 'publish Callout body update');
+      const afterBodyUpdate = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      expect(afterBodyUpdate.find((callout) => callout.title === 'Notes')).toMatchObject({
+        blockId: note.blockId,
+        title: 'Notes',
+        emoji: note.emoji,
+        body: ['Note local v1.', 'Note second.']
+      });
+
+      await retryRateLimited(() => adapter.replaceBlock({
+        doc: documentId,
+        blockId: warning.bodyBlockIds[0]!,
+        content: 'Warning remote edit.',
+        format: 'markdown'
+      }));
+      await writeFile(file, calloutMarkdown({
+        note: ['Note local v1.', 'Note local edit.'],
+        warning: ['Warning first.', 'Warning second.']
+      }), 'utf8');
+      const disjoint = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(disjoint, 'publish disjoint Callout edits');
+      const afterDisjoint = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      expect(afterDisjoint.find((callout) => callout.title === 'Notes')).toMatchObject({
+        blockId: note.blockId,
+        emoji: note.emoji,
+        body: ['Note local v1.', 'Note local edit.']
+      });
+      expect(afterDisjoint.find((callout) => callout.title === 'Warning')).toMatchObject({
+        blockId: warning.blockId,
+        emoji: warning.emoji,
+        body: ['Warning remote edit.', 'Warning second.']
+      });
+
+      const currentNote = afterDisjoint.find((callout) => callout.title === 'Notes');
+      if (!currentNote) throw new Error('live Callout note disappeared before conflict test');
+      await retryRateLimited(() => adapter.replaceBlock({
+        doc: documentId,
+        blockId: currentNote.bodyBlockIds[1]!,
+        content: 'Note remote conflict.',
+        format: 'markdown'
+      }));
+      await writeFile(file, calloutMarkdown({
+        note: ['Note local v1.', 'Note local conflict.'],
+        warning: ['Warning first.', 'Warning second.']
+      }), 'utf8');
+      const conflict = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--format', 'json'
+      ]);
+      expect(conflict.status).toBe(1);
+      expect(conflict.stdout).toContain('"strategy": "blocked"');
+      expect(conflict.stdout).toContain('"code": "remote-callout-conflict"');
+
+      const conflictedNote = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      })).find((callout) => callout.title === 'Notes');
+      if (!conflictedNote) throw new Error('live Callout note disappeared before conflict recovery');
+      await retryRateLimited(() => adapter.replaceBlock({
+        doc: documentId,
+        blockId: conflictedNote.bodyBlockIds[1]!,
+        content: 'Note local edit.',
+        format: 'markdown'
+      }));
+      const restored = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      }));
+      expect(restored.find((callout) => callout.title === 'Notes')?.body).toEqual([
+        'Note local v1.', 'Note local edit.'
+      ]);
+      expect(restored.find((callout) => callout.title === 'Warning')?.body).toEqual([
+        'Warning remote edit.', 'Warning second.'
+      ]);
+      await writeFile(file, calloutMarkdown({
+        note: ['Note local v1.', 'Note local edit.'],
+        warning: ['Warning remote edit.', 'Warning second.']
+      }), 'utf8');
+      const refresh = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write', '--format', 'json'
+      ]);
+      assertCliSuccess(refresh, 'refresh resolved Callout baseline');
+      expect(refresh.stdout).toContain('"strategy": "no-op"');
+
+      await writeFile(file, calloutMarkdown({
+        warning: ['Warning remote edit.', 'Warning second.']
+      }), 'utf8');
+      const deletion = await runCli([
+        'publish', file, '--target', target, '--profile', 'none', '--write',
+        '--confirm-collaboration-risk', '--format', 'json'
+      ]);
+      assertCliSuccess(deletion, 'delete tracked Callout');
+      expect(deletion.stdout).toContain('"kind": "callout-delete"');
+      const afterDeletion = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      expect(afterDeletion.some((callout) => callout.blockId === note.blockId)).toBe(false);
+      expect(afterDeletion).toHaveLength(1);
+      expect(afterDeletion[0]).toMatchObject({
+        blockId: warning.blockId,
+        title: 'Warning',
+        emoji: warning.emoji,
+        body: ['Warning remote edit.', 'Warning second.']
+      });
+
+      const pull = await runCli([
+        'pull', '--target', target, '--output', pulled, '--profile', 'none', '--format', 'json'
+      ]);
+      assertCliSuccess(pull, 'pull canonical Callout');
+      const pulledMarkdown = await readFile(pulled, 'utf8');
+      expect(pulledMarkdown).toContain('<div class="alert warning">');
+      expect(pulledMarkdown).toContain('Warning remote edit.');
+      expect(pulledMarkdown).not.toContain('\nWarning\n');
+      expect(pulledMarkdown).not.toContain('<callout');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
 
   it('creates and tracks an SVG Whiteboard from an existing image block', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
@@ -230,7 +406,16 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function runCli(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
+async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await runCliOnce(args);
+    const delayMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+    if (delayMs === undefined || !isRateLimited(`${result.stdout}\n${result.stderr}`)) return result;
+    await delay(delayMs);
+  }
+}
+
+function runCliOnce(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
   return new Promise((resolve) => {
     execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
       cwd: new URL('..', import.meta.url),
@@ -244,6 +429,26 @@ function runCli(args: string[]): Promise<{ stdout: string; stderr: string; statu
       });
     });
   });
+}
+
+async function retryRateLimited<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isRateLimited(error instanceof Error ? error.message : String(error))) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isRateLimited(value: string): boolean {
+  return /(?:HTTP\s+429|\b429\b.*(?:rate|limit|response))/i.test(value);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function runLarkCli(args: string[], options: { cwd?: string } = {}): Promise<void> {
@@ -298,4 +503,62 @@ async function readWhiteboardReceipt(input: {
   const receipt = await readPublishReceipt(input);
   if (receipt?.version !== 3) throw new Error('expected a version 3 publish receipt with Whiteboard state');
   return receipt;
+}
+
+function calloutMarkdown(input: {
+  note?: string[];
+  warning?: string[];
+}): string {
+  return [
+    input.note ? `<div class="alert note">\n\n${input.note.join('\n\n')}\n\n</div>` : undefined,
+    input.warning ? `<div class="alert warning">\n\n${input.warning.join('\n\n')}\n\n</div>` : undefined
+  ].filter((value): value is string => value !== undefined).join('\n\n');
+}
+
+function findCallouts(blocks: Awaited<ReturnType<LarkCliAdapter['fetchDocBlocks']>>): Array<{
+  blockId: string;
+  title: string;
+  emoji?: string;
+  body: string[];
+  bodyBlockIds: string[];
+}> {
+  const byId = new Map(blocks.blocks.flatMap((block) => block.block_id ? [[block.block_id, block] as const] : []));
+  return blocks.blocks.flatMap((block) => {
+    if (block.block_type !== 19 || !block.block_id) return [];
+    const children = (Array.isArray(block.children) ? block.children : []).flatMap((child) => {
+      const resolved = typeof child === 'string' ? byId.get(child) : child;
+      return resolved && typeof resolved === 'object' ? [resolved as FeishuBlock] : [];
+    });
+    const title = blockText(children[0]);
+    const bodyBlocks = children.slice(1);
+    return [{
+      blockId: block.block_id,
+      title,
+      emoji: calloutEmoji(block),
+      body: bodyBlocks.map(blockText),
+      bodyBlockIds: bodyBlocks.flatMap((child) => child.block_id ? [child.block_id] : [])
+    }];
+  });
+}
+
+function blockText(block: FeishuBlock | undefined): string {
+  if (!block) return '';
+  const key = block.block_type === 2 ? 'text' : `heading${block.block_type - 2}`;
+  const value = block[key];
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('elements' in value)) return '';
+  const elements = Array.isArray(value.elements) ? value.elements : [];
+  return elements.flatMap((element) => {
+    if (!element || typeof element !== 'object' || Array.isArray(element) || !('text_run' in element)) return [];
+    const run = element.text_run;
+    return run && typeof run === 'object' && 'content' in run && typeof run.content === 'string'
+      ? [run.content]
+      : [];
+  }).join('');
+}
+
+function calloutEmoji(block: FeishuBlock): string | undefined {
+  const value = block.callout;
+  return value && typeof value === 'object' && !Array.isArray(value) && 'emoji_id' in value && typeof value.emoji_id === 'string'
+    ? value.emoji_id
+    : undefined;
 }

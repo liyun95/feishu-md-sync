@@ -44,6 +44,11 @@ function prettyLines(value: unknown): string[] | undefined {
         lines.push(`whiteboard[${String(whiteboard.state)}]: ${String(whiteboard.assetKey)} - ${String(whiteboard.action)}`);
       }
     }
+    appendCalloutSummaryLines(lines, record.callouts);
+    for (const value of Array.isArray(record.calloutBlockers) ? record.calloutBlockers : []) {
+      const blocker = asRecord(value);
+      if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.message)}`);
+    }
     for (const value of Array.isArray(record.whiteboardBlockers) ? record.whiteboardBlockers : []) {
       const blocker = asRecord(value);
       if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.assetKey)} - ${String(blocker.message)}`);
@@ -65,6 +70,10 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     if (!operation) continue;
     const locator = asRecord(operation.locator);
     const label = locatorLabel(locator);
+    if (String(operation.kind).startsWith('callout-')) {
+      lines.push(`${String(operation.kind)}: ${label}`);
+      continue;
+    }
     if (operation.kind === 'table-replace') {
       lines.push(`table: ${label}`);
       const diff = asRecord(operation.diff);
@@ -105,6 +114,31 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     lines.push(`requires: --confirm-remote-whiteboard-overwrite ${String(assetKey)}`);
   }
   return lines;
+}
+
+function appendCalloutSummaryLines(lines: string[], value: unknown): void {
+  for (const item of Array.isArray(value) ? value : []) {
+    const callout = asRecord(item);
+    const locator = asRecord(callout?.locator);
+    if (!callout || !locator) continue;
+    lines.push(`callout[${String(callout.type)}]: ${locatorLabel(locator)}`);
+    for (const childValue of Array.isArray(callout.childChanges) ? callout.childChanges : []) {
+      const child = asRecord(childValue);
+      if (!child) continue;
+      const action = String(child.action);
+      const marker = action === 'create' ? '+' : action === 'delete' ? '-' : '~';
+      const label = blockTypeLabel(typeof child.blockType === 'number' ? child.blockType : undefined);
+      lines.push(`  ${marker} ${label} ${Number(child.ordinal) + 1}`);
+    }
+  }
+}
+
+function blockTypeLabel(blockType: number | undefined): string {
+  if (blockType === 2) return 'paragraph';
+  if (blockType && blockType >= 3 && blockType <= 8) return `heading${blockType - 2}`;
+  if (blockType === 12) return 'bullet';
+  if (blockType === 13) return 'ordered';
+  return 'block';
 }
 
 function locatorLabel(locator: Record<string, unknown> | undefined): string {

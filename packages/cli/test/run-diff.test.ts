@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
-import { hashText, writePublishReceipt } from '../src/receipts/publish-receipt.js';
-import { runDiff } from '../src/diff/run-diff.js';
+import { hashText, writeLocalBaseSnapshot, writePublishReceipt } from '../src/receipts/publish-receipt.js';
+import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
+import { diffSummaryLines, runDiff } from '../src/diff/run-diff.js';
 
 describe('runDiff', () => {
   it('reports no diff when canonical publish draft and remote match', async () => {
@@ -116,6 +117,69 @@ describe('runDiff', () => {
     })]);
   });
 
+  it('reports Callout changes as first-class scoped diffs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-callout-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '<div class="alert note">\n\nLocal body.\n\n</div>', 'utf8');
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: calloutAdapter('Remote body.')
+    });
+
+    expect(result.scoped.callouts).toEqual([{
+      type: 'note',
+      action: 'update',
+      locator: { sectionPath: [], kind: 'callout', ordinal: 0 },
+      childChanges: [{ action: 'update', ordinal: 0, blockType: 2 }]
+    }]);
+    expect(diffSummaryLines(result)).toContain('callout[note]: <root> [0]');
+    expect(diffSummaryLines(result)).toContain('  ~ paragraph 1');
+  });
+
+  it('uses the tracked Callout type for diffs when the remote title is customized', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-callout-title-'));
+    const file = join(dir, 'doc.md');
+    const base = '<div class="alert note">\n\nBase body.\n\n</div>';
+    await writeFile(file, '<div class="alert note">\n\nLocal body.\n\n</div>', 'utf8');
+    await seedTrackedCalloutReceipt(dir, base);
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: '<callout emoji="📘">\nTeam convention\nBase body.\n</callout>',
+        revision: '2'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+        { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+        textBlock('title1', 'Team convention'),
+        textBlock('body1', 'Base body.')
+      ] }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter
+    });
+
+    expect(result.status.state).toBe('local-changed');
+    expect(result.scoped.callouts).toEqual([expect.objectContaining({
+      type: 'note',
+      action: 'update',
+      childChanges: [{ action: 'update', ordinal: 0, blockType: 2 }]
+    })]);
+    expect(result.diff).toContain('-Base body.');
+    expect(result.diff).toContain('+Local body.');
+    expect(result.diff).not.toContain('Team convention');
+  });
+
   it('reports an asset-level Whiteboard creation diff', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-diff-whiteboard-'));
     const assets = join(dir, 'assets');
@@ -218,6 +282,28 @@ function diffAdapter(markdown: string): FeishuAdapter {
   };
 }
 
+function calloutAdapter(body: string): FeishuAdapter {
+  return {
+    fetchDocMarkdown: async () => ({ markdown: `<div class="alert note">\n\n${body}\n\n</div>` }),
+    fetchDocBlocks: async () => ({ blocks: [
+      { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+      { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+      textBlock('title1', 'Notes'),
+      textBlock('body1', body)
+    ] }),
+    replaceDocument: async () => {},
+    createDocument: async () => ({ documentId: 'created' })
+  };
+}
+
+function textBlock(blockId: string, content: string) {
+  return {
+    block_id: blockId,
+    block_type: 2,
+    text: { elements: [{ text_run: { content, text_element_style: {} } }] }
+  };
+}
+
 function tableAdapter(rows: Array<[string, string]>): FeishuAdapter {
   return {
     fetchDocMarkdown: async () => ({ markdown: '| Parameter | Description |\n|-|-|\n| `ef` | Accuracy trade-off. |' }),
@@ -252,4 +338,39 @@ function tableBlocks(rows: Array<[string, string]>) {
     });
   });
   return blocks as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+}
+
+async function seedTrackedCalloutReceipt(cwd: string, markdown: string): Promise<void> {
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd, target, markdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd,
+    target,
+    document: {
+      nodes: [{
+        kind: 'callout',
+        locator: { sectionPath: [], kind: 'callout', ordinal: 0 },
+        calloutType: 'note',
+        title: { markdown: 'Notes', remoteBlockId: 'title1' },
+        children: [{ ordinal: 0, blockType: 2, markdown: 'Base body.', remoteBlockId: 'body1' }],
+        remoteBlockId: 'callout1',
+        unsupported: []
+      }]
+    }
+  });
+  await writePublishReceipt({
+    cwd,
+    receipt: {
+      version: 2,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(markdown),
+      publishDraftHash: hashText(markdown),
+      remoteSnapshotHash: hashText(markdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      updatedAt: '2026-07-14T00:00:00.000Z'
+    }
+  });
 }

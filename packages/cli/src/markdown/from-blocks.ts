@@ -1,4 +1,7 @@
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
+import { calloutTypeForTitle } from '../callouts/callout-presentation.js';
+import { renderCanonicalCallout } from '../callouts/callout-markdown.js';
+import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { normalizeMarkdownLinkUrl } from './links.js';
 
 const LANGUAGE_BY_ID: Record<number, string> = {
@@ -16,12 +19,15 @@ const LANGUAGE_BY_ID: Record<number, string> = {
   67: 'yaml'
 };
 
-export function feishuBlocksToMarkdown(blocks: FeishuBlock[]): string {
-  const parts = blocks.map(renderBlock).filter((part) => part.trim() !== '');
+export function feishuBlocksToMarkdown(
+  blocks: FeishuBlock[],
+  callouts: CalloutConfig = DEFAULT_CALLOUT_CONFIG
+): string {
+  const parts = blocks.map((block) => renderBlock(block, callouts)).filter((part) => part.trim() !== '');
   return parts.length > 0 ? `${parts.join('\n\n')}\n` : '';
 }
 
-function renderBlock(block: FeishuBlock): string {
+function renderBlock(block: FeishuBlock, callouts: CalloutConfig): string {
   if (block.block_type >= 3 && block.block_type <= 8) {
     const level = block.block_type - 2;
     const heading = block[`heading${level}`] as { elements?: TextElement[] } | undefined;
@@ -47,23 +53,23 @@ function renderBlock(block: FeishuBlock): string {
   }
 
   if (block.block_type === 31) {
-    return renderTable(block);
+    return renderTable(block, callouts);
   }
 
   if (block.block_type === 19) {
-    return renderCallout(block);
+    return renderCallout(block, callouts);
   }
 
   if (block.block_type === 49) {
-    return renderSourceSynced(block);
+    return renderSourceSynced(block, callouts);
   }
 
   return `<!-- unsupported Feishu block_type ${block.block_type} omitted by pull -->`;
 }
 
-function renderSourceSynced(block: FeishuBlock): string {
+function renderSourceSynced(block: FeishuBlock, callouts: CalloutConfig): string {
   const children = Array.isArray(block.children) ? block.children.filter(isBlock) : [];
-  return children.map(renderBlock).filter((part) => part.trim() !== '').join('\n\n');
+  return children.map((child) => renderBlock(child, callouts)).filter((part) => part.trim() !== '').join('\n\n');
 }
 
 function renderElements(elements: TextElement[] = []): string {
@@ -76,6 +82,7 @@ function renderElements(elements: TextElement[] = []): string {
     const style = run.text_element_style ?? {};
     let text = run.content;
     if (style.inline_code) text = `\`${text}\``;
+    if (style.italic) text = `*${text}*`;
     if (style.bold) text = `**${text}**`;
     if (style.link?.url) text = `[${text}](${normalizeMarkdownLinkUrl(style.link.url)})`;
     return text;
@@ -93,7 +100,7 @@ function renderNonTextElement(element: TextElement): string {
   return '';
 }
 
-function renderTable(block: FeishuBlock): string {
+function renderTable(block: FeishuBlock, callouts: CalloutConfig): string {
   const table = block.table as { property?: { row_size?: number; column_size?: number }; cells?: FeishuBlock[] } | undefined;
   const rows = table?.property?.row_size ?? 0;
   const cols = table?.property?.column_size ?? 0;
@@ -101,25 +108,19 @@ function renderTable(block: FeishuBlock): string {
   if (rows === 0 || cols === 0) return '';
 
   const renderedRows = Array.from({ length: rows }, (_, row) => {
-    const values = Array.from({ length: cols }, (_, col) => renderBlock(cells[row * cols + col] ?? { block_type: 2 }));
+    const values = Array.from({ length: cols }, (_, col) => renderBlock(cells[row * cols + col] ?? { block_type: 2 }, callouts));
     return `| ${values.join(' | ')} |`;
   });
   const separator = `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`;
   return [renderedRows[0], separator, ...renderedRows.slice(1)].join('\n');
 }
 
-function renderCallout(block: FeishuBlock): string {
+function renderCallout(block: FeishuBlock, callouts: CalloutConfig): string {
   const children = Array.isArray(block.children) ? block.children.filter(isBlock) : [];
-  const rendered = children.map(renderBlock).filter((part) => part.trim() !== '');
-  const body = dropCalloutTitle(rendered).join('\n\n');
-  return body ? `:::note\n${body}\n:::` : ':::note\n:::';
-}
-
-function dropCalloutTitle(rendered: string[]): string[] {
-  if (rendered.length > 1 && /^notes?$/i.test(rendered[0]?.trim() ?? '')) {
-    return rendered.slice(1);
-  }
-  return rendered;
+  const rendered = children.map((child) => renderBlock(child, callouts)).filter((part) => part.trim() !== '');
+  const type = calloutTypeForTitle(rendered[0] ?? '', callouts);
+  const body = (type ? rendered.slice(1) : rendered).join('\n\n');
+  return renderCanonicalCallout(type ?? 'note', body);
 }
 
 function isBlock(value: unknown): value is FeishuBlock {

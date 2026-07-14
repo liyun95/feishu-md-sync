@@ -10,6 +10,12 @@ import type {
   SemanticTextBlock
 } from '../semantic/types.js';
 import { planPublishBlockPatch } from './block-patch-plan.js';
+import {
+  calloutContentHash,
+  planCalloutChanges,
+  type CalloutOperation,
+  type CalloutPlanBlocker
+} from './callout-plan.js';
 import { diffCorrespondingTable, findCorrespondingRemoteTable, tableIdentity, type TableDiff } from './table-diff.js';
 
 export type ScopedTextUpdateOperation = {
@@ -46,10 +52,15 @@ export type ScopedPatchOperation =
   | ScopedTextUpdateOperation
   | ScopedTextCreateOperation
   | ScopedTextDeleteOperation
-  | TableReplaceOperation;
+  | TableReplaceOperation
+  | CalloutOperation;
 
 export type ScopedPatchBlocker = {
-  code: 'correspondence-ambiguous' | 'unsupported-local-change' | 'remote-scope-conflict';
+  code:
+    | 'correspondence-ambiguous'
+    | 'unsupported-local-change'
+    | 'remote-scope-conflict'
+    | CalloutPlanBlocker['code'];
   locator?: SemanticLocator;
   message: string;
 };
@@ -118,7 +129,13 @@ export function planScopedPatch(input: {
   }
 
   const textPlanning = planTextScopes({ ...input, localChanged, remoteChanged, blockers, warnings });
-  const operations: ScopedPatchOperation[] = [...textPlanning.operations];
+  const calloutPlanning = planCalloutChanges(input);
+  blockers.push(...calloutPlanning.blockers);
+  warnings.push(...calloutPlanning.warnings);
+  const operations: ScopedPatchOperation[] = [
+    ...textPlanning.operations,
+    ...calloutPlanning.operations
+  ];
   if (textPlanning.fallbackReason) {
     blockers.push({
       code: 'unsupported-local-change',
@@ -203,14 +220,16 @@ export function planScopedPatch(input: {
     operations,
     blockers,
     warnings: uniqueWarnings,
-    requiresCollaborationRiskConfirmation: operations.some((operation) => {
+    requiresCollaborationRiskConfirmation: calloutPlanning.requiresCollaborationRiskConfirmation || operations.some((operation) => {
       return operation.kind === 'update' || operation.kind === 'delete' || operation.kind === 'table-replace';
     }),
     scopeSummary: {
       localChanged: locatorsForKeys(input.localCurrent, localChanged),
       remoteChanged: locatorsForKeys(input.remoteCurrent, remoteChanged),
       overlappingConflicts: blockers.flatMap((blocker) => {
-        return blocker.code === 'remote-scope-conflict' && blocker.locator ? [blocker.locator] : [];
+        return (blocker.code === 'remote-scope-conflict' || blocker.code === 'remote-callout-conflict') && blocker.locator
+          ? [blocker.locator]
+          : [];
       }),
       unrelatedRemoteChanges: locatorsForKeys(
         input.remoteCurrent,
@@ -328,7 +347,7 @@ type PlanningEntry = { node: SemanticNode; block: FeishuBlock };
 
 function planningEntries(document: SemanticDocument): PlanningEntry[] {
   return document.nodes.flatMap((node): PlanningEntry[] => {
-    if (node.kind === 'opaque' || node.kind === 'asset') return [];
+    if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout') return [];
     if (node.kind === 'table') {
       return [{
         node,
@@ -387,6 +406,7 @@ function findTableByIdentity(document: SemanticDocument | undefined, source: Sem
 }
 
 function semanticNodeHash(node: SemanticNode): string {
+  if (node.kind === 'callout') return calloutContentHash(node);
   return semanticHash(stripExecutionMetadata(node));
 }
 

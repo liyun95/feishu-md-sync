@@ -13,6 +13,12 @@ import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
 import type { TableRowAddition, TableRowUpdate } from '../publish/table-diff.js';
 import type { SemanticLocator } from '../semantic/types.js';
 import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
+import type { CalloutConfig } from '../config/sync-config.js';
+import {
+  calloutBlockTypeLabel,
+  summarizeCalloutChanges,
+  type CalloutChangeSummary
+} from '../callouts/callout-summary.js';
 
 export type RunDiffResult = {
   mode: 'read-only';
@@ -25,6 +31,7 @@ export type RunDiffResult = {
   diff: string;
   scoped: {
     text: Array<{ kind: 'update' | 'create' | 'delete'; locator: SemanticLocator; desiredMarkdown?: string }>;
+    callouts: CalloutChangeSummary[];
     tables: Array<{
       locator: SemanticLocator;
       additions: TableRowAddition[];
@@ -43,12 +50,17 @@ export async function runDiff(input: {
   target: PublishReceiptTarget;
   profile: PublishProfileName;
   syncWhiteboards?: boolean;
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<RunDiffResult> {
   const context = await loadPublishStatusContext(input);
   let status = statusFromContext(context);
-  let scoped: RunDiffResult['scoped'] = { text: [], tables: [], whiteboards: [], blockers: [], warnings: [] };
-  if (input.syncWhiteboards || context.localSource.includes('<table') || context.receipt?.version === 2 || context.receipt?.version === 3) {
+  let scoped: RunDiffResult['scoped'] = { text: [], callouts: [], tables: [], whiteboards: [], blockers: [], warnings: [] };
+  if (input.syncWhiteboards ||
+    context.localSource.includes('<table') ||
+    /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
+    context.receipt?.version === 2 ||
+    context.receipt?.version === 3) {
     try {
       const analysis = await analyzeExistingPublish({
         cwd: input.cwd,
@@ -58,7 +70,8 @@ export async function runDiff(input: {
         strategy: 'auto',
         adapter: input.adapter,
         localSource: context.localSource,
-        syncWhiteboards: input.syncWhiteboards
+        syncWhiteboards: input.syncWhiteboards,
+        callouts: input.callouts
       });
       const patch = analysis.plan.scopedPatch;
       const whiteboardPlan = analysis.plan.whiteboards;
@@ -70,12 +83,17 @@ export async function runDiff(input: {
       if (patch) status = { ...status, scopeSummary: patch.scopeSummary };
       scoped = {
         text: (patch?.operations ?? []).flatMap((operation) => {
-          if (operation.kind === 'table-replace') return [];
+          if (operation.kind !== 'update' && operation.kind !== 'create' && operation.kind !== 'delete') return [];
           return [{
             kind: operation.kind,
             locator: operation.locator,
             ...('desiredMarkdown' in operation ? { desiredMarkdown: operation.desiredMarkdown } : {})
           }];
+        }),
+        callouts: summarizeCalloutChanges({
+          operations: patch?.operations ?? [],
+          local: analysis.localCurrent,
+          remote: analysis.remoteCurrent
         }),
         tables: (patch?.operations ?? []).flatMap((operation) => operation.kind === 'table-replace' ? [{
           locator: operation.locator,
@@ -91,7 +109,7 @@ export async function runDiff(input: {
       // Preserve the raw Markdown diff when scope-aware analysis is unavailable.
     }
   }
-  const hasScopedDiff = scoped.text.length > 0 || scoped.tables.length > 0 || scoped.whiteboards.some((asset) => asset.state !== 'clean') || scoped.blockers.length > 0;
+  const hasScopedDiff = scoped.text.length > 0 || scoped.callouts.length > 0 || scoped.tables.length > 0 || scoped.whiteboards.some((asset) => asset.state !== 'clean') || scoped.blockers.length > 0;
   const hasDiff = context.remoteCanonical !== context.publishDraftCanonical || hasScopedDiff;
   return {
     mode: 'read-only',
@@ -122,6 +140,15 @@ export function diffSummaryLines(result: RunDiffResult): string[] {
     return lines;
   }
 
+  for (const callout of result.scoped.callouts) {
+    const label = `${callout.locator.sectionPath.join(' > ') || '<root>'} [${callout.locator.ordinal}]`;
+    lines.push(`callout[${callout.type}]: ${label}`);
+    for (const child of callout.childChanges) {
+      const marker = child.action === 'create' ? '+' : child.action === 'delete' ? '-' : '~';
+      lines.push(`  ${marker} ${calloutBlockTypeLabel(child.blockType)} ${child.ordinal + 1}`);
+    }
+  }
+
   for (const table of result.scoped.tables) {
     const label = `${table.locator.sectionPath.join(' > ') || '<root>'} [${table.locator.ordinal}]`;
     lines.push(`table: ${label}`);
@@ -135,7 +162,7 @@ export function diffSummaryLines(result: RunDiffResult): string[] {
   }
   for (const blocker of result.scoped.blockers) lines.push(`blocker[${blocker.code}]: ${blocker.message}`);
   for (const warning of result.scoped.warnings) lines.push(`warning: ${warning}`);
-  if (result.scoped.tables.length > 0 || result.scoped.whiteboards.length > 0 || result.scoped.blockers.length > 0 || result.scoped.warnings.length > 0) lines.push('');
+  if (result.scoped.callouts.length > 0 || result.scoped.tables.length > 0 || result.scoped.whiteboards.length > 0 || result.scoped.blockers.length > 0 || result.scoped.warnings.length > 0) lines.push('');
 
   lines.push(result.diff.trimEnd());
   return lines;

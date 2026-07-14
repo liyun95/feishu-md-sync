@@ -9,6 +9,17 @@ import {
 export type SyncConfig = {
   defaultProfile?: PublishProfileName;
   profiles: Record<string, PublishProfileConfig>;
+  callouts?: Partial<CalloutConfig>;
+};
+
+export type CalloutConfig = {
+  noteTitle: string;
+  warningTitle: string;
+};
+
+export const DEFAULT_CALLOUT_CONFIG: CalloutConfig = {
+  noteTitle: 'Notes',
+  warningTitle: 'Warning'
 };
 
 export type LoadSyncConfigInput = {
@@ -21,6 +32,13 @@ export function resolvePublishProfile(input: {
 }): PublishProfileName {
   if (input.cliProfile) return parsePublishProfileName(input.cliProfile, '--profile');
   return input.config.defaultProfile ?? 'none';
+}
+
+export function resolveCalloutConfig(config: SyncConfig): CalloutConfig {
+  return {
+    noteTitle: config.callouts?.noteTitle ?? DEFAULT_CALLOUT_CONFIG.noteTitle,
+    warningTitle: config.callouts?.warningTitle ?? DEFAULT_CALLOUT_CONFIG.warningTitle
+  };
 }
 
 export async function loadSyncConfig(input: LoadSyncConfigInput): Promise<SyncConfig> {
@@ -44,8 +62,26 @@ export async function loadSyncConfig(input: LoadSyncConfigInput): Promise<SyncCo
 
   return {
     defaultProfile,
-    profiles: parseProfiles(parsed.profiles)
+    profiles: parseProfiles(parsed.profiles),
+    callouts: parseCallouts(parsed.callouts)
   };
+}
+
+function parseCallouts(value: unknown): Partial<CalloutConfig> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error('callouts must be a JSON object.');
+  return {
+    noteTitle: parseOptionalNonEmptyString(value.noteTitle, 'callouts.noteTitle'),
+    warningTitle: parseOptionalNonEmptyString(value.warningTitle, 'callouts.warningTitle')
+  };
+}
+
+function parseOptionalNonEmptyString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return value;
 }
 
 function parseProfiles(value: unknown): Record<string, PublishProfileConfig> {

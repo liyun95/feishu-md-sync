@@ -14,13 +14,15 @@ The CLI can update the document through supported block-level operations.
 
 It can also include `table-replace` operations. Table plans identify the section, table ordinal, added row keys, and updated cells before replacing only the matched table block.
 
+Callout plans create or delete a complete Callout and update, insert, or delete supported body children. Existing presentation and container identity are preserved. Type changes and overlapping local/remote edits to the same child are blocked.
+
 With `--sync-whiteboards`, the same plan may also contain:
 
 - `whiteboard-create` - replace one corresponding remote image block with a Whiteboard.
 - `whiteboard-adopt` - adopt and verify one existing corresponding Whiteboard.
 - `whiteboard-update` - overwrite the SVG content of the already tracked Whiteboard while retaining its token and block identity.
 
-Text, table, and Whiteboard operations are planned together. Any Whiteboard blocker makes the complete publish `blocked`; the CLI does not silently publish only the other scopes.
+Text, Callout, table, and Whiteboard operations are planned together. Any blocker makes the complete publish `blocked`; the CLI does not silently publish only the other scopes.
 
 ## `blocked`
 

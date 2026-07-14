@@ -43,4 +43,36 @@ describe('CLI pretty output', () => {
     expect(lines).toContain('requires: --confirm-collaboration-risk');
     expect(lines).toContain('requires: --confirm-remote-whiteboard-overwrite assets/other.png');
   });
+
+  it('prints Callout status summaries and blockers', () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((value?: unknown) => {
+      lines.push(String(value));
+    });
+
+    printFormatted({
+      state: 'local-changed',
+      localChanged: true,
+      remoteChanged: false,
+      recommendation: { action: 'publish-dry-run', reason: 'local changed' },
+      callouts: [{
+        type: 'note',
+        action: 'update',
+        locator: { sectionPath: ['Build index'], kind: 'callout', ordinal: 0 },
+        childChanges: [
+          { action: 'update', ordinal: 1, blockType: 2 },
+          { action: 'create', ordinal: 2, blockType: 12 }
+        ]
+      }],
+      calloutBlockers: [{
+        code: 'callout-type-change',
+        message: 'Callout type changes are unsupported'
+      }]
+    }, 'pretty');
+
+    expect(lines).toContain('callout[note]: Build index [0]');
+    expect(lines).toContain('  ~ paragraph 2');
+    expect(lines).toContain('  + bullet 3');
+    expect(lines).toContain('blocker[callout-type-change]: Callout type changes are unsupported');
+  });
 });

@@ -134,13 +134,19 @@ export class LarkCliAdapter implements FeishuAdapter {
     });
   }
 
-  async insertBlocksAfter(input: { doc: string; blockId: string; markdown: string }): Promise<void> {
+  async insertBlocksAfter(input: {
+    doc: string;
+    blockId: string;
+    content: string;
+    format: 'markdown' | 'xml';
+  }): Promise<void> {
     await this.updateBlock({
       doc: input.doc,
       command: 'block_insert_after',
       blockId: input.blockId,
-      content: input.markdown,
-      format: 'markdown'
+      content: input.format === 'xml' ? '-' : input.content,
+      format: input.format,
+      stdin: input.format === 'xml' ? input.content : undefined
     });
   }
 
@@ -259,6 +265,7 @@ export class LarkCliAdapter implements FeishuAdapter {
     blockId: string;
     content: string;
     format: 'markdown' | 'xml';
+    stdin?: string;
   }): Promise<void> {
     parseLarkCliJson(await this.exec(withIdentity([
       'docs',
@@ -275,7 +282,7 @@ export class LarkCliAdapter implements FeishuAdapter {
       input.content,
       '--format',
       'json'
-    ], this.identity)));
+    ], this.identity), input.stdin === undefined ? undefined : { stdin: input.stdin }));
   }
 }
 

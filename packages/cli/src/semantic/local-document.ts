@@ -1,6 +1,7 @@
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { parseHtmlTable } from './html-table.js';
+import { parseHtmlCallout } from './html-callout.js';
 import { splitMarkdownImageBlocks } from './markdown-image.js';
 import { semanticHash } from './normalize.js';
 import type { SemanticDocument, SemanticLocator, SemanticNode } from './types.js';
@@ -9,6 +10,7 @@ type LocalSegment =
   | { kind: 'markdown'; content: string }
   | { kind: 'asset'; alt: string; source: string }
   | { kind: 'table'; content: string }
+  | { kind: 'callout'; content: string }
   | { kind: 'opaque'; content: string; description: string };
 
 export function localSemanticDocument(markdown: string): SemanticDocument {
@@ -40,6 +42,10 @@ export function localSemanticDocument(markdown: string): SemanticDocument {
     }
     if (segment.kind === 'table') {
       nodes.push(parseHtmlTable(segment.content, nextLocator(headingPath, 'table', ordinals)));
+      continue;
+    }
+    if (segment.kind === 'callout') {
+      nodes.push(parseHtmlCallout(segment.content, nextLocator(headingPath, 'callout', ordinals)));
       continue;
     }
     if (segment.kind === 'opaque') {
@@ -119,11 +125,20 @@ function splitLocalSegments(markdown: string): LocalSegment[] {
     const content = markdown.slice(start, end);
     segments.push(tag === 'table'
       ? { kind: 'table', content }
-      : { kind: 'opaque', content, description: `unsupported local HTML container: ${tag}` });
+      : isCalloutDiv(content)
+        ? { kind: 'callout', content }
+        : { kind: 'opaque', content, description: `unsupported local HTML container: ${tag}` });
     cursor = end;
   }
 
   return segments;
+}
+
+function isCalloutDiv(content: string): boolean {
+  const opening = content.match(/^<div\b([^>]*)>/i);
+  const classMatch = opening?.[1]?.match(/\bclass\s*=\s*(["'])(.*?)\1/i);
+  const classes = (classMatch?.[2] ?? '').split(/\s+/).map((value) => value.toLowerCase());
+  return classes.includes('alert') && (classes.includes('note') || classes.includes('warning'));
 }
 
 function pushMarkdown(segments: LocalSegment[], content: string): void {

@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
+import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
+import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
   hashText,
@@ -46,6 +48,7 @@ export async function runMerge(input: {
   remotePath?: string;
   basePath?: string;
   saveRemotePath?: string;
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<RunMergeResult> {
   if (input.mode === 'abort') {
@@ -114,6 +117,7 @@ async function resolveRemoteMarkdown(input: {
   remotePath?: string;
   saveRemotePath?: string;
   profile: PublishProfileName;
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<{
   markdown: string;
@@ -122,10 +126,14 @@ async function resolveRemoteMarkdown(input: {
 }> {
   if (input.remotePath) {
     const raw = await readFile(input.remotePath, 'utf8');
-    const transformed = applyPullTransformForProfile(raw, input.profile);
+    const normalized = canonicalizeRemoteCalloutMarkdown({
+      markdown: raw,
+      config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
+    });
+    const transformed = applyPullTransformForProfile(normalized.markdown, input.profile);
     return {
       markdown: transformed.markdown,
-      warnings: transformed.warnings,
+      warnings: [...normalized.warnings, ...transformed.warnings],
       summary: {
         source: 'remote-file',
         hash: hashText(transformed.markdown)
@@ -134,14 +142,18 @@ async function resolveRemoteMarkdown(input: {
   }
 
   const fetched = await input.adapter.fetchDocMarkdown({ doc: input.target!.token });
-  const transformed = applyPullTransformForProfile(fetched.markdown, input.profile);
+  const normalized = canonicalizeRemoteCalloutMarkdown({
+    markdown: fetched.markdown,
+    config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
+  });
+  const transformed = applyPullTransformForProfile(normalized.markdown, input.profile);
   if (input.saveRemotePath) {
     await mkdir(dirname(input.saveRemotePath), { recursive: true });
     await writeFile(input.saveRemotePath, transformed.markdown, 'utf8');
   }
   return {
     markdown: transformed.markdown,
-    warnings: transformed.warnings,
+    warnings: [...normalized.warnings, ...transformed.warnings],
     summary: {
       source: 'target',
       hash: hashText(transformed.markdown),

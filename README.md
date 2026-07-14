@@ -77,6 +77,20 @@ This protects comments, anchors, block identity, and teammate edits from acciden
 
 Scoped publishing also recognizes reconstructable HTML tables. It reports row additions and updates, combines them with text-block changes, and replaces only the matched table block after `--confirm-collaboration-risk`. Unsupported or conflicting changes produce `strategy: blocked`; `auto` never falls back to whole-document replacement.
 
+Scoped publishing also supports Milvus-style note and warning Callouts:
+
+```html
+<div class="alert note">
+
+Use load-time CPU adaptation.
+
+</div>
+```
+
+Use `alert warning` for a warning. Local Markdown owns the Callout body; Feishu owns the presentation title, emoji, colors, and container identity. Existing presentation is preserved during body updates. New Callouts use `📘 Notes` or `❗ Warning` by default, and workspace configuration can override the titles, for example `说明` and `警告`.
+
+Callout body updates are planned per child block, so a local edit and a teammate edit to different children can coexist. Type changes are blocked. Deleting a tracked, remotely unchanged Callout is supported after `--confirm-collaboration-risk`. Changed unsupported body content also blocks the complete publish instead of flattening the Callout or replacing the document.
+
 ## Editable Whiteboard Assets
 
 Whiteboard sync is opt-in. Keep the published Markdown portable by referencing a PNG, and place an editable SVG beside it with the same basename:

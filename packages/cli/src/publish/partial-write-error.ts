@@ -11,11 +11,13 @@ export type PublishWriteOperationSummary = {
 export class PartialWriteError extends Error {
   readonly completedOperations: PublishWriteOperationSummary[];
   readonly failedOperation: PublishWriteOperationSummary;
+  readonly pendingOperations: PublishWriteOperationSummary[];
   readonly receiptWritten = false;
 
   constructor(input: {
     completedOperations: PublishWriteOperationSummary[];
     failedOperation: PublishWriteOperationSummary;
+    pendingOperations?: PublishWriteOperationSummary[];
     cause: unknown;
   }) {
     const causeMessage = input.cause instanceof Error ? input.cause.message : String(input.cause);
@@ -23,5 +25,6 @@ export class PartialWriteError extends Error {
     this.name = 'PartialWriteError';
     this.completedOperations = input.completedOperations;
     this.failedOperation = input.failedOperation;
+    this.pendingOperations = input.pendingOperations ?? [];
   }
 }

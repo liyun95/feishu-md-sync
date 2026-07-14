@@ -36,4 +36,29 @@ describe('remote semantic snapshots', () => {
 
     await expect(readRemoteSemanticSnapshot({ cwd, snapshot })).rejects.toThrow('Remote semantic snapshot hash mismatch.');
   });
+
+  it('stores Callout type and body semantics without runtime block IDs', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-semantic-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const document: SemanticDocument = {
+      nodes: [{
+        kind: 'callout',
+        locator: { sectionPath: [], kind: 'callout', ordinal: 0 },
+        calloutType: 'note',
+        title: { markdown: 'Notes', remoteBlockId: 'title1' },
+        children: [{ ordinal: 0, blockType: 2, markdown: 'Body', remoteBlockId: 'body1' }],
+        remoteBlockId: 'callout1',
+        shell: { emojiId: '📘' },
+        unsupported: []
+      }]
+    };
+
+    const snapshot = await writeRemoteSemanticSnapshot({ cwd, target, document });
+    const raw = await readFile(join(cwd, snapshot.path), 'utf8');
+
+    expect(raw).toContain('"kind": "callout"');
+    expect(raw).toContain('"calloutType": "note"');
+    expect(raw).toContain('"markdown": "Body"');
+    expect(raw).not.toContain('remoteBlockId');
+  });
 });

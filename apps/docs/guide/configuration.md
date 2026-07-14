@@ -66,6 +66,21 @@ FEISHU_MD_SYNC_LARK_AS=bot
 
 `.env` is ignored by git. Do not commit real credentials.
 
+## Callout Titles
+
+New Callouts use `Notes` and `Warning` by default. To use localized presentation titles, add a workspace `feishu-md-sync.config.json` in the directory where you run the CLI:
+
+```json
+{
+  "callouts": {
+    "noteTitle": "说明",
+    "warningTitle": "警告"
+  }
+}
+```
+
+Configured titles are used when creating new Callouts and when recognizing Feishu Markdown exports. Existing tracked remote titles and styles are preserved during body updates, including titles later customized directly in Feishu. English `Notes`, `Note`, and `Warning` remain recognized as fallbacks.
+
 ## Loading Order
 
 The CLI loads `.env` files from:

@@ -132,7 +132,92 @@ describe('remote semantic document', () => {
       remoteToken: 'wb_token'
     }));
   });
+
+  it('parses remote Callouts and separates presentation from body', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['h1', 'callout1'] },
+      heading('h1', 3, 'Build index'),
+      {
+        block_id: 'callout1',
+        block_type: 19,
+        callout: { emoji_id: '📘', background_color: 2, border_color: 2 },
+        children: ['title1', 'body1', 'item1']
+      },
+      text('title1', 'Notes'),
+      text('body1', 'Use load-time CPU adaptation.'),
+      bullet('item1', 'Reserve GPU resources for index building.')
+    ], 'doc_token', { noteTitle: 'Notes', warningTitle: 'Warning' });
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'callout',
+      calloutType: 'note',
+      locator: { sectionPath: ['Build index'], kind: 'callout', ordinal: 0 },
+      remoteBlockId: 'callout1',
+      title: { markdown: 'Notes', remoteBlockId: 'title1' },
+      children: [
+        expect.objectContaining({ ordinal: 0, remoteBlockId: 'body1', blockType: 2 }),
+        expect.objectContaining({ ordinal: 1, remoteBlockId: 'item1', blockType: 12 })
+      ],
+      shell: expect.objectContaining({ emojiId: '📘', backgroundColor: 2, borderColor: 2 }),
+      unsupported: []
+    }));
+  });
+
+  it('uses configured titles and English fallbacks to identify remote Callouts', () => {
+    const chinese = remoteSemanticDocument(calloutBlocks('说明'), 'doc_token', {
+      noteTitle: '说明',
+      warningTitle: '警告'
+    });
+    const englishFallback = remoteSemanticDocument(calloutBlocks('Warning'), 'doc_token', {
+      noteTitle: '说明',
+      warningTitle: '警告'
+    });
+
+    expect(chinese.nodes[0]).toMatchObject({ kind: 'callout', calloutType: 'note' });
+    expect(englishFallback.nodes[0]).toMatchObject({ kind: 'callout', calloutType: 'warning' });
+  });
+
+  it('leaves unrecognized remote Callout types unresolved and reports unsupported children', () => {
+    const blocks = calloutBlocks('Custom title');
+    blocks.push({ block_id: 'quote1', block_type: 15, quote: { elements: [] } });
+    (blocks[1].children as string[]).push('quote1');
+    const document = remoteSemanticDocument(blocks, 'doc_token');
+    const callout = document.nodes[0];
+
+    expect(callout).toMatchObject({
+      kind: 'callout',
+      calloutType: undefined,
+      unsupported: expect.arrayContaining([
+        'remote Callout title is unrecognized',
+        'block_type 15 in Callout is unsupported'
+      ])
+    });
+  });
+
+  it('reports nested remote Callout lists as unsupported', () => {
+    const blocks = calloutBlocks('Notes');
+    blocks.push(text('nested1', 'Nested'));
+    blocks[3].block_type = 12;
+    blocks[3].bullet = blocks[3].text;
+    delete blocks[3].text;
+    blocks[3].children = ['nested1'];
+
+    const callout = remoteSemanticDocument(blocks, 'doc_token').nodes[0];
+    expect(callout).toMatchObject({
+      kind: 'callout',
+      unsupported: expect.arrayContaining(['nested lists are unsupported'])
+    });
+  });
 });
+
+function calloutBlocks(title: string): FeishuBlock[] {
+  return [
+    { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+    { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+    text('title1', title),
+    text('body1', 'Body')
+  ];
+}
 
 function tableBlocks(mergeInfo: unknown[]): FeishuBlock[] {
   return [
