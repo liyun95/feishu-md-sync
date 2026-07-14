@@ -196,6 +196,38 @@ describe('runStatus', () => {
     });
   });
 
+  it('reports Callout operations and blockers separately', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-callout-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '<div class="alert note">\n\nLocal body.\n\n</div>', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '<div class="alert note">\n\nRemote body.\n\n</div>' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+        { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+        statusTextBlock('title1', 'Notes'),
+        statusTextBlock('body1', 'Remote body.')
+      ] }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter
+    });
+
+    expect(result.callouts).toEqual([expect.objectContaining({
+      type: 'note',
+      action: 'update',
+      childChanges: [{ action: 'update', ordinal: 0, blockType: 2 }]
+    })]);
+    expect(result.calloutBlockers).toEqual([]);
+  });
+
   it('reports a local SVG change when Whiteboard status is enabled', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-status-whiteboard-'));
     const assets = join(dir, 'assets');
@@ -273,6 +305,14 @@ function statusTableBlocks(description: string) {
     { block_id: 'c4', block_type: 32, children: ['p4'] },
     { block_id: 'p4', block_type: 2, text: { elements: [{ text_run: { content: description, text_element_style: {} } }] } }
   ];
+}
+
+function statusTextBlock(blockId: string, content: string) {
+  return {
+    block_id: blockId,
+    block_type: 2,
+    text: { elements: [{ text_run: { content, text_element_style: {} } }] }
+  };
 }
 
 function statusAdapter(markdown: string): FeishuAdapter & { blockFetches: number } {

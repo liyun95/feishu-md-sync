@@ -13,6 +13,8 @@ import { applyPublishTransformForProfile } from '../publish/profile-transform.js
 import { analyzeExistingPublish } from '../publish/run-publish.js';
 import type { SemanticLocator } from '../semantic/types.js';
 import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
+import { summarizeCalloutChanges, type CalloutChangeSummary } from '../callouts/callout-summary.js';
+import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
 
 export type PublishStatusState = 'untracked' | 'clean' | 'local-changed' | 'remote-changed' | 'diverged';
 
@@ -42,6 +44,8 @@ export type PublishStatusResult = {
   transformWarnings: string[];
   whiteboards: WhiteboardAssetPlan[];
   whiteboardBlockers: WhiteboardPlanBlocker[];
+  callouts: CalloutChangeSummary[];
+  calloutBlockers: ScopedPatchBlocker[];
   scopeSummary: {
     localChanged: SemanticLocator[];
     remoteChanged: SemanticLocator[];
@@ -103,6 +107,12 @@ export async function runStatus(input: {
     return {
       ...withWhiteboards,
       whiteboardBlockers: analysis.plan.whiteboards?.blockers ?? [],
+      callouts: summarizeCalloutChanges({
+        operations: analysis.plan.scopedPatch?.operations ?? [],
+        local: analysis.localCurrent,
+        remote: analysis.remoteCurrent
+      }),
+      calloutBlockers: (analysis.plan.scopedPatch?.blockers ?? []).filter((blocker) => blocker.code.startsWith('callout-') || blocker.code === 'remote-callout-conflict'),
       scopeSummary,
       recommendation
     };
@@ -170,6 +180,8 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
       transformWarnings: context.transformWarnings,
       whiteboards: [],
       whiteboardBlockers: [],
+      callouts: [],
+      calloutBlockers: [],
       scopeSummary: emptyScopeSummary(),
       recommendation: recommendationFor({ state, contentMatchesRemote })
     };
@@ -198,6 +210,8 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     transformWarnings: context.transformWarnings,
     whiteboards: [],
     whiteboardBlockers: [],
+    callouts: [],
+    calloutBlockers: [],
     scopeSummary: emptyScopeSummary(),
     recommendation: recommendationFor({ state, contentMatchesRemote })
   };

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
 import { hashText, writePublishReceipt } from '../src/receipts/publish-receipt.js';
-import { runDiff } from '../src/diff/run-diff.js';
+import { diffSummaryLines, runDiff } from '../src/diff/run-diff.js';
 
 describe('runDiff', () => {
   it('reports no diff when canonical publish draft and remote match', async () => {
@@ -116,6 +116,29 @@ describe('runDiff', () => {
     })]);
   });
 
+  it('reports Callout changes as first-class scoped diffs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-callout-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '<div class="alert note">\n\nLocal body.\n\n</div>', 'utf8');
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: calloutAdapter('Remote body.')
+    });
+
+    expect(result.scoped.callouts).toEqual([{
+      type: 'note',
+      action: 'update',
+      locator: { sectionPath: [], kind: 'callout', ordinal: 0 },
+      childChanges: [{ action: 'update', ordinal: 0, blockType: 2 }]
+    }]);
+    expect(diffSummaryLines(result)).toContain('callout[note]: <root> [0]');
+    expect(diffSummaryLines(result)).toContain('  ~ paragraph 1');
+  });
+
   it('reports an asset-level Whiteboard creation diff', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-diff-whiteboard-'));
     const assets = join(dir, 'assets');
@@ -215,6 +238,28 @@ function diffAdapter(markdown: string): FeishuAdapter {
     fetchDocMarkdown: async () => ({ markdown, revision: 'rev1' }),
     replaceDocument: async () => {},
     createDocument: async () => ({ documentId: 'created' })
+  };
+}
+
+function calloutAdapter(body: string): FeishuAdapter {
+  return {
+    fetchDocMarkdown: async () => ({ markdown: `<div class="alert note">\n\n${body}\n\n</div>` }),
+    fetchDocBlocks: async () => ({ blocks: [
+      { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+      { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+      textBlock('title1', 'Notes'),
+      textBlock('body1', body)
+    ] }),
+    replaceDocument: async () => {},
+    createDocument: async () => ({ documentId: 'created' })
+  };
+}
+
+function textBlock(blockId: string, content: string) {
+  return {
+    block_id: blockId,
+    block_type: 2,
+    text: { elements: [{ text_run: { content, text_element_style: {} } }] }
   };
 }
 
