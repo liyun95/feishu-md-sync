@@ -213,7 +213,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       const conflict = await runCli([
         'publish', file, '--target', target, '--profile', 'none', '--format', 'json'
       ]);
-      assertCliSuccess(conflict, 'detect overlapping Callout edit');
+      expect(conflict.status).toBe(1);
       expect(conflict.stdout).toContain('"strategy": "blocked"');
       expect(conflict.stdout).toContain('"code": "remote-callout-conflict"');
 
