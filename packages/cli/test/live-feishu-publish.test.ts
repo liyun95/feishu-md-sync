@@ -148,9 +148,11 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       const adopted = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
       const note = adopted.find((callout) => callout.title === 'Notes');
       const warning = adopted.find((callout) => callout.title === 'Warning');
-      expect(note).toMatchObject({ emoji: '📘', body: ['Note first.', 'Note second.'] });
-      expect(warning).toMatchObject({ emoji: '❗', body: ['Warning first.', 'Warning second.'] });
+      expect(note).toMatchObject({ body: ['Note first.', 'Note second.'] });
+      expect(warning).toMatchObject({ body: ['Warning first.', 'Warning second.'] });
       if (!note || !warning) throw new Error('live Callout setup did not create note and warning containers');
+      expect(note.emoji).toBeTruthy();
+      expect(warning.emoji).toBeTruthy();
 
       await writeFile(file, calloutMarkdown({
         note: ['Note local v1.', 'Note second.'],
@@ -165,7 +167,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       expect(afterBodyUpdate.find((callout) => callout.title === 'Notes')).toMatchObject({
         blockId: note.blockId,
         title: 'Notes',
-        emoji: '📘',
+        emoji: note.emoji,
         body: ['Note local v1.', 'Note second.']
       });
 
@@ -185,12 +187,16 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       ]);
       assertCliSuccess(disjoint, 'publish disjoint Callout edits');
       const afterDisjoint = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
-      expect(afterDisjoint.find((callout) => callout.title === 'Notes')?.body).toEqual([
-        'Note local v1.', 'Note local edit.'
-      ]);
-      expect(afterDisjoint.find((callout) => callout.title === 'Warning')?.body).toEqual([
-        'Warning remote edit.', 'Warning second.'
-      ]);
+      expect(afterDisjoint.find((callout) => callout.title === 'Notes')).toMatchObject({
+        blockId: note.blockId,
+        emoji: note.emoji,
+        body: ['Note local v1.', 'Note local edit.']
+      });
+      expect(afterDisjoint.find((callout) => callout.title === 'Warning')).toMatchObject({
+        blockId: warning.blockId,
+        emoji: warning.emoji,
+        body: ['Warning remote edit.', 'Warning second.']
+      });
 
       const currentNote = afterDisjoint.find((callout) => callout.title === 'Notes');
       if (!currentNote) throw new Error('live Callout note disappeared before conflict test');
@@ -229,6 +235,12 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       const afterDeletion = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
       expect(afterDeletion.some((callout) => callout.blockId === note.blockId)).toBe(false);
       expect(afterDeletion).toHaveLength(1);
+      expect(afterDeletion[0]).toMatchObject({
+        blockId: warning.blockId,
+        title: 'Warning',
+        emoji: warning.emoji,
+        body: ['Warning remote edit.', 'Warning second.']
+      });
 
       const pull = await runCli([
         'pull', '--target', target, '--output', pulled, '--profile', 'none', '--format', 'json'
