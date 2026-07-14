@@ -1,4 +1,9 @@
 import type { FeishuBlock } from '../feishu/types.js';
+import {
+  planCodeBlockChanges,
+  type CodeBlockOperation,
+  type CodePlanBlocker
+} from '../code-blocks/code-plan.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { normalizeWhitespace, semanticHash, stripExecutionMetadata } from '../semantic/normalize.js';
@@ -53,14 +58,16 @@ export type ScopedPatchOperation =
   | ScopedTextCreateOperation
   | ScopedTextDeleteOperation
   | TableReplaceOperation
-  | CalloutOperation;
+  | CalloutOperation
+  | CodeBlockOperation;
 
 export type ScopedPatchBlocker = {
   code:
     | 'correspondence-ambiguous'
     | 'unsupported-local-change'
     | 'remote-scope-conflict'
-    | CalloutPlanBlocker['code'];
+    | CalloutPlanBlocker['code']
+    | CodePlanBlocker['code'];
   locator?: SemanticLocator;
   message: string;
 };
@@ -130,11 +137,15 @@ export function planScopedPatch(input: {
 
   const textPlanning = planTextScopes({ ...input, localChanged, remoteChanged, blockers, warnings });
   const calloutPlanning = planCalloutChanges(input);
+  const codePlanning = planCodeBlockChanges(input);
   blockers.push(...calloutPlanning.blockers);
+  blockers.push(...codePlanning.blockers);
   warnings.push(...calloutPlanning.warnings);
+  warnings.push(...codePlanning.warnings);
   const operations: ScopedPatchOperation[] = [
     ...textPlanning.operations,
-    ...calloutPlanning.operations
+    ...calloutPlanning.operations,
+    ...codePlanning.operations
   ];
   if (textPlanning.fallbackReason) {
     blockers.push({
@@ -220,14 +231,16 @@ export function planScopedPatch(input: {
     operations,
     blockers,
     warnings: uniqueWarnings,
-    requiresCollaborationRiskConfirmation: calloutPlanning.requiresCollaborationRiskConfirmation || operations.some((operation) => {
+    requiresCollaborationRiskConfirmation: calloutPlanning.requiresCollaborationRiskConfirmation ||
+      codePlanning.requiresCollaborationRiskConfirmation || operations.some((operation) => {
       return operation.kind === 'update' || operation.kind === 'delete' || operation.kind === 'table-replace';
     }),
     scopeSummary: {
       localChanged: locatorsForKeys(input.localCurrent, localChanged),
       remoteChanged: locatorsForKeys(input.remoteCurrent, remoteChanged),
       overlappingConflicts: blockers.flatMap((blocker) => {
-        return (blocker.code === 'remote-scope-conflict' || blocker.code === 'remote-callout-conflict') && blocker.locator
+        return (blocker.code === 'remote-scope-conflict' || blocker.code === 'remote-callout-conflict' ||
+          blocker.code === 'remote-code-conflict' || blocker.code === 'remote-code-scope-changed') && blocker.locator
           ? [blocker.locator]
           : [];
       }),
@@ -407,6 +420,13 @@ function findTableByIdentity(document: SemanticDocument | undefined, source: Sem
 
 function semanticNodeHash(node: SemanticNode): string {
   if (node.kind === 'callout') return calloutContentHash(node);
+  if (node.kind === 'code') {
+    return semanticHash({
+      content: node.content,
+      resolvedLanguage: node.resolvedLanguage,
+      issues: node.issues
+    });
+  }
   return semanticHash(stripExecutionMetadata(node));
 }
 

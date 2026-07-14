@@ -1,5 +1,10 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
+import {
+  DEFAULT_CODE_BLOCK_CONFIG,
+  type CodeBlockConfig
+} from '../code-blocks/code-language.js';
+import { canonicalizeFencedCodeLanguages } from '../code-blocks/code-markdown.js';
 import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
@@ -31,6 +36,7 @@ export async function runPull(input: {
   overwrite: boolean;
   writeReceipt: boolean;
   callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<RunPullResult> {
   await assertPullOutputWritable(input.outputPath, input.overwrite);
@@ -40,7 +46,11 @@ export async function runPull(input: {
     markdown: remote.markdown,
     config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
   });
-  const transform = applyPullTransformForProfile(normalized.markdown, input.profile);
+  const codeCanonical = canonicalizeFencedCodeLanguages(
+    normalized.markdown,
+    input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG
+  );
+  const transform = applyPullTransformForProfile(codeCanonical, input.profile);
   await writeFile(input.outputPath, transform.markdown, 'utf8');
 
   const written = await readFile(input.outputPath, 'utf8');

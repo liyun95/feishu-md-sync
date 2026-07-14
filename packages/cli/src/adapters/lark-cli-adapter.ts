@@ -129,9 +129,31 @@ export class LarkCliAdapter implements FeishuAdapter {
       doc: input.doc,
       command: 'block_replace',
       blockId: input.blockId,
-      content: input.content,
-      format: input.format
+      content: input.format === 'xml' ? '-' : input.content,
+      format: input.format,
+      stdin: input.format === 'xml' ? input.content : undefined
     });
+  }
+
+  async moveBlocksAfter(input: {
+    doc: string;
+    blockId: string;
+    sourceBlockIds: string[];
+  }): Promise<void> {
+    parseLarkCliJson(await this.exec(withIdentity([
+      'docs',
+      '+update',
+      '--doc',
+      input.doc,
+      '--command',
+      'block_move_after',
+      '--block-id',
+      input.blockId,
+      '--src-block-ids',
+      input.sourceBlockIds.join(','),
+      '--format',
+      'json'
+    ], this.identity)));
   }
 
   async insertBlocksAfter(input: {

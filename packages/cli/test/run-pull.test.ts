@@ -8,6 +8,27 @@ import { hashText } from '../src/receipts/publish-receipt.js';
 import { runPull } from '../src/pull/run-pull.js';
 
 describe('runPull', () => {
+  it('emits canonical Feishu Code block languages', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-code-'));
+    const output = join(dir, 'doc.remote.md');
+
+    await runPull({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: '```py\nprint(1)\n```\n' }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    await expect(readFile(output, 'utf8')).resolves.toBe('```python\nprint(1)\n```\n');
+  });
+
   it('canonicalizes remote Callouts while retaining the raw remote hash', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-pull-callout-'));
     const output = join(dir, 'doc.remote.md');

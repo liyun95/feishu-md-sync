@@ -1,6 +1,14 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
+import {
+  DEFAULT_CODE_BLOCK_CONFIG,
+  type CodeBlockConfig
+} from '../code-blocks/code-language.js';
+import {
+  canonicalizeFencedCodeLanguages,
+  rewriteFencedCodeLanguages
+} from '../code-blocks/code-markdown.js';
 import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
@@ -13,6 +21,8 @@ import {
 import { applyPullTransformForProfile } from '../transform/zilliz-pull.js';
 import { mergeLines, mergeWithoutBase, type MergeState } from './line-merge.js';
 import { assertNoMergeState, restoreMergeState, writeMergeState } from './merge-state.js';
+import { localSemanticDocument } from '../semantic/local-document.js';
+import type { SemanticCodeBlock } from '../semantic/types.js';
 
 export type RunMergeMode = 'write' | 'check' | 'dry-run' | 'abort';
 export type RunMergeState = MergeState | 'aborted';
@@ -49,6 +59,7 @@ export async function runMerge(input: {
   basePath?: string;
   saveRemotePath?: string;
   callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<RunMergeResult> {
   if (input.mode === 'abort') {
@@ -76,9 +87,17 @@ export async function runMerge(input: {
 
   const remote = await resolveRemoteMarkdown(input);
   const base = await resolveBaseMarkdown({ ...input, localMarkdown: local });
+  const remoteForMerge = base.markdown === undefined
+    ? remote.markdown
+    : preserveLocalCodeAliases({
+      base: base.markdown,
+      local,
+      remote: remote.markdown,
+      config: input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG
+    });
   const merge = base.markdown === undefined
-    ? mergeWithoutBase({ local, remote: remote.markdown })
-    : mergeLines({ base: base.markdown, local, remote: remote.markdown });
+    ? mergeWithoutBase({ local, remote: remoteForMerge })
+    : mergeLines({ base: base.markdown, local, remote: remoteForMerge });
 
   if (input.mode === 'write' && merge.changed) {
     await writeMergeState({
@@ -118,6 +137,7 @@ async function resolveRemoteMarkdown(input: {
   saveRemotePath?: string;
   profile: PublishProfileName;
   callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<{
   markdown: string;
@@ -130,7 +150,11 @@ async function resolveRemoteMarkdown(input: {
       markdown: raw,
       config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
     });
-    const transformed = applyPullTransformForProfile(normalized.markdown, input.profile);
+    const codeCanonical = canonicalizeFencedCodeLanguages(
+      normalized.markdown,
+      input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG
+    );
+    const transformed = applyPullTransformForProfile(codeCanonical, input.profile);
     return {
       markdown: transformed.markdown,
       warnings: [...normalized.warnings, ...transformed.warnings],
@@ -146,7 +170,11 @@ async function resolveRemoteMarkdown(input: {
     markdown: fetched.markdown,
     config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
   });
-  const transformed = applyPullTransformForProfile(normalized.markdown, input.profile);
+  const codeCanonical = canonicalizeFencedCodeLanguages(
+    normalized.markdown,
+    input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG
+  );
+  const transformed = applyPullTransformForProfile(codeCanonical, input.profile);
   if (input.saveRemotePath) {
     await mkdir(dirname(input.saveRemotePath), { recursive: true });
     await writeFile(input.saveRemotePath, transformed.markdown, 'utf8');
@@ -161,6 +189,32 @@ async function resolveRemoteMarkdown(input: {
       revision: fetched.revision
     }
   };
+}
+
+function preserveLocalCodeAliases(input: {
+  base: string;
+  local: string;
+  remote: string;
+  config: CodeBlockConfig;
+}): string {
+  const baseCodes = codeNodes(localSemanticDocument(input.base, input.config));
+  const localCodes = codeNodes(localSemanticDocument(input.local, input.config));
+  const remoteCodes = codeNodes(localSemanticDocument(input.remote, input.config));
+  return rewriteFencedCodeLanguages(input.remote, (match, index) => {
+    const base = baseCodes[index];
+    const local = localCodes[index];
+    const remote = remoteCodes[index];
+    if (base && local && remote &&
+      base.resolvedLanguage === local.resolvedLanguage &&
+      base.resolvedLanguage === remote.resolvedLanguage) {
+      return local.sourceLanguage;
+    }
+    return match.resolvedLanguage;
+  });
+}
+
+function codeNodes(document: ReturnType<typeof localSemanticDocument>): SemanticCodeBlock[] {
+  return document.nodes.filter((node): node is SemanticCodeBlock => node.kind === 'code');
 }
 
 async function resolveBaseMarkdown(input: {

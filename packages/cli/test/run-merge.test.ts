@@ -7,6 +7,30 @@ import { runMerge } from '../src/merge/run-merge.js';
 import { hashText, writeLocalBaseSnapshot, writePublishReceipt } from '../src/receipts/publish-receipt.js';
 
 describe('runMerge', () => {
+  it('preserves a local Code language alias when the resolved remote language is unchanged', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-code-'));
+    const file = join(cwd, 'doc.md');
+    const basePath = join(cwd, 'base.md');
+    const remotePath = join(cwd, 'remote.md');
+    const base = '```curl\ncurl old\n```\n';
+    await writeFile(file, base, 'utf8');
+    await writeFile(basePath, base, 'utf8');
+    await writeFile(remotePath, '```bash\ncurl new\n```\n', 'utf8');
+
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      remotePath,
+      basePath,
+      profile: 'none',
+      mode: 'write',
+      adapter: mergeAdapter('')
+    });
+
+    expect(result.state).toBe('merged');
+    await expect(readFile(file, 'utf8')).resolves.toBe('```curl\ncurl new\n```\n');
+  });
+
   it('check mode canonicalizes a target Callout and reports a clean remote-only body edit', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-callout-'));
     const file = join(cwd, 'doc.md');

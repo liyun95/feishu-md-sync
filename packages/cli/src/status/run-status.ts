@@ -20,6 +20,8 @@ import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
 import { summarizeCalloutChanges, type CalloutChangeSummary } from '../callouts/callout-summary.js';
 import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
+import { summarizeCodeBlockChanges, type CodeBlockChangeSummary } from '../code-blocks/code-summary.js';
+import type { CodeBlockConfig } from '../code-blocks/code-language.js';
 
 export type PublishStatusState = 'untracked' | 'clean' | 'local-changed' | 'remote-changed' | 'diverged';
 
@@ -51,6 +53,8 @@ export type PublishStatusResult = {
   whiteboardBlockers: WhiteboardPlanBlocker[];
   callouts: CalloutChangeSummary[];
   calloutBlockers: ScopedPatchBlocker[];
+  codeBlocks: CodeBlockChangeSummary[];
+  codeBlockers: ScopedPatchBlocker[];
   scopeSummary: {
     localChanged: SemanticLocator[];
     remoteChanged: SemanticLocator[];
@@ -85,6 +89,7 @@ export async function runStatus(input: {
   profile: PublishProfileName;
   syncWhiteboards?: boolean;
   callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusResult> {
   const context = await loadPublishStatusContext(input);
@@ -101,7 +106,8 @@ export async function runStatus(input: {
       adapter: input.adapter,
       localSource: context.localSource,
       syncWhiteboards: input.syncWhiteboards,
-      callouts: input.callouts
+      callouts: input.callouts,
+      codeBlocks: input.codeBlocks
     });
     const scopeSummary = analysis.plan.scopedPatch?.scopeSummary ?? emptyScopeSummary();
     const withWhiteboards = statusWithWhiteboards(result, analysis.plan.whiteboards?.assets ?? []);
@@ -120,6 +126,12 @@ export async function runStatus(input: {
         remote: analysis.remoteCurrent
       }),
       calloutBlockers: (analysis.plan.scopedPatch?.blockers ?? []).filter((blocker) => blocker.code.startsWith('callout-') || blocker.code === 'remote-callout-conflict'),
+      codeBlocks: summarizeCodeBlockChanges({
+        operations: analysis.plan.scopedPatch?.operations ?? [],
+        local: analysis.localCurrent,
+        remote: analysis.remoteCurrent
+      }),
+      codeBlockers: (analysis.plan.scopedPatch?.blockers ?? []).filter((blocker) => blocker.code.includes('code-')),
       scopeSummary,
       recommendation
     };
@@ -212,6 +224,8 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
       whiteboardBlockers: [],
       callouts: [],
       calloutBlockers: [],
+      codeBlocks: [],
+      codeBlockers: [],
       scopeSummary: emptyScopeSummary(),
       recommendation: recommendationFor({ state, contentMatchesRemote })
     };
@@ -242,6 +256,8 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     whiteboardBlockers: [],
     callouts: [],
     calloutBlockers: [],
+    codeBlocks: [],
+    codeBlockers: [],
     scopeSummary: emptyScopeSummary(),
     recommendation: recommendationFor({ state, contentMatchesRemote })
   };
@@ -249,6 +265,7 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
 
 function shouldAnalyzeScopes(context: PublishStatusContext): boolean {
   return context.localSource.includes('<table') ||
+    /(^|\n) {0,3}(?:`{3,}|~{3,})/.test(context.localSource) ||
     /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
     context.receipt?.version === 2 ||
     context.receipt?.version === 3;

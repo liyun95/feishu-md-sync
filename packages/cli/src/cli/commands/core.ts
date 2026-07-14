@@ -1,7 +1,12 @@
 import path from 'node:path';
 import type { Command } from 'commander';
 import { LarkCliAdapter } from '../../adapters/lark-cli-adapter.js';
-import { loadSyncConfig, resolveCalloutConfig, resolvePublishProfile } from '../../config/sync-config.js';
+import {
+  loadSyncConfig,
+  resolveCalloutConfig,
+  resolveCodeBlockConfig,
+  resolvePublishProfile
+} from '../../config/sync-config.js';
 import { parseFeishuTarget } from '../../core/doc-id.js';
 import { diffSummaryLines, runDiff } from '../../diff/run-diff.js';
 import { runMerge, type RunMergeMode } from '../../merge/run-merge.js';
@@ -52,12 +57,14 @@ export function registerCoreCommands(program: Command): void {
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
       const callouts = resolveCalloutConfig(config);
+      const codeBlocks = resolveCodeBlockConfig(config);
       const result = await runStatus({
         cwd,
         sourcePath: path.resolve(cwd, markdownFile),
         target,
         profile,
         callouts,
+        codeBlocks,
         syncWhiteboards: opts.syncWhiteboards === true,
         adapter: new LarkCliAdapter()
       });
@@ -79,12 +86,14 @@ export function registerCoreCommands(program: Command): void {
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
       const callouts = resolveCalloutConfig(config);
+      const codeBlocks = resolveCodeBlockConfig(config);
       const result = await runPull({
         cwd,
         target,
         outputPath: path.resolve(cwd, opts.output ?? ''),
         profile,
         callouts,
+        codeBlocks,
         overwrite: opts.overwrite === true,
         writeReceipt: opts.writeReceipt === true,
         adapter: new LarkCliAdapter()
@@ -106,12 +115,14 @@ export function registerCoreCommands(program: Command): void {
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
       const callouts = resolveCalloutConfig(config);
+      const codeBlocks = resolveCodeBlockConfig(config);
       const result = await runDiff({
         cwd,
         sourcePath: path.resolve(cwd, markdownFile),
         target,
         profile,
         callouts,
+        codeBlocks,
         syncWhiteboards: opts.syncWhiteboards === true,
         adapter: new LarkCliAdapter()
       });
@@ -140,6 +151,7 @@ export function registerCoreCommands(program: Command): void {
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
       const callouts = resolveCalloutConfig(config);
+      const codeBlocks = resolveCodeBlockConfig(config);
       const target = opts.target ? parseNonFolderTarget(opts.target, 'merge') : undefined;
       const result = await runMerge({
         cwd,
@@ -150,6 +162,7 @@ export function registerCoreCommands(program: Command): void {
         saveRemotePath: opts.saveRemote ? path.resolve(cwd, opts.saveRemote) : undefined,
         profile,
         callouts,
+        codeBlocks,
         mode: resolveMergeMode(opts),
         adapter: new LarkCliAdapter()
       });

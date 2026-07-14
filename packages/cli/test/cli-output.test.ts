@@ -75,4 +75,37 @@ describe('CLI pretty output', () => {
     expect(lines).toContain('  + bullet 3');
     expect(lines).toContain('blocker[callout-type-change]: Callout type changes are unsupported');
   });
+
+  it('prints first-class Code block changes', () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((value?: unknown) => {
+      lines.push(String(value));
+    });
+
+    printFormatted({
+      state: 'local-changed',
+      localChanged: true,
+      remoteChanged: false,
+      recommendation: { action: 'publish-dry-run', reason: 'local changed' },
+      codeBlocks: [{
+        action: 'update',
+        locator: { sectionPath: ['Build index'], kind: 'code', ordinal: 0 },
+        language: 'go',
+        contentChanged: true,
+        languageChange: { from: 'python', to: 'go' }
+      }, {
+        action: 'move',
+        locator: { sectionPath: ['Search'], kind: 'code', ordinal: 1 },
+        language: 'bash',
+        move: { from: ['Build index'], to: ['Search'] }
+      }],
+      codeBlockers: [{ code: 'remote-code-conflict', message: 'remote changed content' }]
+    }, 'pretty');
+
+    expect(lines).toContain('code[go]: Build index [0]');
+    expect(lines).toContain('  ~ content');
+    expect(lines).toContain('  → language: python -> go');
+    expect(lines).toContain('  → move: Build index -> Search');
+    expect(lines).toContain('blocker[remote-code-conflict]: remote changed content');
+  });
 });

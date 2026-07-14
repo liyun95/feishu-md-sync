@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { planScopedPatch } from '../src/publish/scoped-patch-plan.js';
-import type { SemanticAssetNode, SemanticCell, SemanticDocument, SemanticTable, SemanticTextBlock } from '../src/semantic/types.js';
+import type {
+  SemanticAssetNode,
+  SemanticCell,
+  SemanticCodeBlock,
+  SemanticDocument,
+  SemanticTable,
+  SemanticTextBlock
+} from '../src/semantic/types.js';
 
 describe('scoped patch plan', () => {
   it('combines a text update and table replacement', () => {
@@ -100,6 +107,19 @@ describe('scoped patch plan', () => {
     expect(plan.blockers).toEqual([]);
     expect(plan.operations).toEqual([]);
   });
+
+  it('combines ordinary text and first-class Code block updates', () => {
+    const localBase = document(text('Old.', 0), code('print(1)\n', 'python'));
+    const localCurrent = document(text('New.', 0), code('print(2)\n', 'python'));
+    const remoteBase = document(text('Old.', 0), code('print(1)\n', 'python'));
+    const remoteCurrent = document(text('Old.', 0, 'p1'), code('print(1)\n', 'python', 'code1'));
+
+    const plan = planScopedPatch({ parentBlockId: 'page', localBase, localCurrent, remoteBase, remoteCurrent, tracked: true });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations.map((operation) => operation.kind)).toEqual(['update', 'code-update']);
+    expect(plan.requiresCollaborationRiskConfirmation).toBe(true);
+  });
 });
 
 function document(...nodes: SemanticDocument['nodes']): SemanticDocument {
@@ -113,6 +133,18 @@ function text(markdown: string, ordinal: number, remoteBlockId?: string): Semant
     blockType: 2,
     markdown,
     remoteBlockId
+  };
+}
+
+function code(content: string, language: string, remoteBlockId?: string): SemanticCodeBlock {
+  return {
+    kind: 'code',
+    locator: { sectionPath: [], kind: 'code', ordinal: 0 },
+    content,
+    sourceLanguage: language,
+    resolvedLanguage: language,
+    remoteBlockId,
+    issues: []
   };
 }
 

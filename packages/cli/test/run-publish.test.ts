@@ -655,21 +655,34 @@ Next text.`, 'utf8');
     });
   });
 
-  it('blocks code block body updates until language-preserving IO is available', async () => {
+  it('writes a Code block body update through caption-preserving XML', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, '```python\nprint("new")\n```', 'utf8');
+    let updated = false;
+    const calls: string[] = [];
     const adapter: FeishuAdapter = {
-      fetchDocMarkdown: async () => ({ markdown: '```python\nprint("old")\n```' }),
+      fetchDocMarkdown: async () => ({ markdown: updated ? '```python\nprint("new")\n```' : '```python\nprint("old")\n```' }),
       fetchDocBlocks: async () => ({
         blocks: [
           { block_id: 'doc_token', block_type: 1, children: ['code1'] },
-          codeBlock('code1', 'print("old")', 49)
+          {
+            ...codeBlock('code1', updated ? 'print("new")\n' : 'print("old")\n', 49),
+            code: {
+              ...(codeBlock('code1', '', 49).code as object),
+              elements: [{ text_run: { content: updated ? 'print("new")\n' : 'print("old")\n', text_element_style: {} } }],
+              style: { language: 49, caption: 'Example' }
+            }
+          }
         ]
       }),
       replaceDocument: async () => {},
-      replaceBlock: async () => {},
+      replaceBlock: async ({ blockId, content, format }) => {
+        calls.push(`replace:${blockId}:${format}:${content}`);
+        updated = true;
+      },
       insertBlocksAfter: async () => {},
+      moveBlocksAfter: async () => {},
       deleteBlocks: async () => {},
       createDocument: async () => ({ documentId: 'created' })
     };
@@ -679,22 +692,22 @@ Next text.`, 'utf8');
       file: markdownPath,
       target: { kind: 'docx', token: 'doc_token' },
       profile: 'none',
-      write: false,
+      write: true,
       create: false,
       strategy: 'auto',
       confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
       adapter
     });
 
-    expect(result.plan.strategy).toBe('blocked');
-    expect(result.plan.scopedPatch?.operations).toEqual([]);
-    expect(result.plan.scopedPatch?.blockers).toContainEqual(expect.objectContaining({
-      code: 'unsupported-local-change',
-      message: 'code block updates are unsupported until language-preserving IO is available'
-    }));
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(calls).toEqual([
+      'replace:code1:xml:<pre lang="python" caption="Example"><code>print("new")\n</code></pre>'
+    ]);
   });
 
-  it('adopts a missing remote code language when the body is unchanged', async () => {
+  it('plans a language repair when the remote Code language is missing', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, '```python\nprint("same")\n```', 'utf8');
@@ -725,10 +738,9 @@ Next text.`, 'utf8');
       adapter
     });
 
-    expect(result.plan.strategy).toBe('no-op');
-    expect(result.plan.scopedPatch?.operations).toEqual([]);
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({ kind: 'code-update' }));
     expect(result.plan.scopedPatch?.blockers).toEqual([]);
-    expect(result.plan.warnings).toContain('adopting text representation difference at text:[]:0');
   });
 
   it('writes a block-patch create with the planned insert anchor', async () => {

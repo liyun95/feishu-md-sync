@@ -42,6 +42,11 @@ export type FeishuAdapter = {
     content: string;
     format: 'markdown' | 'xml';
   }): Promise<void>;
+  moveBlocksAfter?(input: {
+    doc: string;
+    blockId: string;
+    sourceBlockIds: string[];
+  }): Promise<void>;
   deleteBlocks?(input: { doc: string; blockIds: string[] }): Promise<void>;
   replaceImageWithWhiteboard?(input: {
     doc: string;

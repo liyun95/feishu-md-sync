@@ -1,5 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
+import { renderCodeBlockXml } from '../code-blocks/code-xml.js';
+import {
+  DEFAULT_CODE_BLOCK_CONFIG,
+  type CodeBlockConfig
+} from '../code-blocks/code-language.js';
+import type {
+  CodeBlockOperation,
+  CodeSectionReconcileOperation
+} from '../code-blocks/code-plan.js';
 import { renderCalloutXml } from '../callouts/callout-xml.js';
 import { applyTrackedCalloutTypes, calloutTypeHints } from '../callouts/callout-baseline.js';
 import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
@@ -22,7 +31,14 @@ import { readRemoteSemanticSnapshot, writeRemoteSemanticSnapshot } from '../rece
 import { localSemanticDocument } from '../semantic/local-document.js';
 import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import { semanticHash, stripExecutionMetadata } from '../semantic/normalize.js';
-import type { SemanticDocument, SemanticLocator, SemanticNode, SemanticTable, SemanticTextBlock } from '../semantic/types.js';
+import type {
+  SemanticCodeBlock,
+  SemanticDocument,
+  SemanticLocator,
+  SemanticNode,
+  SemanticTable,
+  SemanticTextBlock
+} from '../semantic/types.js';
 import { discoverLocalWhiteboardAssets, normalizeAssetKey, type LocalWhiteboardAsset } from '../whiteboards/local-assets.js';
 import { verifyWhiteboardReadback, whiteboardRemoteStateHash } from '../whiteboards/remote-state.js';
 import {
@@ -79,6 +95,7 @@ export async function runPublish(input: {
   syncWhiteboards?: boolean;
   confirmedRemoteWhiteboardOverwrites?: string[];
   callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<RunPublishResult> {
   if (input.write && input.strategy === 'document-replace' && !input.confirmDestructive) {
@@ -107,6 +124,7 @@ export async function runPublish(input: {
     localSource,
     syncWhiteboards: input.syncWhiteboards,
     callouts: input.callouts,
+    codeBlocks: input.codeBlocks,
     confirmedRemoteWhiteboardOverwrites: input.confirmedRemoteWhiteboardOverwrites
   });
   if (!input.write) return { mode: 'dry-run', plan: analysis.plan };
@@ -153,7 +171,7 @@ export async function runPublish(input: {
     let completedOperations = await applyScopedOperations({
       adapter: input.adapter,
       doc: analysis.resolvedDocumentId,
-      operations: [...phases.updates, ...phases.creates, ...phases.tables],
+      operations: [...phases.updates, ...phases.creates, ...phases.moves, ...phases.tables],
       callouts,
       pendingAfter: [
         ...(plan.whiteboards?.operations ?? []).map(summarizeWhiteboardOperation),
@@ -280,6 +298,7 @@ export async function analyzeExistingPublish(input: {
   localSource?: string;
   syncWhiteboards?: boolean;
   callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
   confirmedRemoteWhiteboardOverwrites?: string[];
 }): Promise<PublishAnalysis> {
   const localSource = input.localSource ?? await readFile(input.file, 'utf8');
@@ -387,14 +406,16 @@ export async function analyzeExistingPublish(input: {
   });
   const remote = { ...remoteRaw, markdown: normalized.markdown };
   const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
-  const localCurrent = localSemanticDocument(blockPatchDraft);
+  const codeBlocks = input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG;
+  const localCurrent = localSemanticDocument(blockPatchDraft, codeBlocks);
   const baseline = await loadSemanticBaselines({
     cwd: input.cwd,
     receipt,
     profile: input.profile,
     currentLocalSource: localSource,
     currentRemoteMarkdown: remote.markdown,
-    currentRemoteSemantic: remoteCurrent
+    currentRemoteSemantic: remoteCurrent,
+    codeBlocks
   });
   const scopedPatch = baseline.blocker
     ? blockedScopedPatch(baseline.blocker)
@@ -595,6 +616,7 @@ async function loadSemanticBaselines(input: {
   currentLocalSource: string;
   currentRemoteMarkdown: string;
   currentRemoteSemantic: SemanticDocument;
+  codeBlocks: CodeBlockConfig;
 }): Promise<{ localBase?: SemanticDocument; remoteBase?: SemanticDocument; blocker?: string }> {
   if (!input.receipt) return {};
 
@@ -607,7 +629,10 @@ async function loadSemanticBaselines(input: {
   if (!localBaseSource) return { blocker: 'legacy local baseline unavailable' };
 
   const localBaseDraft = applyPublishTransformForProfile(localBaseSource, input.profile).markdown;
-  const localBase = localSemanticDocument(markdownBodyForBlockPatch(localBaseDraft, input.currentRemoteMarkdown));
+  const localBase = localSemanticDocument(
+    markdownBodyForBlockPatch(localBaseDraft, input.currentRemoteMarkdown),
+    input.codeBlocks
+  );
   if (input.receipt.version === 2 || input.receipt.version === 3) {
     const remoteBase = await readRemoteSemanticSnapshot({
       cwd: input.cwd,
@@ -654,19 +679,25 @@ function blockedScopedPatch(message: string): ScopedPatchPlan {
 function partitionScopedOperations(operations: ScopedPatchOperation[]): {
   updates: ScopedPatchOperation[];
   creates: ScopedPatchOperation[];
+  moves: ScopedPatchOperation[];
   tables: ScopedPatchOperation[];
   deletes: ScopedPatchOperation[];
 } {
   const result = {
     updates: [] as ScopedPatchOperation[],
     creates: [] as ScopedPatchOperation[],
+    moves: [] as ScopedPatchOperation[],
     tables: [] as ScopedPatchOperation[],
     deletes: [] as ScopedPatchOperation[]
   };
   for (const operation of operations) {
-    if (operation.kind === 'update' || operation.kind === 'callout-child-update') result.updates.push(operation);
-    else if (operation.kind === 'create' || operation.kind === 'callout-create' || operation.kind === 'callout-child-create') {
+    if (operation.kind === 'update' || operation.kind === 'callout-child-update' || operation.kind === 'code-update') {
+      result.updates.push(operation);
+    } else if (operation.kind === 'create' || operation.kind === 'callout-create' ||
+      operation.kind === 'callout-child-create' || operation.kind === 'code-create') {
       result.creates.push(operation);
+    } else if (operation.kind === 'code-move' || operation.kind === 'code-section-reconcile') {
+      result.moves.push(operation);
     } else if (operation.kind === 'table-replace') result.tables.push(operation);
     else result.deletes.push(operation);
   }
@@ -689,7 +720,15 @@ async function applyScopedOperations(input: {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
     try {
-      if (operation.kind === 'update') {
+      if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
+        operation.kind === 'code-move' || operation.kind === 'code-delete' ||
+        operation.kind === 'code-section-reconcile') {
+        await applyCodeOperation({
+          adapter: input.adapter,
+          doc: input.doc,
+          operation: operation as CodeBlockOperation
+        });
+      } else if (operation.kind === 'update') {
         await input.adapter.replaceBlock({
           doc: input.doc,
           blockId: operation.remoteBlockId,
@@ -733,8 +772,11 @@ async function applyScopedOperations(input: {
           content: operation.desiredMarkdown,
           format: 'markdown'
         });
-      } else {
+      } else if (operation.kind === 'callout-child-delete' || operation.kind === 'callout-delete') {
         await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
+      } else {
+        const unsupported: never = operation;
+        throw new Error(`Unsupported scoped operation: ${String(unsupported)}`);
       }
       const blocks = await input.adapter.fetchDocBlocks({ doc: input.doc });
       verifyOperation(operation, blocks.blocks, input.doc, input.callouts);
@@ -753,6 +795,206 @@ async function applyScopedOperations(input: {
     }
   }
   return completed;
+}
+
+async function applyCodeOperation(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: CodeBlockOperation;
+}): Promise<void> {
+  const operation = input.operation;
+  const replaceBlock = input.adapter.replaceBlock?.bind(input.adapter);
+  const insertBlocksAfter = input.adapter.insertBlocksAfter?.bind(input.adapter);
+  const deleteBlocks = input.adapter.deleteBlocks?.bind(input.adapter);
+  const moveBlocksAfter = input.adapter.moveBlocksAfter?.bind(input.adapter);
+  if (!replaceBlock || !insertBlocksAfter || !deleteBlocks || !input.adapter.fetchDocBlocks) {
+    throw new Error('Configured Feishu adapter does not support Code block writes.');
+  }
+  if ((operation.kind === 'code-move' || operation.kind === 'code-section-reconcile') && !moveBlocksAfter) {
+    throw new Error('Configured Feishu adapter does not support Code block movement.');
+  }
+
+  if (operation.kind === 'code-section-reconcile') {
+    await applyCodeSectionReconcile({
+      adapter: input.adapter,
+      doc: input.doc,
+      operation,
+      replaceBlock,
+      insertBlocksAfter,
+      deleteBlocks,
+      moveBlocksAfter: moveBlocksAfter!
+    });
+    return;
+  }
+
+  const before = await fetchRemoteSemantic(input.adapter, input.doc);
+  if (operation.kind === 'code-create') {
+    const anchor = resolveAnchorBlockId(before, operation.afterLocator, input.doc);
+    await withRateLimitRetry(() => insertBlocksAfter({
+      doc: input.doc,
+      blockId: anchor,
+      content: renderCodeBlockXml(operation.desiredCode),
+      format: 'xml'
+    }));
+    return;
+  }
+
+  const remote = resolveRemoteCode(before, operation);
+  if (!remote.remoteBlockId) throw new Error('Code block write cannot resolve a current remote block ID.');
+  if (operation.kind === 'code-update') {
+    await withRateLimitRetry(() => replaceBlock({
+      doc: input.doc,
+      blockId: remote.remoteBlockId!,
+      content: renderCodeBlockXml({ ...operation.desiredCode, caption: remote.caption }),
+      format: 'xml'
+    }));
+    return;
+  }
+  if (operation.kind === 'code-move') {
+    const anchor = resolveAnchorBlockId(before, operation.afterLocator, input.doc);
+    await withRateLimitRetry(() => moveBlocksAfter!({
+      doc: input.doc,
+      blockId: anchor,
+      sourceBlockIds: [remote.remoteBlockId!]
+    }));
+    return;
+  }
+  await withRateLimitRetry(() => deleteBlocks({ doc: input.doc, blockIds: [remote.remoteBlockId!] }));
+}
+
+async function applyCodeSectionReconcile(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: CodeSectionReconcileOperation;
+  replaceBlock: NonNullable<FeishuAdapter['replaceBlock']>;
+  insertBlocksAfter: NonNullable<FeishuAdapter['insertBlocksAfter']>;
+  deleteBlocks: NonNullable<FeishuAdapter['deleteBlocks']>;
+  moveBlocksAfter: NonNullable<FeishuAdapter['moveBlocksAfter']>;
+}): Promise<void> {
+  for (const desired of input.operation.desiredCodes) {
+    let current = await fetchRemoteSemantic(input.adapter, input.doc);
+    let remote = findUniqueCodeByManagedFields(current, desired.code) ?? findCodeByLocator(current, desired.code.locator);
+    if (!remote) {
+      const anchor = resolveAnchorBlockId(current, desired.afterLocator, input.doc);
+      await withRateLimitRetry(() => input.insertBlocksAfter({
+        doc: input.doc,
+        blockId: anchor,
+        content: renderCodeBlockXml(desired.code),
+        format: 'xml'
+      }));
+      current = await fetchRemoteSemantic(input.adapter, input.doc);
+      remote = findUniqueCodeByManagedFields(current, desired.code) ?? findCodeByLocator(current, desired.code.locator);
+      if (!remote) throw new Error('Code section reconcile could not resolve the created block.');
+    } else if (!codeManagedEqual(remote, desired.code)) {
+      if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot replace a block without an ID.');
+      await withRateLimitRetry(() => input.replaceBlock({
+        doc: input.doc,
+        blockId: remote!.remoteBlockId!,
+        content: renderCodeBlockXml({ ...desired.code, caption: remote!.caption }),
+        format: 'xml'
+      }));
+      current = await fetchRemoteSemantic(input.adapter, input.doc);
+      remote = findUniqueCodeByManagedFields(current, desired.code) ?? findCodeByLocator(current, desired.code.locator);
+      if (!remote) throw new Error('Code section reconcile could not resolve the replaced block.');
+    }
+
+    const anchor = resolveAnchorBlockId(current, desired.afterLocator, input.doc);
+    if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot move a block without an ID.');
+    if (!sameLocator(remote.locator, desired.code.locator)) {
+      await withRateLimitRetry(() => input.moveBlocksAfter({
+        doc: input.doc,
+        blockId: anchor,
+        sourceBlockIds: [remote!.remoteBlockId!]
+      }));
+    }
+  }
+
+  const afterPlacement = await fetchRemoteSemantic(input.adapter, input.doc);
+  const desiredCounts = fingerprintCounts(input.operation.desiredCodes.map(({ code }) => code));
+  const seen = new Map<string, number>();
+  const obsolete = codeNodes(afterPlacement).filter((code) => {
+    if (!input.operation.sectionPaths.some((section) => sameSectionPath(code.locator.sectionPath, section))) return false;
+    const fingerprint = codeManagedFingerprint(code);
+    const count = (seen.get(fingerprint) ?? 0) + 1;
+    seen.set(fingerprint, count);
+    return count > (desiredCounts.get(fingerprint) ?? 0);
+  });
+  const obsoleteIds = obsolete.flatMap((code) => code.remoteBlockId ? [code.remoteBlockId] : []);
+  if (obsoleteIds.length > 0) {
+    await withRateLimitRetry(() => input.deleteBlocks({ doc: input.doc, blockIds: obsoleteIds }));
+  }
+}
+
+const CODE_WRITE_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000];
+
+async function withRateLimitRetry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = CODE_WRITE_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isRateLimitError(error)) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:\b429\b|rate.?limit|too many requests)/i.test(message);
+}
+
+function resolveRemoteCode(document: SemanticDocument, operation: Exclude<CodeBlockOperation, { kind: 'code-create' | 'code-section-reconcile' }>): SemanticCodeBlock {
+  const byId = codeNodes(document).find((code) => code.remoteBlockId && code.remoteBlockId === operation.remoteBlockId);
+  const byLocator = findCodeByLocator(document, operation.sourceLocator);
+  const matched = byId ?? byLocator;
+  if (!matched) throw new Error(`Code block correspondence is no longer resolvable at ${locatorKey(operation.sourceLocator)}.`);
+  return matched;
+}
+
+function resolveAnchorBlockId(document: SemanticDocument, locator: SemanticLocator | undefined, pageBlockId: string): string {
+  if (!locator) return pageBlockId;
+  const node = document.nodes.find((candidate) => sameLocator(candidate.locator, locator));
+  if (!node?.remoteBlockId) throw new Error(`Code block anchor is no longer resolvable at ${locatorKey(locator)}.`);
+  return node.remoteBlockId;
+}
+
+function codeNodes(document: SemanticDocument): SemanticCodeBlock[] {
+  return document.nodes.filter((node): node is SemanticCodeBlock => node.kind === 'code');
+}
+
+function findCodeByLocator(document: SemanticDocument, locator: SemanticLocator): SemanticCodeBlock | undefined {
+  return codeNodes(document).find((code) => sameLocator(code.locator, locator));
+}
+
+function findUniqueCodeByManagedFields(document: SemanticDocument, desired: SemanticCodeBlock): SemanticCodeBlock | undefined {
+  const matches = codeNodes(document).filter((code) => codeManagedEqual(code, desired));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function codeManagedEqual(left: SemanticCodeBlock, right: SemanticCodeBlock): boolean {
+  return left.content === right.content && left.resolvedLanguage === right.resolvedLanguage;
+}
+
+function codeManagedFingerprint(code: SemanticCodeBlock): string {
+  return semanticHash({ content: code.content, language: code.resolvedLanguage });
+}
+
+function fingerprintCounts(codes: SemanticCodeBlock[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const code of codes) {
+    const fingerprint = codeManagedFingerprint(code);
+    counts.set(fingerprint, (counts.get(fingerprint) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function sameLocator(left: SemanticLocator, right: SemanticLocator): boolean {
+  return locatorKey(left) === locatorKey(right);
+}
+
+function sameSectionPath(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
 }
 
 async function applyWhiteboardPlan(input: {
@@ -905,9 +1147,13 @@ function verifyOperation(
   documentId: string,
   callouts: CalloutConfig
 ): void {
-  if (operation.kind === 'delete' || operation.kind === 'callout-child-delete' || operation.kind === 'callout-delete') {
+  if (operation.kind === 'delete' || operation.kind === 'callout-child-delete' ||
+    operation.kind === 'callout-delete' || operation.kind === 'code-delete') {
     const remaining = new Set(blocks.flatMap((block) => block.block_id ? [block.block_id] : []));
-    if (operation.blockIds.some((blockId) => remaining.has(blockId))) {
+    const deletedIds = operation.kind === 'code-delete'
+      ? (operation.remoteBlockId ? [operation.remoteBlockId] : [])
+      : operation.blockIds;
+    if (deletedIds.some((blockId) => remaining.has(blockId))) {
       throw new Error('scoped readback verification failed: deleted block still exists');
     }
     return;
@@ -929,6 +1175,11 @@ function verifyOperation(
     return;
   }
 
+  if (operation.kind.startsWith('code-')) {
+    verifyCodeOperation(operation as CodeBlockOperation, remote);
+    return;
+  }
+
   if (operation.kind !== 'update' && operation.kind !== 'create') {
     throw new Error('Callout readback verification is not configured.');
   }
@@ -938,6 +1189,33 @@ function verifyOperation(
   });
   if (!candidates.some((node) => canonicalMarkdown(node.markdown) === canonicalMarkdown(operation.desiredMarkdown))) {
     throw new Error('scoped readback verification failed: remote text differs from desired text');
+  }
+}
+
+function verifyCodeOperation(operation: CodeBlockOperation, remote: SemanticDocument): void {
+  if (operation.kind === 'code-delete') return;
+  if (operation.kind === 'code-section-reconcile') {
+    for (const section of operation.sectionPaths) {
+      const desired = operation.desiredCodes
+        .map(({ code }) => code)
+        .filter((code) => sameSectionPath(code.locator.sectionPath, section));
+      const actual = codeNodes(remote).filter((code) => sameSectionPath(code.locator.sectionPath, section));
+      if (desired.length !== actual.length || desired.some((code, index) => {
+        const candidate = actual[index];
+        return !candidate || !codeManagedEqual(code, candidate);
+      })) {
+        throw new Error('Code section reconcile readback differs from the desired Code scope.');
+      }
+    }
+    return;
+  }
+  const desired = operation.desiredCode;
+  const matched = findCodeByLocator(remote, operation.locator) ?? findUniqueCodeByManagedFields(remote, desired);
+  if (!matched || !codeManagedEqual(matched, desired)) {
+    throw new Error('Code block readback differs from the desired content or language.');
+  }
+  if (desired.caption !== undefined && matched.caption !== desired.caption) {
+    throw new Error('Code block readback did not preserve the remote caption.');
   }
 }
 
