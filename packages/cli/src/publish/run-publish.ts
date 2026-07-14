@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
+import { renderCalloutXml } from '../callouts/callout-xml.js';
+import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { canonicalMarkdown } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
@@ -28,6 +30,7 @@ import {
 } from '../whiteboards/whiteboard-plan.js';
 import { findPageBlock } from './block-state.js';
 import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
+import type { CalloutOperation } from './callout-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
 import { applyPublishTransformForProfile } from './profile-transform.js';
 import { planScopedPatch, type ScopedPatchOperation, type ScopedPatchPlan } from './scoped-patch-plan.js';
@@ -73,6 +76,7 @@ export async function runPublish(input: {
   confirmUntrackedRemote?: boolean;
   syncWhiteboards?: boolean;
   confirmedRemoteWhiteboardOverwrites?: string[];
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<RunPublishResult> {
   if (input.write && input.strategy === 'document-replace' && !input.confirmDestructive) {
@@ -141,23 +145,39 @@ export async function runPublish(input: {
   if (plan.strategy === 'block-patch') {
     if (!plan.scopedPatch) throw new Error('block-patch write is missing a scoped patch plan');
     if (!analysis.localCurrent) throw new Error('block-patch write is missing local semantic state');
-    const completedOperations = await applyScopedPatch({
+    const phases = partitionScopedOperations(plan.scopedPatch.operations);
+    const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
+    let completedOperations = await applyScopedOperations({
       adapter: input.adapter,
       doc: analysis.resolvedDocumentId,
-      plan: plan.scopedPatch
+      operations: [...phases.updates, ...phases.creates, ...phases.tables],
+      callouts,
+      pendingAfter: [
+        ...(plan.whiteboards?.operations ?? []).map(summarizeWhiteboardOperation),
+        ...phases.deletes.map(summarizeScopedOperation)
+      ]
     });
-    const verifiedWhiteboards = input.syncWhiteboards && plan.whiteboards
+    const whiteboardResult = input.syncWhiteboards && plan.whiteboards
       ? await applyWhiteboardPlan({
         adapter: input.adapter,
         doc: analysis.resolvedDocumentId,
         plan: plan.whiteboards,
         assets: analysis.whiteboardAssets ?? [],
         previousEntries: whiteboardEntries(analysis.receipt),
-        completedOperations
+        completedOperations,
+        pendingAfter: phases.deletes.map(summarizeScopedOperation)
       })
-      : [];
+      : { entries: [] as WhiteboardReceiptEntry[], completedOperations };
+    completedOperations = whiteboardResult.completedOperations;
+    completedOperations = await applyScopedOperations({
+      adapter: input.adapter,
+      doc: analysis.resolvedDocumentId,
+      operations: phases.deletes,
+      callouts,
+      completedOperations
+    });
     const afterMarkdown = await input.adapter.fetchDocMarkdown({ doc: analysis.resolvedDocumentId });
-    const afterSemantic = await fetchRemoteSemantic(input.adapter, analysis.resolvedDocumentId);
+    const afterSemantic = await fetchRemoteSemantic(input.adapter, analysis.resolvedDocumentId, callouts);
     const receiptInput = {
       cwd: input.cwd,
       target: input.target,
@@ -171,7 +191,7 @@ export async function runPublish(input: {
       remoteSemantic: afterSemantic
     };
     if (input.syncWhiteboards) {
-      await recordPublishReceiptV3({ ...receiptInput, whiteboards: verifiedWhiteboards });
+      await recordPublishReceiptV3({ ...receiptInput, whiteboards: whiteboardResult.entries });
     } else {
       await recordPublishReceiptV2(receiptInput);
     }
@@ -572,16 +592,43 @@ function blockedScopedPatch(message: string): ScopedPatchPlan {
   };
 }
 
-async function applyScopedPatch(input: {
+function partitionScopedOperations(operations: ScopedPatchOperation[]): {
+  updates: ScopedPatchOperation[];
+  creates: ScopedPatchOperation[];
+  tables: ScopedPatchOperation[];
+  deletes: ScopedPatchOperation[];
+} {
+  const result = {
+    updates: [] as ScopedPatchOperation[],
+    creates: [] as ScopedPatchOperation[],
+    tables: [] as ScopedPatchOperation[],
+    deletes: [] as ScopedPatchOperation[]
+  };
+  for (const operation of operations) {
+    if (operation.kind === 'update' || operation.kind === 'callout-child-update') result.updates.push(operation);
+    else if (operation.kind === 'create' || operation.kind === 'callout-create' || operation.kind === 'callout-child-create') {
+      result.creates.push(operation);
+    } else if (operation.kind === 'table-replace') result.tables.push(operation);
+    else result.deletes.push(operation);
+  }
+  return result;
+}
+
+async function applyScopedOperations(input: {
   adapter: FeishuAdapter;
   doc: string;
-  plan: ScopedPatchPlan;
+  operations: ScopedPatchOperation[];
+  callouts: CalloutConfig;
+  completedOperations?: PublishWriteOperationSummary[];
+  pendingAfter?: PublishWriteOperationSummary[];
 }): Promise<PublishWriteOperationSummary[]> {
   if (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks || !input.adapter.fetchDocBlocks) {
     throw new Error('Configured Feishu adapter does not support scoped block-patch writes');
   }
-  const completed: ScopedPatchOperation[] = [];
-  for (const operation of input.plan.operations) {
+  const completed = [...(input.completedOperations ?? [])];
+  for (let index = 0; index < input.operations.length; index += 1) {
+    const operation = input.operations[index]!;
+    const summary = summarizeScopedOperation(operation);
     try {
       if (operation.kind === 'update') {
         await input.adapter.replaceBlock({
@@ -594,7 +641,8 @@ async function applyScopedPatch(input: {
         await input.adapter.insertBlocksAfter({
           doc: input.doc,
           blockId: operation.insertAfterBlockId,
-          markdown: operation.desiredMarkdown
+          content: operation.desiredMarkdown,
+          format: 'markdown'
         });
       } else if (operation.kind === 'delete') {
         await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
@@ -605,15 +653,44 @@ async function applyScopedPatch(input: {
           content: renderTableXml(operation.desiredTable),
           format: 'xml'
         });
+      } else if (operation.kind === 'callout-create') {
+        await input.adapter.insertBlocksAfter({
+          doc: input.doc,
+          blockId: operation.insertAfterBlockId,
+          content: renderCalloutXml({ callout: operation.desiredCallout, config: input.callouts }),
+          format: 'xml'
+        });
+      } else if (operation.kind === 'callout-child-update') {
+        await input.adapter.replaceBlock({
+          doc: input.doc,
+          blockId: operation.remoteBlockId,
+          content: operation.desiredMarkdown,
+          format: 'markdown'
+        });
+      } else if (operation.kind === 'callout-child-create') {
+        await input.adapter.insertBlocksAfter({
+          doc: input.doc,
+          blockId: operation.insertAfterBlockId,
+          content: operation.desiredMarkdown,
+          format: 'markdown'
+        });
       } else {
-        throw new Error('Callout writes are not available until the Callout executor is configured.');
+        await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
       }
       const blocks = await input.adapter.fetchDocBlocks({ doc: input.doc });
-      verifyOperation(operation, blocks.blocks, input.doc);
-      completed.push(operation);
+      verifyOperation(operation, blocks.blocks, input.doc, input.callouts);
+      completed.push(summary);
     } catch (error) {
       if (completed.length === 0) throw error;
-      throw new PartialWriteError({ completedOperations: completed, failedOperation: operation, cause: error });
+      throw new PartialWriteError({
+        completedOperations: completed,
+        failedOperation: summary,
+        pendingOperations: [
+          ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+          ...(input.pendingAfter ?? [])
+        ],
+        cause: error
+      });
     }
   }
   return completed;
@@ -626,7 +703,8 @@ async function applyWhiteboardPlan(input: {
   assets: LocalWhiteboardAsset[];
   previousEntries: WhiteboardReceiptEntry[];
   completedOperations: PublishWriteOperationSummary[];
-}): Promise<WhiteboardReceiptEntry[]> {
+  pendingAfter?: PublishWriteOperationSummary[];
+}): Promise<{ entries: WhiteboardReceiptEntry[]; completedOperations: PublishWriteOperationSummary[] }> {
   const replaceImageWithWhiteboard = input.adapter.replaceImageWithWhiteboard?.bind(input.adapter);
   const queryWhiteboard = input.adapter.queryWhiteboard?.bind(input.adapter);
   const updateWhiteboard = input.adapter.updateWhiteboard?.bind(input.adapter);
@@ -638,7 +716,8 @@ async function applyWhiteboardPlan(input: {
   const localByKey = new Map(input.assets.map((asset) => [asset.assetKey, asset]));
   const entries = new Map(input.previousEntries.map((entry) => [entry.assetKey, entry]));
   const completed = [...input.completedOperations];
-  for (const operation of input.plan.operations) {
+  for (let index = 0; index < input.plan.operations.length; index += 1) {
+    const operation = input.plan.operations[index]!;
     const summary = summarizeWhiteboardOperation(operation);
     try {
       const asset = localByKey.get(operation.assetKey);
@@ -687,11 +766,18 @@ async function applyWhiteboardPlan(input: {
       throw new PartialWriteError({
         completedOperations: completed,
         failedOperation: summary,
+        pendingOperations: [
+          ...input.plan.operations.slice(index + 1).map(summarizeWhiteboardOperation),
+          ...(input.pendingAfter ?? [])
+        ],
         cause: error
       });
     }
   }
-  return [...entries.values()].sort((left, right) => left.assetKey.localeCompare(right.assetKey));
+  return {
+    entries: [...entries.values()].sort((left, right) => left.assetKey.localeCompare(right.assetKey)),
+    completedOperations: completed
+  };
 }
 
 async function queryWhiteboardReadback(input: {
@@ -732,6 +818,10 @@ function summarizeWhiteboardOperation(operation: WhiteboardOperation): PublishWr
   };
 }
 
+function summarizeScopedOperation(operation: ScopedPatchOperation): PublishWriteOperationSummary {
+  return { kind: operation.kind, locator: operation.locator };
+}
+
 function verifyWhiteboardIdentity(
   blocks: import('../feishu/types.js').FeishuBlock[],
   documentId: string,
@@ -750,8 +840,13 @@ function verifyWhiteboardIdentity(
   }
 }
 
-function verifyOperation(operation: ScopedPatchOperation, blocks: import('../feishu/types.js').FeishuBlock[], documentId: string): void {
-  if (operation.kind === 'delete') {
+function verifyOperation(
+  operation: ScopedPatchOperation,
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  documentId: string,
+  callouts: CalloutConfig
+): void {
+  if (operation.kind === 'delete' || operation.kind === 'callout-child-delete' || operation.kind === 'callout-delete') {
     const remaining = new Set(blocks.flatMap((block) => block.block_id ? [block.block_id] : []));
     if (operation.blockIds.some((blockId) => remaining.has(blockId))) {
       throw new Error('scoped readback verification failed: deleted block still exists');
@@ -759,7 +854,7 @@ function verifyOperation(operation: ScopedPatchOperation, blocks: import('../fei
     return;
   }
 
-  const remote = remoteSemanticDocument(blocks, documentId);
+  const remote = remoteSemanticDocument(blocks, documentId, callouts);
   if (operation.kind === 'table-replace') {
     const match = findCorrespondingRemoteTable(operation.desiredTable, remote);
     if (!match.table) throw new Error(`scoped readback verification failed: ${match.blocker}`);
@@ -767,6 +862,11 @@ function verifyOperation(operation: ScopedPatchOperation, blocks: import('../fei
     if (diff.blockers.length > 0 || diff.additions.length > 0 || diff.updates.length > 0) {
       throw new Error('scoped readback verification failed: remote table differs from desired table');
     }
+    return;
+  }
+
+  if (operation.kind.startsWith('callout-')) {
+    verifyCalloutOperation(operation as CalloutOperation, remote, callouts);
     return;
   }
 
@@ -782,6 +882,58 @@ function verifyOperation(operation: ScopedPatchOperation, blocks: import('../fei
   }
 }
 
+function verifyCalloutOperation(
+  operation: CalloutOperation,
+  remote: SemanticDocument,
+  callouts: CalloutConfig
+): void {
+  if (operation.kind === 'callout-delete' || operation.kind === 'callout-child-delete') return;
+  const match = remote.nodes.find((node) => {
+    return node.kind === 'callout' && locatorKey(node.locator) === locatorKey(operation.locator);
+  });
+  if (!match || match.kind !== 'callout') {
+    throw new Error('Callout readback verification failed: Callout is missing');
+  }
+  if (operation.kind === 'callout-create') {
+    const expectedTitle = operation.desiredCallout.calloutType === 'note' ? callouts.noteTitle : callouts.warningTitle;
+    if (match.calloutType !== operation.desiredCallout.calloutType || match.title?.markdown !== expectedTitle) {
+      throw new Error('Callout readback verification failed: type or presentation title differs');
+    }
+    if (!calloutChildrenMatch(match.children, operation.desiredCallout.children)) {
+      throw new Error('Callout readback verification failed: body differs from desired content');
+    }
+    return;
+  }
+  if (match.remoteBlockId !== operation.calloutBlockId) {
+    throw new Error('Callout readback verification failed: container identity changed');
+  }
+  if (operation.kind === 'callout-child-update') {
+    const child = match.children[operation.childOrdinal];
+    if (!child || canonicalMarkdown(child.markdown) !== canonicalMarkdown(operation.desiredMarkdown)) {
+      throw new Error('Callout readback verification failed: updated child differs');
+    }
+    return;
+  }
+  const created = match.children.slice(
+    operation.childOrdinal,
+    operation.childOrdinal + operation.desiredChildren.length
+  );
+  if (!calloutChildrenMatch(created, operation.desiredChildren)) {
+    throw new Error('Callout readback verification failed: created children differ');
+  }
+}
+
+function calloutChildrenMatch(
+  remote: Array<{ blockType: number; markdown: string }>,
+  desired: Array<{ blockType: number; markdown: string }>
+): boolean {
+  return remote.length === desired.length && remote.every((child, index) => {
+    const expected = desired[index];
+    return Boolean(expected && child.blockType === expected.blockType &&
+      canonicalMarkdown(child.markdown) === canonicalMarkdown(expected.markdown));
+  });
+}
+
 function sameSection(left: SemanticLocator, right: SemanticLocator): boolean {
   return left.sectionPath.length === right.sectionPath.length &&
     left.sectionPath.every((part, index) => part === right.sectionPath[index]);
@@ -791,10 +943,14 @@ function locatorKey(locator: SemanticLocator): string {
   return `${locator.kind}:${JSON.stringify(locator.sectionPath)}:${locator.ordinal}`;
 }
 
-async function fetchRemoteSemantic(adapter: FeishuAdapter, documentId: string): Promise<SemanticDocument> {
+async function fetchRemoteSemantic(
+  adapter: FeishuAdapter,
+  documentId: string,
+  callouts: CalloutConfig = DEFAULT_CALLOUT_CONFIG
+): Promise<SemanticDocument> {
   if (!adapter.fetchDocBlocks) throw new Error('Configured Feishu adapter cannot fetch Docx blocks.');
   const blocks = await adapter.fetchDocBlocks({ doc: documentId });
-  return remoteSemanticDocument(blocks.blocks, documentId);
+  return remoteSemanticDocument(blocks.blocks, documentId, callouts);
 }
 
 async function recordPublishReceiptV2(input: {

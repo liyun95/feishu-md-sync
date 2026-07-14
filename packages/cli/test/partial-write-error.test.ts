@@ -10,6 +10,7 @@ describe('PartialWriteError', () => {
         assetKey: 'assets/cagra.png',
         locator: { sectionPath: [], kind: 'asset', ordinal: 0 }
       },
+      pendingOperations: [{ kind: 'callout-delete', locator: { sectionPath: [], kind: 'callout', ordinal: 0 } }],
       cause: new Error('network failed')
     });
 
@@ -18,7 +19,8 @@ describe('PartialWriteError', () => {
       name: 'PartialWriteError',
       receiptWritten: false,
       completedOperations: [expect.objectContaining({ kind: 'update' })],
-      failedOperation: expect.objectContaining({ kind: 'whiteboard-update', assetKey: 'assets/cagra.png' })
+      failedOperation: expect.objectContaining({ kind: 'whiteboard-update', assetKey: 'assets/cagra.png' }),
+      pendingOperations: [expect.objectContaining({ kind: 'callout-delete' })]
     });
   });
 });

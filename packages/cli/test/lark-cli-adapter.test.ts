@@ -193,7 +193,12 @@ describe('LarkCliAdapter', () => {
       content: '<table><tr><td>Value</td></tr></table>',
       format: 'xml'
     });
-    await adapter.insertBlocksAfter({ doc: 'doc_token', blockId: 'p1', markdown: '- New item' });
+    await adapter.insertBlocksAfter({
+      doc: 'doc_token',
+      blockId: 'p1',
+      content: '- New item',
+      format: 'markdown'
+    });
     await adapter.deleteBlocks({ doc: 'doc_token', blockIds: ['p2', 'p3'] });
 
     expect(calls).toEqual([
@@ -248,6 +253,32 @@ describe('LarkCliAdapter', () => {
         'bot'
       ]
     ]);
+  });
+
+  it('inserts Callout XML through stdin', async () => {
+    const calls: Array<{ args: string[]; stdin?: string }> = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'user',
+      exec: async (args, input) => {
+        calls.push({ args, stdin: input?.stdin });
+        return { stdout: JSON.stringify({ ok: true, data: { result: 'success' } }), stderr: '' };
+      }
+    });
+
+    await adapter.insertBlocksAfter({
+      doc: 'doc_token',
+      blockId: 'p1',
+      content: '<callout emoji="📘"><p>Notes</p><p>Body</p></callout>',
+      format: 'xml'
+    });
+
+    expect(calls).toEqual([{
+      args: [
+        'docs', '+update', '--doc', 'doc_token', '--command', 'block_insert_after',
+        '--block-id', 'p1', '--doc-format', 'xml', '--content', '-', '--format', 'json', '--as', 'user'
+      ],
+      stdin: '<callout emoji="📘"><p>Notes</p><p>Body</p></callout>'
+    }]);
   });
 
   it('creates a Markdown doc under a parent token through lark-cli docs +create', async () => {

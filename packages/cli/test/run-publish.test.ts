@@ -14,6 +14,7 @@ import {
 import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
 import { runPublish } from '../src/publish/run-publish.js';
 import { semanticHash } from '../src/semantic/normalize.js';
+import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
 import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runPublish', () => {
@@ -208,6 +209,229 @@ Next text.`, 'utf8');
       insertAfterBlockId: 'previous',
       desiredCallout: expect.objectContaining({ calloutType: 'warning' })
     }));
+  });
+
+  it('writes a Callout body update without replacing the container', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-write-'));
+    const markdownPath = join(dir, 'doc.md');
+    const local = '<div class="alert note">\n\nLocal body.\n\n</div>';
+    await writeFile(markdownPath, local, 'utf8');
+    let body = 'Remote body.';
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: `<div class="alert note">\n\n${body}\n\n</div>`
+      }),
+      fetchDocBlocks: async () => ({ blocks: calloutBlocks(body) }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        calls.push(`replace:${blockId}:${content}`);
+        body = content;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(calls).toEqual(['replace:body1:Local body.']);
+    expect(calloutBlocks(body).find((block) => block.block_type === 19)?.block_id).toBe('callout1');
+    await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({ version: 2, resolvedDocumentId: 'doc_token' });
+  });
+
+  it('creates a Callout with configured presentation through XML', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-write-'));
+    const markdownPath = join(dir, 'doc.md');
+    const local = `Previous text.
+
+<div class="alert note">
+
+中文正文。
+
+</div>`;
+    await writeFile(markdownPath, local, 'utf8');
+    let created = false;
+    let insertedXml = '';
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: created ? local : 'Previous text.' }),
+      fetchDocBlocks: async () => ({
+        blocks: created
+          ? [
+            { block_id: 'doc_token', block_type: 1, children: ['previous', 'callout1'] },
+            textBlock('previous', 'Previous text.'),
+            ...calloutBlocks('中文正文。', '说明').slice(1)
+          ]
+          : [
+            { block_id: 'doc_token', block_type: 1, children: ['previous'] },
+            textBlock('previous', 'Previous text.')
+          ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async ({ content, format }) => {
+        insertedXml = content;
+        expect(format).toBe('xml');
+        created = true;
+      },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      callouts: { noteTitle: '说明', warningTitle: '警告' },
+      adapter
+    });
+
+    expect(insertedXml).toContain('<callout emoji="📘" background-color="light-orange" border-color="orange">');
+    expect(insertedXml).toContain('<p>说明</p><p>中文正文。</p>');
+  });
+
+  it('executes destructive Callout deletion after text updates', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-order-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const base = 'Old text.\n\n<div class="alert note">\n\nBody.\n\n</div>';
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, 'New text.', 'utf8');
+    await writeTrackedCalloutReceipt({ cwd: dir, target, localBase: base, remoteMarkdown: base });
+    let text = 'Old text.';
+    let calloutPresent = true;
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: calloutPresent
+          ? `${text}\n\n<div class="alert note">\n\nBody.\n\n</div>`
+          : text
+      }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: calloutPresent ? ['p1', 'callout1'] : ['p1'] },
+          textBlock('p1', text),
+          ...(calloutPresent ? calloutBlocks('Body.').slice(1) : [])
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        calls.push(`replace:${blockId}`);
+        text = content;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async ({ blockIds }) => {
+        calls.push(`delete:${blockIds.join(',')}`);
+        calloutPresent = false;
+      },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(calls).toEqual(['replace:p1', 'delete:callout1']);
+  });
+
+  it('reports pending Callout writes and replans from partial remote state', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-partial-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const baseBodies = ['A', 'B', 'C'];
+    const desiredBodies = ['A2', 'B2', 'C2'];
+    const base = canonicalCallout(baseBodies);
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, canonicalCallout(desiredBodies), 'utf8');
+    await writeTrackedPureCalloutReceipt({ cwd: dir, target, base, bodies: baseBodies });
+    const remoteBodies = [...baseBodies];
+    let failSecond = true;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: canonicalCallout(remoteBodies) }),
+      fetchDocBlocks: async () => ({ blocks: calloutBlocks(remoteBodies) }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        const index = Number(blockId.replace('body', '')) - 1;
+        if (index === 1 && failSecond) {
+          failSecond = false;
+          throw new Error('network failed');
+        }
+        remoteBodies[index] = content;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    let thrown: unknown;
+    try {
+      await runPublish({
+        cwd: dir,
+        file: markdownPath,
+        target,
+        profile: 'none',
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        adapter
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({ kind: 'callout-child-update' })],
+      failedOperation: expect.objectContaining({ kind: 'callout-child-update' }),
+      pendingOperations: [expect.objectContaining({ kind: 'callout-child-update' })],
+      receiptWritten: false
+    });
+    expect(remoteBodies).toEqual(['A2', 'B', 'C']);
+
+    const retryPlan = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(retryPlan.plan.scopedPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'callout-child-update', childOrdinal: 1 }),
+      expect.objectContaining({ kind: 'callout-child-update', childOrdinal: 2 })
+    ]);
   });
 
   it('plans block-patch against the document body when the leading title matches', async () => {
@@ -1465,6 +1689,91 @@ function textBlock(blockId: string, text: string): { block_id: string; block_typ
   };
 }
 
+function calloutBlocks(body: string | string[], title = 'Notes') {
+  const bodies = Array.isArray(body) ? body : [body];
+  const bodyIds = bodies.map((_, index) => `body${index + 1}`);
+  return [
+    { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+    { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', ...bodyIds] },
+    textBlock('title1', title),
+    ...bodies.map((value, index) => textBlock(`body${index + 1}`, value))
+  ];
+}
+
+function canonicalCallout(bodies: string[]): string {
+  return `<div class="alert note">\n\n${bodies.join('\n\n')}\n\n</div>`;
+}
+
+async function writeTrackedPureCalloutReceipt(input: {
+  cwd: string;
+  target: { kind: 'docx'; token: string };
+  base: string;
+  bodies: string[];
+}): Promise<void> {
+  const localBaseSnapshot = await writeLocalBaseSnapshot({
+    cwd: input.cwd,
+    target: input.target,
+    markdown: input.base
+  });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: input.cwd,
+    target: input.target,
+    document: remoteSemanticDocument(calloutBlocks(input.bodies), 'doc_token')
+  });
+  await writePublishReceipt({
+    cwd: input.cwd,
+    receipt: {
+      version: 2,
+      target: input.target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(input.base),
+      publishDraftHash: hashText(input.base),
+      remoteSnapshotHash: hashText(input.base),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      updatedAt: '2026-07-14T00:00:00.000Z'
+    }
+  });
+}
+
+async function writeTrackedCalloutReceipt(input: {
+  cwd: string;
+  target: { kind: 'docx'; token: string };
+  localBase: string;
+  remoteMarkdown: string;
+}): Promise<void> {
+  const localBaseSnapshot = await writeLocalBaseSnapshot({
+    cwd: input.cwd,
+    target: input.target,
+    markdown: input.localBase
+  });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: input.cwd,
+    target: input.target,
+    document: remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['p1', 'callout1'] },
+      textBlock('p1', 'Old text.'),
+      ...calloutBlocks('Body.').slice(1)
+    ], 'doc_token')
+  });
+  await writePublishReceipt({
+    cwd: input.cwd,
+    receipt: {
+      version: 2,
+      target: input.target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(input.localBase),
+      publishDraftHash: hashText(input.localBase),
+      remoteSnapshotHash: hashText(input.remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      updatedAt: '2026-07-14T00:00:00.000Z'
+    }
+  });
+}
+
 function codeBlock(blockId: string, content: string, language?: number) {
   return {
     block_id: blockId,
@@ -1497,8 +1806,8 @@ function blockPatchAdapter(input: {
       calls.push(`replace:${blockId}:${content}`);
       written = true;
     },
-    insertBlocksAfter: async ({ blockId, markdown }) => {
-      calls.push(`insert-after:${blockId}:${markdown}`);
+    insertBlocksAfter: async ({ blockId, content }) => {
+      calls.push(`insert-after:${blockId}:${content}`);
       written = true;
     },
     deleteBlocks: async ({ blockIds }) => {
