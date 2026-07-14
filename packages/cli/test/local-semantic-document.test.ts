@@ -43,12 +43,40 @@ Closing text.
     expect(table?.locator.sectionPath).toEqual(['Index params']);
   });
 
-  it('marks non-table HTML containers as opaque', () => {
+  it('parses canonical Milvus Callouts and keeps other div containers opaque', () => {
     const document = localSemanticDocument('<div class="alert note">\n\nNote body.\n\n</div>');
     expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'callout',
+      calloutType: 'note',
+      children: [expect.objectContaining({ markdown: 'Note body.' })]
+    }));
+
+    const opaque = localSemanticDocument('<div class="multipleCode">\n\nCode tabs.\n\n</div>');
+    expect(opaque.nodes).toContainEqual(expect.objectContaining({
       kind: 'opaque',
       description: 'unsupported local HTML container: div'
     }));
+  });
+
+  it('assigns section-aware Callout ordinals', () => {
+    const document = localSemanticDocument(`# Build index
+
+<div class="alert note">
+
+First note.
+
+</div>
+
+<div class="alert warning">
+
+First warning.
+
+</div>`);
+
+    expect(document.nodes.filter((node) => node.kind === 'callout').map((node) => node.locator)).toEqual([
+      { sectionPath: ['Build index'], kind: 'callout', ordinal: 0 },
+      { sectionPath: ['Build index'], kind: 'callout', ordinal: 1 }
+    ]);
   });
 
   it('keeps YAML frontmatter out of writable text nodes', () => {

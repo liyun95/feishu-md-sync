@@ -76,6 +76,7 @@ function renderElements(elements: TextElement[] = []): string {
     const style = run.text_element_style ?? {};
     let text = run.content;
     if (style.inline_code) text = `\`${text}\``;
+    if (style.italic) text = `*${text}*`;
     if (style.bold) text = `**${text}**`;
     if (style.link?.url) text = `[${text}](${normalizeMarkdownLinkUrl(style.link.url)})`;
     return text;
