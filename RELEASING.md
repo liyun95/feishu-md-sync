@@ -1,0 +1,106 @@
+# Release Policy
+
+This document defines how changes to the published `feishu-md-sync` package are classified, grouped into versions, and released.
+
+## Release metadata
+
+Each user-visible pull request should carry metadata in three independent dimensions.
+
+### Change type
+
+Change-type labels describe what kind of work the pull request contains:
+
+| Label | Meaning |
+| --- | --- |
+| `enhancement` | A new capability or a meaningful improvement to existing behavior. |
+| `bug` | A correction to behavior that was already intended to work. |
+| `documentation` | Documentation-only changes. |
+| `proposal` | A design or proposal that does not yet ship product behavior. |
+
+### Release impact
+
+Every pull request that can affect the published package must have exactly one release-impact label:
+
+| Label | Version effect | Use when |
+| --- | --- | --- |
+| `release:major` | Major bump | The release intentionally introduces incompatible behavior or graduates the package to `1.0.0`. Before `1.0.0`, apply this only after an explicit maintainer decision. |
+| `release:minor` | Minor bump | The pull request adds backward-compatible, user-visible functionality. |
+| `release:patch` | Patch bump | The pull request fixes existing behavior without adding a major capability. |
+| `release:none` | No bump by itself | The change affects only documentation, tests, CI, internal refactoring, or release infrastructure. |
+
+When multiple pull requests are released together, the highest impact determines the version bump:
+
+```text
+major > minor > patch > none
+```
+
+For example, one minor feature plus two patch fixes produces a minor release.
+
+### Area
+
+Area labels identify the affected subsystem. They do not determine the version number.
+
+| Label | Scope |
+| --- | --- |
+| `cli` | CLI commands, options, output, and runtime behavior. |
+| `area:release` | npm packaging, publishing, versions, and release automation. |
+| `area:table` | Markdown and Feishu table support. |
+| `area:whiteboard` | SVG assets and Feishu Whiteboard support. |
+| `agent` | Agent-facing workflows and integrations. |
+
+Add more area labels only when a stable subsystem needs its own release-history filter.
+
+## Milestones and Git tags
+
+A GitHub Milestone answers which planned version will contain a pull request. Assign user-visible changes to a version milestone before merging when the target version is known.
+
+- Open milestones represent planned releases, such as `v0.2.0`.
+- Close a milestone after its npm package and GitHub Release are published.
+- Moving a pull request between milestones changes the release plan; it does not change Git history.
+
+A Git tag answers whether a version has actually shipped. Do not create a version tag when planning a release. Create `vX.Y.Z` only after the release commit is merged and npm publishing succeeds. The tag, GitHub Release, and package version must refer to the same release commit.
+
+## Pull request workflow
+
+Before a user-visible pull request is ready to merge:
+
+1. Apply one change-type label.
+2. Apply exactly one `release:*` label.
+3. Apply the relevant area labels.
+4. Assign the target version milestone, or state why the change is not assigned yet.
+5. Add a short release-note sentence that describes the user-visible outcome.
+
+Use `release:none` for documentation or infrastructure work that should not independently trigger an npm version bump. Such work may still be mentioned in release notes when it materially affects installation, operation, or maintenance.
+
+## Preparing a release
+
+Create a dedicated Release PR rather than publishing directly from an arbitrary feature commit.
+
+1. Review the target milestone and confirm all intended pull requests are merged.
+2. Calculate the version from the highest `release:*` impact in the milestone.
+3. Update `packages/cli/package.json` and `package-lock.json` to the target version.
+4. Add or update the changelog and draft the GitHub Release notes from the milestone pull requests.
+5. Run:
+
+   ```bash
+   npm test
+   npm run test:coverage
+   npm run typecheck
+   npm run test:package
+   npm run docs:build
+   ```
+
+6. Run the live Feishu smoke tests with the dedicated test document and identity.
+7. Merge the Release PR after all required checks pass.
+8. Publish through the Trusted Publisher workflow.
+9. Confirm the package is available from npm, then create the matching Git tag and GitHub Release.
+10. Close the milestone.
+
+## Current version map
+
+| Version | Included work | State |
+| --- | --- | --- |
+| `v0.1.0` | New CLI surface, lark-cli onboarding, and initial npm packaging. | Published |
+| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, and editable Whiteboard assets. | Planned |
+
+The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.
