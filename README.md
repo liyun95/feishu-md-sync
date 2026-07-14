@@ -93,6 +93,8 @@ npm run docs:build
 
 Generated outputs such as `packages/cli/dist/`, `packages/cli/coverage/`, `apps/docs/.vitepress/dist/`, `.sync/`, `runs/`, and `dogfood/` should not be committed unless explicitly intended.
 
+Maintainers should follow [`RELEASING.md`](./RELEASING.md) when classifying pull requests, planning versions, and publishing npm releases.
+
 ## License
 
 MIT. See [`packages/cli/LICENSE`](./packages/cli/LICENSE) and [`packages/cli/NOTICE`](./packages/cli/NOTICE).
