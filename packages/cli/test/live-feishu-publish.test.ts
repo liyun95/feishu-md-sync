@@ -13,6 +13,7 @@ import {
 } from '../src/receipts/publish-receipt.js';
 
 const runLive = process.env.FEISHU_MD_SYNC_LIVE === '1';
+const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
 
 describe.skipIf(!runLive)('live Feishu publish', () => {
   it('publishes a Zilliz draft to an existing test doc with guarded document replace', async () => {
@@ -171,12 +172,12 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
         body: ['Note local v1.', 'Note second.']
       });
 
-      await adapter.replaceBlock({
+      await retryRateLimited(() => adapter.replaceBlock({
         doc: documentId,
         blockId: warning.bodyBlockIds[0]!,
         content: 'Warning remote edit.',
         format: 'markdown'
-      });
+      }));
       await writeFile(file, calloutMarkdown({
         note: ['Note local v1.', 'Note local edit.'],
         warning: ['Warning first.', 'Warning second.']
@@ -200,12 +201,12 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
 
       const currentNote = afterDisjoint.find((callout) => callout.title === 'Notes');
       if (!currentNote) throw new Error('live Callout note disappeared before conflict test');
-      await adapter.replaceBlock({
+      await retryRateLimited(() => adapter.replaceBlock({
         doc: documentId,
         blockId: currentNote.bodyBlockIds[1]!,
         content: 'Note remote conflict.',
         format: 'markdown'
-      });
+      }));
       await writeFile(file, calloutMarkdown({
         note: ['Note local v1.', 'Note local conflict.'],
         warning: ['Warning first.', 'Warning second.']
@@ -217,12 +218,12 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       expect(conflict.stdout).toContain('"strategy": "blocked"');
       expect(conflict.stdout).toContain('"code": "remote-callout-conflict"');
 
-      await adapter.replaceBlock({
+      await retryRateLimited(() => adapter.replaceBlock({
         doc: documentId,
         blockId: currentNote.bodyBlockIds[1]!,
         content: 'Note local edit.',
         format: 'markdown'
-      });
+      }));
       const restored = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
       expect(restored.find((callout) => callout.title === 'Notes')?.body).toEqual([
         'Note local v1.', 'Note local edit.'
@@ -399,7 +400,16 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function runCli(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
+async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await runCliOnce(args);
+    const delayMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+    if (delayMs === undefined || !isRateLimited(`${result.stdout}\n${result.stderr}`)) return result;
+    await delay(delayMs);
+  }
+}
+
+function runCliOnce(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
   return new Promise((resolve) => {
     execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
       cwd: new URL('..', import.meta.url),
@@ -413,6 +423,26 @@ function runCli(args: string[]): Promise<{ stdout: string; stderr: string; statu
       });
     });
   });
+}
+
+async function retryRateLimited<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isRateLimited(error instanceof Error ? error.message : String(error))) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isRateLimited(value: string): boolean {
+  return /(?:HTTP\s+429|\b429\b.*(?:rate|limit|response))/i.test(value);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function runLarkCli(args: string[], options: { cwd?: string } = {}): Promise<void> {
