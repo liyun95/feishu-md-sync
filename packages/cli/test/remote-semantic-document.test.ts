@@ -208,6 +208,31 @@ describe('remote semantic document', () => {
       unsupported: expect.arrayContaining(['nested lists are unsupported'])
     });
   });
+
+  it('parses remote Code blocks with canonical language, exact content, and caption', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['h1', 'code1'] },
+      heading('h1', 3, 'Build'),
+      {
+        block_id: 'code1',
+        block_type: 14,
+        code: {
+          elements: [{ text_run: { content: 'print("ok")\n', text_element_style: {} } }],
+          style: { language: 49, caption: 'Example' }
+        }
+      }
+    ], 'doc_token');
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'code',
+      locator: { sectionPath: ['Build'], kind: 'code', ordinal: 0 },
+      content: 'print("ok")\n',
+      sourceLanguage: 'python',
+      resolvedLanguage: 'python',
+      caption: 'Example',
+      remoteBlockId: 'code1'
+    }));
+  });
 });
 
 function calloutBlocks(title: string): FeishuBlock[] {

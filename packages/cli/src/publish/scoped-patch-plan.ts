@@ -347,7 +347,7 @@ type PlanningEntry = { node: SemanticNode; block: FeishuBlock };
 
 function planningEntries(document: SemanticDocument): PlanningEntry[] {
   return document.nodes.flatMap((node): PlanningEntry[] => {
-    if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout') return [];
+    if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout' || node.kind === 'code') return [];
     if (node.kind === 'table') {
       return [{
         node,

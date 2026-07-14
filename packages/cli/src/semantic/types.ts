@@ -28,8 +28,22 @@ export type SemanticCell = {
 
 export type SemanticLocator = {
   sectionPath: string[];
-  kind: 'text' | 'table' | 'asset' | 'callout' | 'opaque';
+  kind: 'text' | 'code' | 'table' | 'asset' | 'callout' | 'opaque';
   ordinal: number;
+};
+
+export type SemanticCodeBlock = {
+  kind: 'code';
+  locator: SemanticLocator;
+  content: string;
+  sourceLanguage: string;
+  resolvedLanguage: string;
+  caption?: string;
+  remoteBlockId?: string;
+  issues: Array<{
+    code: 'unsupported-code-language' | 'unsupported-code-info-string';
+    message: string;
+  }>;
 };
 
 export type CalloutType = 'note' | 'warning';
@@ -101,7 +115,7 @@ export type SemanticAssetNode = {
   unsupported?: string[];
 };
 
-export type SemanticNode = SemanticTextBlock | SemanticTable | SemanticAssetNode | SemanticCallout | SemanticOpaqueNode;
+export type SemanticNode = SemanticTextBlock | SemanticCodeBlock | SemanticTable | SemanticAssetNode | SemanticCallout | SemanticOpaqueNode;
 
 export type SemanticDocument = {
   nodes: SemanticNode[];

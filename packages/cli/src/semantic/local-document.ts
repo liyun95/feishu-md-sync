@@ -1,3 +1,8 @@
+import {
+  DEFAULT_CODE_BLOCK_CONFIG,
+  type CodeBlockConfig
+} from '../code-blocks/code-language.js';
+import { findNextFencedCode, type CodeBlockIssue } from '../code-blocks/code-markdown.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { parseHtmlTable } from './html-table.js';
@@ -9,11 +14,15 @@ import type { SemanticDocument, SemanticLocator, SemanticNode } from './types.js
 type LocalSegment =
   | { kind: 'markdown'; content: string }
   | { kind: 'asset'; alt: string; source: string }
+  | { kind: 'code'; content: string; sourceLanguage: string; resolvedLanguage: string; issues: CodeBlockIssue[] }
   | { kind: 'table'; content: string }
   | { kind: 'callout'; content: string }
   | { kind: 'opaque'; content: string; description: string };
 
-export function localSemanticDocument(markdown: string): SemanticDocument {
+export function localSemanticDocument(
+  markdown: string,
+  codeBlocks: CodeBlockConfig = DEFAULT_CODE_BLOCK_CONFIG
+): SemanticDocument {
   const normalized = markdown.replace(/\r\n/g, '\n');
   const { frontmatter, body } = extractFrontmatter(normalized);
   const nodes: SemanticNode[] = [];
@@ -29,7 +38,7 @@ export function localSemanticDocument(markdown: string): SemanticDocument {
     });
   }
 
-  for (const segment of splitLocalSegments(body)) {
+  for (const segment of splitLocalSegments(body, codeBlocks)) {
     if (segment.kind === 'asset') {
       nodes.push({
         kind: 'asset',
@@ -37,6 +46,17 @@ export function localSemanticDocument(markdown: string): SemanticDocument {
         representation: 'image',
         alt: segment.alt,
         source: segment.source
+      });
+      continue;
+    }
+    if (segment.kind === 'code') {
+      nodes.push({
+        kind: 'code',
+        locator: nextLocator(headingPath, 'code', ordinals),
+        content: segment.content,
+        sourceLanguage: segment.sourceLanguage,
+        resolvedLanguage: segment.resolvedLanguage,
+        issues: segment.issues
       });
       continue;
     }
@@ -88,13 +108,27 @@ function extractFrontmatter(markdown: string): { frontmatter?: string; body: str
   };
 }
 
-function splitLocalSegments(markdown: string): LocalSegment[] {
+function splitLocalSegments(markdown: string, codeBlocks: CodeBlockConfig): LocalSegment[] {
   const segments: LocalSegment[] = [];
   let cursor = 0;
 
   while (cursor < markdown.length) {
     const tail = markdown.slice(cursor);
     const openingIndex = tail.search(/<(table|div)\b/i);
+    const code = findNextFencedCode(markdown, cursor, codeBlocks);
+    const htmlIndex = openingIndex === -1 ? -1 : cursor + openingIndex;
+    if (code && (htmlIndex === -1 || code.start < htmlIndex)) {
+      pushMarkdown(segments, markdown.slice(cursor, code.start));
+      segments.push({
+        kind: 'code',
+        content: code.content,
+        sourceLanguage: code.sourceLanguage,
+        resolvedLanguage: code.resolvedLanguage,
+        issues: code.issues
+      });
+      cursor = code.end;
+      continue;
+    }
     if (openingIndex === -1) {
       pushMarkdown(segments, tail);
       break;

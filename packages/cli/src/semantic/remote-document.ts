@@ -1,4 +1,5 @@
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
+import { codeLanguageForId } from '../code-blocks/code-language.js';
 import { calloutTypeForTitle } from '../callouts/callout-presentation.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
@@ -8,6 +9,7 @@ import type {
   SemanticCell,
   SemanticCellBlock,
   SemanticCallout,
+  SemanticCodeBlock,
   SemanticDocument,
   SemanticInline,
   SemanticLocator,
@@ -41,6 +43,10 @@ export function remoteSemanticDocument(
   const ordinals = new Map<string, number>();
 
   for (const block of direct) {
+    if (block.block_type === 14) {
+      nodes.push(remoteCodeBlock(block, nextLocator(headingPath, 'code', ordinals)));
+      continue;
+    }
     if (isSupportedTextBlock(block)) {
       const markdown = feishuBlocksToMarkdown([block]).trim();
       if (!markdown) continue;
@@ -85,6 +91,39 @@ export function remoteSemanticDocument(
   }
 
   return { nodes };
+}
+
+function remoteCodeBlock(block: FeishuBlock, locator: SemanticLocator): SemanticCodeBlock {
+  const code = asRecord(block.code);
+  const style = asRecord(code?.style);
+  const elements = Array.isArray(code?.elements) ? code.elements.filter(isTextElement) : [];
+  const content = elements.map((element) => element.text_run?.content ?? '').join('');
+  const languageId = numberValue(style?.language) || 1;
+  const issues: SemanticCodeBlock['issues'] = [];
+  let resolvedLanguage = 'plaintext';
+  try {
+    resolvedLanguage = codeLanguageForId(languageId);
+  } catch (error) {
+    issues.push({
+      code: 'unsupported-code-language',
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+  const caption = typeof style?.caption === 'string'
+    ? style.caption
+    : typeof code?.caption === 'string'
+      ? code.caption
+      : undefined;
+  return {
+    kind: 'code',
+    locator,
+    content,
+    sourceLanguage: resolvedLanguage,
+    resolvedLanguage,
+    caption,
+    remoteBlockId: block.block_id,
+    issues
+  };
 }
 
 function remoteCallout(
@@ -281,8 +320,7 @@ function isSupportedTextBlock(block: FeishuBlock): boolean {
   return block.block_type === 2 ||
     (block.block_type >= 3 && block.block_type <= 8) ||
     block.block_type === 12 ||
-    block.block_type === 13 ||
-    block.block_type === 14;
+    block.block_type === 13;
 }
 
 function isSupportedCalloutBlock(blockType: number): boolean {

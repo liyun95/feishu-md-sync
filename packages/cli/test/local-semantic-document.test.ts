@@ -110,4 +110,31 @@ First warning.
       })
     ]);
   });
+
+  it('parses top-level fenced Code blocks as first-class scopes', () => {
+    const document = localSemanticDocument('# Build\n\n```curl\ncurl localhost\n```\n');
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'code',
+      locator: { sectionPath: ['Build'], kind: 'code', ordinal: 0 },
+      content: 'curl localhost\n',
+      sourceLanguage: 'curl',
+      resolvedLanguage: 'bash',
+      issues: []
+    }));
+  });
+
+  it('does not parse fenced text inside Callouts as a top-level Code scope', () => {
+    const document = localSemanticDocument('<div class="alert note">\n\n```python\nprint(1)\n```\n\n</div>');
+
+    expect(document.nodes.some((node) => node.kind === 'code')).toBe(false);
+  });
+
+  it('does not mistake HTML-looking Code content for a table', () => {
+    const document = localSemanticDocument('```html\n<table><tr><td>x</td></tr></table>\n```');
+
+    expect(document.nodes).toEqual([
+      expect.objectContaining({ kind: 'code', content: '<table><tr><td>x</td></tr></table>\n' })
+    ]);
+  });
 });
