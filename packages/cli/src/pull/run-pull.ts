@@ -1,5 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
+import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
+import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
   normalizeReceiptOutputPath,
@@ -28,12 +30,17 @@ export async function runPull(input: {
   profile: PublishProfileName;
   overwrite: boolean;
   writeReceipt: boolean;
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<RunPullResult> {
   await assertPullOutputWritable(input.outputPath, input.overwrite);
 
   const remote = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
-  const transform = applyPullTransformForProfile(remote.markdown, input.profile);
+  const normalized = canonicalizeRemoteCalloutMarkdown({
+    markdown: remote.markdown,
+    config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
+  });
+  const transform = applyPullTransformForProfile(normalized.markdown, input.profile);
   await writeFile(input.outputPath, transform.markdown, 'utf8');
 
   const written = await readFile(input.outputPath, 'utf8');
@@ -52,7 +59,7 @@ export async function runPull(input: {
     remoteRevision: remote.revision,
     remoteRawHash,
     outputHash,
-    warnings: transform.warnings
+    warnings: [...normalized.warnings, ...transform.warnings]
   };
 
   if (input.writeReceipt) {

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { Command } from 'commander';
 import { LarkCliAdapter } from '../../adapters/lark-cli-adapter.js';
-import { loadSyncConfig, resolvePublishProfile } from '../../config/sync-config.js';
+import { loadSyncConfig, resolveCalloutConfig, resolvePublishProfile } from '../../config/sync-config.js';
 import { parseFeishuTarget } from '../../core/doc-id.js';
 import { runPublish } from '../../publish/run-publish.js';
 import { printFormatted, setFailedExitCode } from '../output.js';
@@ -57,11 +57,13 @@ export function registerPublishCommand(program: Command): void {
       const cwd = process.cwd();
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
+      const callouts = resolveCalloutConfig(config);
       const result = await runPublish({
         cwd,
         file: path.resolve(cwd, markdownFile),
         target,
         profile,
+        callouts,
         write: requested.write,
         create: requested.create,
         strategy: requested.strategy,

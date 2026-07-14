@@ -1,5 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
+import { applyTrackedCalloutTypes, calloutTypeHints } from '../callouts/callout-baseline.js';
+import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
+import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { canonicalMarkdown, canonicalMarkdownHash } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
@@ -9,9 +12,11 @@ import {
   type PublishReceipt,
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
+import { readRemoteSemanticSnapshot } from '../receipts/semantic-snapshot.js';
 import { applyPublishTransformForProfile } from '../publish/profile-transform.js';
 import { analyzeExistingPublish } from '../publish/run-publish.js';
 import type { SemanticLocator } from '../semantic/types.js';
+import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
 import { summarizeCalloutChanges, type CalloutChangeSummary } from '../callouts/callout-summary.js';
 import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
@@ -79,6 +84,7 @@ export async function runStatus(input: {
   target: PublishReceiptTarget;
   profile: PublishProfileName;
   syncWhiteboards?: boolean;
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusResult> {
   const context = await loadPublishStatusContext(input);
@@ -94,7 +100,8 @@ export async function runStatus(input: {
       strategy: 'auto',
       adapter: input.adapter,
       localSource: context.localSource,
-      syncWhiteboards: input.syncWhiteboards
+      syncWhiteboards: input.syncWhiteboards,
+      callouts: input.callouts
     });
     const scopeSummary = analysis.plan.scopedPatch?.scopeSummary ?? emptyScopeSummary();
     const withWhiteboards = statusWithWhiteboards(result, analysis.plan.whiteboards?.assets ?? []);
@@ -127,12 +134,35 @@ export async function loadPublishStatusContext(input: {
   sourcePath: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusContext> {
   const localSource = await readFile(input.sourcePath, 'utf8');
   const transform = applyPublishTransformForProfile(localSource, input.profile);
-  const remote = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
+  const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
+  const remoteRaw = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
+  let typeHints: ReturnType<typeof calloutTypeHints> | undefined;
+  if (/<callout\b/i.test(remoteRaw.markdown) && input.adapter.fetchDocBlocks) {
+    const documentId = input.adapter.resolveDocumentId
+      ? await input.adapter.resolveDocumentId({ target: input.target })
+      : input.target.token;
+    const blocks = await input.adapter.fetchDocBlocks({ doc: documentId });
+    const baseline = receipt?.version === 2 || receipt?.version === 3
+      ? await readRemoteSemanticSnapshot({ cwd: input.cwd, snapshot: receipt.remoteSemanticSnapshot })
+      : undefined;
+    const current = applyTrackedCalloutTypes(
+      remoteSemanticDocument(blocks.blocks, documentId, callouts),
+      baseline
+    );
+    typeHints = calloutTypeHints(current);
+  }
+  const normalized = canonicalizeRemoteCalloutMarkdown({
+    markdown: remoteRaw.markdown,
+    config: callouts,
+    typeHints
+  });
+  const remote = { ...remoteRaw, markdown: normalized.markdown };
 
   return {
     cwd: input.cwd,
@@ -146,7 +176,7 @@ export async function loadPublishStatusContext(input: {
     remoteCanonical: canonicalMarkdown(remote.markdown),
     remoteRevision: remote.revision,
     receipt,
-    transformWarnings: transform.warnings
+    transformWarnings: [...transform.warnings, ...normalized.warnings]
   };
 }
 

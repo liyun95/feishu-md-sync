@@ -13,6 +13,7 @@ import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
 import type { TableRowAddition, TableRowUpdate } from '../publish/table-diff.js';
 import type { SemanticLocator } from '../semantic/types.js';
 import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
+import type { CalloutConfig } from '../config/sync-config.js';
 import {
   calloutBlockTypeLabel,
   summarizeCalloutChanges,
@@ -49,6 +50,7 @@ export async function runDiff(input: {
   target: PublishReceiptTarget;
   profile: PublishProfileName;
   syncWhiteboards?: boolean;
+  callouts?: CalloutConfig;
   adapter: FeishuAdapter;
 }): Promise<RunDiffResult> {
   const context = await loadPublishStatusContext(input);
@@ -68,7 +70,8 @@ export async function runDiff(input: {
         strategy: 'auto',
         adapter: input.adapter,
         localSource: context.localSource,
-        syncWhiteboards: input.syncWhiteboards
+        syncWhiteboards: input.syncWhiteboards,
+        callouts: input.callouts
       });
       const patch = analysis.plan.scopedPatch;
       const whiteboardPlan = analysis.plan.whiteboards;

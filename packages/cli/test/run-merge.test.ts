@@ -7,6 +7,109 @@ import { runMerge } from '../src/merge/run-merge.js';
 import { hashText, writeLocalBaseSnapshot, writePublishReceipt } from '../src/receipts/publish-receipt.js';
 
 describe('runMerge', () => {
+  it('check mode canonicalizes a target Callout and reports a clean remote-only body edit', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-callout-'));
+    const file = join(cwd, 'doc.md');
+    const base = canonicalCallout('Original body.');
+    await writeFile(file, base, 'utf8');
+    const basePath = await writeRemote(cwd, base);
+
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      basePath,
+      profile: 'none',
+      mode: 'check',
+      adapter: mergeAdapter('<callout emoji="📘">\nNotes\nRemote body.\n</callout>\n')
+    });
+
+    expect(result.state).toBe('merged');
+    expect(result.summary).toEqual({ conflicts: 0, changed: true });
+    expect(result.remote).toMatchObject({
+      source: 'target',
+      hash: hashText(canonicalCallout('Remote body.'))
+    });
+    await expect(readFile(file, 'utf8')).resolves.toBe(base);
+  });
+
+  it('dry-run canonicalizes Callouts from a remote file without writing', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-callout-'));
+    const file = join(cwd, 'doc.md');
+    const base = canonicalCallout('Original body.');
+    await writeFile(file, base, 'utf8');
+    const basePath = join(cwd, 'base.md');
+    const remotePath = join(cwd, 'remote.md');
+    await writeFile(basePath, base, 'utf8');
+    await writeFile(remotePath, '<callout emoji="❗">\n警告\n远端正文。\n</callout>\n', 'utf8');
+
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      remotePath,
+      basePath,
+      profile: 'none',
+      callouts: { noteTitle: '说明', warningTitle: '警告' },
+      mode: 'dry-run',
+      adapter: mergeAdapter('')
+    });
+
+    expect(result.state).toBe('merged');
+    expect(result.remote).toMatchObject({
+      source: 'remote-file',
+      hash: hashText(canonicalCallout('远端正文。', 'warning'))
+    });
+    await expect(readFile(file, 'utf8')).resolves.toBe(base);
+  });
+
+  it('write mode stores the canonical Callout after a remote-only body edit', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-callout-'));
+    const file = join(cwd, 'doc.md');
+    const saved = join(cwd, 'snapshots', 'remote.md');
+    const base = canonicalCallout('Original body.');
+    await writeFile(file, base, 'utf8');
+    const basePath = await writeRemote(cwd, base);
+
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      basePath,
+      saveRemotePath: saved,
+      profile: 'none',
+      mode: 'write',
+      adapter: mergeAdapter('<callout emoji="📘">\nNotes\nRemote body.\n</callout>\n')
+    });
+
+    expect(result.state).toBe('merged');
+    await expect(readFile(file, 'utf8')).resolves.toBe(canonicalCallout('Remote body.'));
+    await expect(readFile(saved, 'utf8')).resolves.toBe(canonicalCallout('Remote body.'));
+  });
+
+  it('reports a conflict when local and remote edit the same Callout body line', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-callout-'));
+    const file = join(cwd, 'doc.md');
+    const base = canonicalCallout('Original body.');
+    await writeFile(file, canonicalCallout('Local body.'), 'utf8');
+    const basePath = await writeRemote(cwd, base);
+
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      basePath,
+      profile: 'none',
+      mode: 'write',
+      adapter: mergeAdapter('<callout emoji="📘">\nNotes\nRemote body.\n</callout>\n')
+    });
+
+    expect(result.state).toBe('conflict');
+    expect(result.summary.conflicts).toBe(1);
+    const merged = await readFile(file, 'utf8');
+    expect(merged).toContain('<<<<<<< LOCAL\nLocal body.\n=======\nRemote body.\n>>>>>>> REMOTE');
+    expect(merged).toContain('<div class="alert note">');
+  });
+
   it('fetches target, applies pull profile, and merges into local file using receipt base', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-'));
     const file = join(cwd, 'doc.md');
@@ -192,4 +295,8 @@ async function writeRemote(cwd: string, markdown: string): Promise<string> {
   const path = join(cwd, 'doc.remote.md');
   await writeFile(path, markdown, 'utf8');
   return path;
+}
+
+function canonicalCallout(body: string, type: 'note' | 'warning' = 'note'): string {
+  return `<div class="alert ${type}">\n\n${body}\n\n</div>\n`;
 }

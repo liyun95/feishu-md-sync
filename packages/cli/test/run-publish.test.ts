@@ -253,6 +253,55 @@ Next text.`, 'utf8');
       .resolves.toMatchObject({ version: 2, resolvedDocumentId: 'doc_token' });
   });
 
+  it('uses the tracked Callout type when the remote presentation title is customized', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-custom-title-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const base = canonicalCallout(['Base body.']);
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, canonicalCallout(['Local body.']), 'utf8');
+    await writeTrackedPureCalloutReceipt({ cwd: dir, target, base, bodies: ['Base body.'] });
+    const title = 'Team convention';
+    let body = 'Base body.';
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: `<callout emoji="📘">\n${title}\n${body}\n</callout>`
+      }),
+      fetchDocBlocks: async () => ({ blocks: calloutBlocks(body, title) }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        calls.push(`replace:${blockId}:${content}`);
+        body = content;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(result.plan.remoteChanged).toBe(false);
+    expect(calls).toEqual(['replace:body1:Local body.']);
+    expect(calloutBlocks(body, title).find((block) => block.block_id === 'title1')).toEqual(
+      textBlock('title1', title)
+    );
+    await expect(readPublishReceipt({ cwd: dir, target })).resolves.toMatchObject({
+      version: 2,
+      remoteSnapshotHash: hashText(canonicalCallout(['Local body.']))
+    });
+  });
+
   it('creates a Callout with configured presentation through XML', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-callout-write-'));
     const markdownPath = join(dir, 'doc.md');

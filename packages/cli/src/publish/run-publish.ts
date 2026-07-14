@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
 import { renderCalloutXml } from '../callouts/callout-xml.js';
+import { applyTrackedCalloutTypes, calloutTypeHints } from '../callouts/callout-baseline.js';
+import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { canonicalMarkdown } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
@@ -104,6 +106,7 @@ export async function runPublish(input: {
     adapter: input.adapter,
     localSource,
     syncWhiteboards: input.syncWhiteboards,
+    callouts: input.callouts,
     confirmedRemoteWhiteboardOverwrites: input.confirmedRemoteWhiteboardOverwrites
   });
   if (!input.write) return { mode: 'dry-run', plan: analysis.plan };
@@ -176,8 +179,17 @@ export async function runPublish(input: {
       callouts,
       completedOperations
     });
-    const afterMarkdown = await input.adapter.fetchDocMarkdown({ doc: analysis.resolvedDocumentId });
-    const afterSemantic = await fetchRemoteSemantic(input.adapter, analysis.resolvedDocumentId, callouts);
+    const afterMarkdownRaw = await input.adapter.fetchDocMarkdown({ doc: analysis.resolvedDocumentId });
+    const afterSemantic = applyTrackedCalloutTypes(
+      await fetchRemoteSemantic(input.adapter, analysis.resolvedDocumentId, callouts),
+      analysis.remoteCurrent
+    );
+    const afterCanonical = canonicalizeRemoteCalloutMarkdown({
+      markdown: afterMarkdownRaw.markdown,
+      config: callouts,
+      typeHints: calloutTypeHints(afterSemantic)
+    });
+    const afterMarkdown = { ...afterMarkdownRaw, markdown: afterCanonical.markdown };
     const receiptInput = {
       cwd: input.cwd,
       target: input.target,
@@ -203,16 +215,26 @@ export async function runPublish(input: {
       throw new Error('document-replace requires --strategy document-replace');
     }
     await input.adapter.replaceDocument({ doc: analysis.resolvedDocumentId, markdown: analysis.publishDraft });
-    const after = await input.adapter.fetchDocMarkdown({ doc: analysis.resolvedDocumentId });
+    const afterRaw = await input.adapter.fetchDocMarkdown({ doc: analysis.resolvedDocumentId });
     let afterSemantic: SemanticDocument | undefined;
     if (input.adapter.fetchDocBlocks) {
       try {
-        afterSemantic = await fetchRemoteSemantic(input.adapter, analysis.resolvedDocumentId);
+        afterSemantic = await fetchRemoteSemantic(
+          input.adapter,
+          analysis.resolvedDocumentId,
+          input.callouts ?? DEFAULT_CALLOUT_CONFIG
+        );
       } catch {
         afterSemantic = undefined;
       }
     }
     if (afterSemantic) {
+      const normalized = canonicalizeRemoteCalloutMarkdown({
+        markdown: afterRaw.markdown,
+        config: input.callouts ?? DEFAULT_CALLOUT_CONFIG,
+        typeHints: calloutTypeHints(afterSemantic)
+      });
+      const after = { ...afterRaw, markdown: normalized.markdown };
       await recordPublishReceiptV2({
         cwd: input.cwd,
         target: input.target,
@@ -226,6 +248,11 @@ export async function runPublish(input: {
         remoteSemantic: afterSemantic
       });
     } else {
+      const normalized = canonicalizeRemoteCalloutMarkdown({
+        markdown: afterRaw.markdown,
+        config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
+      });
+      const after = { ...afterRaw, markdown: normalized.markdown };
       await recordLegacyReceipt({
         cwd: input.cwd,
         target: input.target,
@@ -252,6 +279,7 @@ export async function analyzeExistingPublish(input: {
   adapter: FeishuAdapter;
   localSource?: string;
   syncWhiteboards?: boolean;
+  callouts?: CalloutConfig;
   confirmedRemoteWhiteboardOverwrites?: string[];
 }): Promise<PublishAnalysis> {
   const localSource = input.localSource ?? await readFile(input.file, 'utf8');
@@ -259,11 +287,14 @@ export async function analyzeExistingPublish(input: {
   const resolvedDocumentId = input.adapter.resolveDocumentId
     ? await input.adapter.resolveDocumentId({ target: input.target })
     : input.target.token;
-  const remote = await input.adapter.fetchDocMarkdown({ doc: resolvedDocumentId });
+  const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
+  const remoteRaw = await input.adapter.fetchDocMarkdown({ doc: resolvedDocumentId });
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
-  const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
 
   if (input.strategy === 'document-replace') {
+    const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
+    const remote = { ...remoteRaw, markdown: normalized.markdown };
+    const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
     return {
       plan: buildPublishPlan({
         target: input.target,
@@ -272,7 +303,7 @@ export async function analyzeExistingPublish(input: {
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
         receipt,
-        transformWarnings: transform.warnings,
+        transformWarnings: [...transform.warnings, ...normalized.warnings],
         forceDocumentReplace: true
       }),
       resolvedDocumentId,
@@ -285,6 +316,9 @@ export async function analyzeExistingPublish(input: {
   }
 
   if (!input.adapter.fetchDocBlocks) {
+    const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
+    const remote = { ...remoteRaw, markdown: normalized.markdown };
+    const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
     const whiteboards = input.syncWhiteboards
       ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', 'Whiteboard planning requires Docx block reads.')
       : undefined;
@@ -296,7 +330,7 @@ export async function analyzeExistingPublish(input: {
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
         receipt,
-        transformWarnings: [...transform.warnings, 'block-patch planning unavailable: adapter cannot fetch Docx blocks'],
+        transformWarnings: [...transform.warnings, ...normalized.warnings, 'block-patch planning unavailable: adapter cannot fetch Docx blocks'],
         whiteboards
       }),
       resolvedDocumentId,
@@ -313,6 +347,9 @@ export async function analyzeExistingPublish(input: {
   try {
     remoteBlocks = await input.adapter.fetchDocBlocks({ doc: resolvedDocumentId });
   } catch (error) {
+    const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
+    const remote = { ...remoteRaw, markdown: normalized.markdown };
+    const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
     const message = error instanceof Error ? error.message : String(error);
     const whiteboards = input.syncWhiteboards
       ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', `Whiteboard planning requires Docx block reads: ${message}`)
@@ -325,7 +362,7 @@ export async function analyzeExistingPublish(input: {
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
         receipt,
-        transformWarnings: [...transform.warnings, `block-patch planning unavailable: ${message}`],
+        transformWarnings: [...transform.warnings, ...normalized.warnings, `block-patch planning unavailable: ${message}`],
         whiteboards
       }),
       resolvedDocumentId,
@@ -338,8 +375,19 @@ export async function analyzeExistingPublish(input: {
     };
   }
   const page = findPageBlock(remoteBlocks.blocks, resolvedDocumentId);
+  const remoteBaseHint = await trackedRemoteSemanticBaseline({ cwd: input.cwd, receipt });
+  const remoteCurrent = applyTrackedCalloutTypes(
+    remoteSemanticDocument(remoteBlocks.blocks, resolvedDocumentId, callouts),
+    remoteBaseHint
+  );
+  const normalized = canonicalizeRemoteCalloutMarkdown({
+    markdown: remoteRaw.markdown,
+    config: callouts,
+    typeHints: calloutTypeHints(remoteCurrent)
+  });
+  const remote = { ...remoteRaw, markdown: normalized.markdown };
+  const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
   const localCurrent = localSemanticDocument(blockPatchDraft);
-  const remoteCurrent = remoteSemanticDocument(remoteBlocks.blocks, resolvedDocumentId);
   const baseline = await loadSemanticBaselines({
     cwd: input.cwd,
     receipt,
@@ -376,7 +424,7 @@ export async function analyzeExistingPublish(input: {
     publishDraft: transform.markdown,
     remoteMarkdown: remote.markdown,
     receipt,
-    transformWarnings: transform.warnings,
+    transformWarnings: [...transform.warnings, ...normalized.warnings],
     scopedPatch,
     whiteboards: whiteboardAnalysis.plan
   });
@@ -573,6 +621,17 @@ async function loadSemanticBaselines(input: {
     return { blocker: 'legacy remote baseline changed; cannot migrate safely' };
   }
   return { localBase, remoteBase: stripExecutionMetadata(input.currentRemoteSemantic) };
+}
+
+async function trackedRemoteSemanticBaseline(input: {
+  cwd: string;
+  receipt: PublishReceipt | undefined;
+}): Promise<SemanticDocument | undefined> {
+  if (input.receipt?.version !== 2 && input.receipt?.version !== 3) return undefined;
+  return readRemoteSemanticSnapshot({
+    cwd: input.cwd,
+    snapshot: input.receipt.remoteSemanticSnapshot
+  });
 }
 
 function blockedScopedPatch(message: string): ScopedPatchPlan {
