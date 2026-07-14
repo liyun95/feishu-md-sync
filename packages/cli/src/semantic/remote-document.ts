@@ -1,10 +1,13 @@
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
+import { calloutTypeForTitle } from '../callouts/callout-presentation.js';
+import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { findPageBlock, renderableDirectChildBlocks } from '../publish/block-state.js';
 import { normalizeRowKey, semanticHash } from './normalize.js';
 import type {
   SemanticCell,
   SemanticCellBlock,
+  SemanticCallout,
   SemanticDocument,
   SemanticInline,
   SemanticLocator,
@@ -26,7 +29,11 @@ const TEXT_KEY_BY_TYPE: Record<number, string> = {
   14: 'code'
 };
 
-export function remoteSemanticDocument(blocks: FeishuBlock[], documentId: string): SemanticDocument {
+export function remoteSemanticDocument(
+  blocks: FeishuBlock[],
+  documentId: string,
+  callouts: CalloutConfig = DEFAULT_CALLOUT_CONFIG
+): SemanticDocument {
   const page = findPageBlock(blocks, documentId);
   const direct = renderableDirectChildBlocks(blocks, page);
   const nodes: SemanticNode[] = [];
@@ -58,6 +65,11 @@ export function remoteSemanticDocument(blocks: FeishuBlock[], documentId: string
       continue;
     }
 
+    if (block.block_type === 19) {
+      nodes.push(remoteCallout(block, nextLocator(headingPath, 'callout', ordinals), callouts));
+      continue;
+    }
+
     if (block.block_type === 27 || block.block_type === 43) {
       nodes.push(remoteAsset(block, nextLocator(headingPath, 'asset', ordinals)));
       continue;
@@ -73,6 +85,61 @@ export function remoteSemanticDocument(blocks: FeishuBlock[], documentId: string
   }
 
   return { nodes };
+}
+
+function remoteCallout(
+  block: FeishuBlock,
+  locator: SemanticLocator,
+  config: CalloutConfig
+): SemanticCallout {
+  const unsupported: string[] = [];
+  const children = Array.isArray(block.children) ? block.children.filter(isFeishuBlock) : [];
+  const titleBlock = children[0];
+  const titleMarkdown = titleBlock ? feishuBlocksToMarkdown([titleBlock], config).trim() : '';
+  const calloutType = calloutTypeForTitle(titleMarkdown, config);
+  if (!calloutType) addUnsupported(unsupported, 'remote Callout title is unrecognized');
+  if (!titleBlock || titleBlock.block_type !== 2) {
+    addUnsupported(unsupported, 'remote Callout presentation title must be a text block');
+  }
+
+  const body = children.slice(1).map((child, ordinal) => {
+    if (!isSupportedCalloutBlock(child.block_type)) {
+      addUnsupported(unsupported, `block_type ${child.block_type} in Callout is unsupported`);
+    }
+    if ((child.block_type === 12 || child.block_type === 13) && Array.isArray(child.children) && child.children.length > 0) {
+      addUnsupported(unsupported, 'nested lists are unsupported');
+    }
+    if (hasNonTextInline(child)) addUnsupported(unsupported, 'non-text inline element in Callout is unsupported');
+    const markdown = feishuBlocksToMarkdown([child], config).trim();
+    for (const link of markdown.matchAll(/(?<!!)\[[^\]]+\]\(([^)]+)\)/g)) {
+      if (!/^https?:\/\//i.test((link[1] ?? '').trim())) {
+        addUnsupported(unsupported, 'relative links are unsupported');
+      }
+    }
+    return {
+      ordinal,
+      blockType: child.block_type,
+      markdown,
+      remoteBlockId: child.block_id
+    };
+  });
+
+  const shell = asRecord(block.callout);
+  return {
+    kind: 'callout',
+    locator,
+    calloutType,
+    title: titleBlock ? { markdown: titleMarkdown, remoteBlockId: titleBlock.block_id } : undefined,
+    children: body,
+    remoteBlockId: block.block_id,
+    shell: {
+      emojiId: typeof shell?.emoji_id === 'string' ? shell.emoji_id : undefined,
+      backgroundColor: optionalNumber(shell?.background_color),
+      borderColor: optionalNumber(shell?.border_color),
+      textColor: optionalNumber(shell?.text_color)
+    },
+    unsupported
+  };
 }
 
 function remoteAsset(block: FeishuBlock, locator: SemanticLocator): SemanticNode {
@@ -218,6 +285,22 @@ function isSupportedTextBlock(block: FeishuBlock): boolean {
     block.block_type === 14;
 }
 
+function isSupportedCalloutBlock(blockType: number): boolean {
+  return blockType === 2 ||
+    (blockType >= 3 && blockType <= 8) ||
+    blockType === 12 ||
+    blockType === 13;
+}
+
+function hasNonTextInline(block: FeishuBlock): boolean {
+  const key = TEXT_KEY_BY_TYPE[block.block_type];
+  const value = key ? asRecord(block[key]) : undefined;
+  const elements = Array.isArray(value?.elements) ? value.elements : [];
+  return elements.some((element) => {
+    return Boolean(element && typeof element === 'object' && !Array.isArray(element) && !('text_run' in element));
+  });
+}
+
 function nextLocator(
   sectionPath: string[],
   kind: SemanticLocator['kind'],
@@ -247,6 +330,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function isMergedCellInfo(value: unknown): boolean {
