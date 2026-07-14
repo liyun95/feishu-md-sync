@@ -218,13 +218,19 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       expect(conflict.stdout).toContain('"strategy": "blocked"');
       expect(conflict.stdout).toContain('"code": "remote-callout-conflict"');
 
+      const conflictedNote = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      })).find((callout) => callout.title === 'Notes');
+      if (!conflictedNote) throw new Error('live Callout note disappeared before conflict recovery');
       await retryRateLimited(() => adapter.replaceBlock({
         doc: documentId,
-        blockId: currentNote.bodyBlockIds[1]!,
+        blockId: conflictedNote.bodyBlockIds[1]!,
         content: 'Note local edit.',
         format: 'markdown'
       }));
-      const restored = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      const restored = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      }));
       expect(restored.find((callout) => callout.title === 'Notes')?.body).toEqual([
         'Note local v1.', 'Note local edit.'
       ]);
