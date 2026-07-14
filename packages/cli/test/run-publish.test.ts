@@ -89,6 +89,127 @@ describe('runPublish', () => {
     }]);
   });
 
+  it('plans an untracked Callout body update with both safety confirmations', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-plan-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '<div class="alert note">\n\nLocal body.\n\n</div>', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '<div class="alert note">\n\nRemote body.\n\n</div>' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+          { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+          textBlock('title1', 'Notes'),
+          textBlock('body1', 'Remote body.')
+        ]
+      }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({
+      kind: 'callout-child-update',
+      remoteBlockId: 'body1',
+      desiredMarkdown: 'Local body.'
+    }));
+    expect(result.plan.requiresUntrackedRemoteConfirmation).toBe(true);
+    expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
+  });
+
+  it('requires both confirmations when adopting a matching untracked Callout', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-plan-'));
+    const markdownPath = join(dir, 'doc.md');
+    const markdown = '<div class="alert note">\n\nMatching body.\n\n</div>';
+    await writeFile(markdownPath, markdown, 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+          { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+          textBlock('title1', 'Notes'),
+          textBlock('body1', 'Matching body.')
+        ]
+      }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('no-op');
+    expect(result.plan.requiresUntrackedRemoteConfirmation).toBe(true);
+    expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(result.plan.safeToWrite).toBe(false);
+  });
+
+  it('plans creation of a new Callout after a stable text anchor', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-plan-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, `Previous text.
+
+<div class="alert warning">
+
+New warning.
+
+</div>
+
+Next text.`, 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Previous text.\n\nNext text.' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['previous', 'next'] },
+          textBlock('previous', 'Previous text.'),
+          textBlock('next', 'Next text.')
+        ]
+      }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({
+      kind: 'callout-create',
+      insertAfterBlockId: 'previous',
+      desiredCallout: expect.objectContaining({ calloutType: 'warning' })
+    }));
+  });
+
   it('plans block-patch against the document body when the leading title matches', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');

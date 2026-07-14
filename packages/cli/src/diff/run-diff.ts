@@ -48,7 +48,11 @@ export async function runDiff(input: {
   const context = await loadPublishStatusContext(input);
   let status = statusFromContext(context);
   let scoped: RunDiffResult['scoped'] = { text: [], tables: [], whiteboards: [], blockers: [], warnings: [] };
-  if (input.syncWhiteboards || context.localSource.includes('<table') || context.receipt?.version === 2 || context.receipt?.version === 3) {
+  if (input.syncWhiteboards ||
+    context.localSource.includes('<table') ||
+    /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
+    context.receipt?.version === 2 ||
+    context.receipt?.version === 3) {
     try {
       const analysis = await analyzeExistingPublish({
         cwd: input.cwd,
@@ -70,7 +74,7 @@ export async function runDiff(input: {
       if (patch) status = { ...status, scopeSummary: patch.scopeSummary };
       scoped = {
         text: (patch?.operations ?? []).flatMap((operation) => {
-          if (operation.kind === 'table-replace') return [];
+          if (operation.kind !== 'update' && operation.kind !== 'create' && operation.kind !== 'delete') return [];
           return [{
             kind: operation.kind,
             locator: operation.locator,

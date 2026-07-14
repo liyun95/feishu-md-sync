@@ -598,13 +598,15 @@ async function applyScopedPatch(input: {
         });
       } else if (operation.kind === 'delete') {
         await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
-      } else {
+      } else if (operation.kind === 'table-replace') {
         await input.adapter.replaceBlock({
           doc: input.doc,
           blockId: operation.remoteBlockId,
           content: renderTableXml(operation.desiredTable),
           format: 'xml'
         });
+      } else {
+        throw new Error('Callout writes are not available until the Callout executor is configured.');
       }
       const blocks = await input.adapter.fetchDocBlocks({ doc: input.doc });
       verifyOperation(operation, blocks.blocks, input.doc);
@@ -766,6 +768,10 @@ function verifyOperation(operation: ScopedPatchOperation, blocks: import('../fei
       throw new Error('scoped readback verification failed: remote table differs from desired table');
     }
     return;
+  }
+
+  if (operation.kind !== 'update' && operation.kind !== 'create') {
+    throw new Error('Callout readback verification is not configured.');
   }
 
   const candidates = remote.nodes.filter((node): node is SemanticTextBlock => {

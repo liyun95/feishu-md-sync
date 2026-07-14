@@ -204,7 +204,10 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
 }
 
 function shouldAnalyzeScopes(context: PublishStatusContext): boolean {
-  return context.localSource.includes('<table') || context.receipt?.version === 2 || context.receipt?.version === 3;
+  return context.localSource.includes('<table') ||
+    /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
+    context.receipt?.version === 2 ||
+    context.receipt?.version === 3;
 }
 
 export function statusWithWhiteboards(

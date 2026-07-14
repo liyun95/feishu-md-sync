@@ -138,16 +138,20 @@ export function buildPublishPlan(input: {
     }
 
     if (scopedOperations.length === 0 && whiteboardOperations.length === 0) {
+      if (requiresUntrackedRemoteConfirmation) risks.push('untracked remote block-patch requires explicit confirmation');
+      if (requiresCollaborationRiskConfirmation) {
+        risks.push('untracked Callout adoption requires collaboration-risk confirmation');
+      }
       return {
         target: input.target,
         profile: input.profile,
         strategy: 'no-op',
-        safeToWrite: !requiresUntrackedRemoteConfirmation,
+        safeToWrite: !requiresUntrackedRemoteConfirmation && !requiresCollaborationRiskConfirmation,
         remoteChanged,
         localSourceHash,
         publishDraftHash,
         remoteSnapshotHash,
-        requiresCollaborationRiskConfirmation: false,
+        requiresCollaborationRiskConfirmation,
         requiresUntrackedRemoteConfirmation,
         scopedPatch: input.scopedPatch,
         whiteboards: input.whiteboards,
