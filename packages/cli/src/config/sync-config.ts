@@ -1,6 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  DEFAULT_CODE_BLOCK_CONFIG,
+  type CodeBlockConfig
+} from '../code-blocks/code-language.js';
+import {
   parsePublishProfileName,
   type PublishProfileConfig,
   type PublishProfileName
@@ -10,6 +14,7 @@ export type SyncConfig = {
   defaultProfile?: PublishProfileName;
   profiles: Record<string, PublishProfileConfig>;
   callouts?: Partial<CalloutConfig>;
+  codeBlocks?: Partial<CodeBlockConfig>;
 };
 
 export type CalloutConfig = {
@@ -41,6 +46,12 @@ export function resolveCalloutConfig(config: SyncConfig): CalloutConfig {
   };
 }
 
+export function resolveCodeBlockConfig(config: SyncConfig): CodeBlockConfig {
+  return {
+    languageAliases: config.codeBlocks?.languageAliases ?? DEFAULT_CODE_BLOCK_CONFIG.languageAliases
+  };
+}
+
 export async function loadSyncConfig(input: LoadSyncConfigInput): Promise<SyncConfig> {
   const path = join(input.cwd, 'feishu-md-sync.config.json');
   let raw: string;
@@ -63,8 +74,29 @@ export async function loadSyncConfig(input: LoadSyncConfigInput): Promise<SyncCo
   return {
     defaultProfile,
     profiles: parseProfiles(parsed.profiles),
-    callouts: parseCallouts(parsed.callouts)
+    callouts: parseCallouts(parsed.callouts),
+    codeBlocks: parseCodeBlocks(parsed.codeBlocks)
   };
+}
+
+function parseCodeBlocks(value: unknown): Partial<CodeBlockConfig> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error('codeBlocks must be a JSON object.');
+  if (value.languageAliases === undefined) return {};
+  if (!isRecord(value.languageAliases)) {
+    throw new Error('codeBlocks.languageAliases must be a JSON object.');
+  }
+  const languageAliases: Record<string, string> = {};
+  for (const [source, target] of Object.entries(value.languageAliases)) {
+    if (source.trim() === '') {
+      throw new Error('codeBlocks.languageAliases keys must be non-empty strings.');
+    }
+    languageAliases[source.toLowerCase()] = parseOptionalNonEmptyString(
+      target,
+      `codeBlocks.languageAliases.${source}`
+    )!;
+  }
+  return { languageAliases };
 }
 
 function parseCallouts(value: unknown): Partial<CalloutConfig> | undefined {

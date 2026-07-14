@@ -1,4 +1,5 @@
 import type { FeishuBlock, TextElement, TextElementStyle } from '../feishu/types.js';
+import { codeLanguageId } from '../code-blocks/code-language.js';
 import { normalizeMarkdownLinkUrl } from './links.js';
 
 const BLOCK_TYPES = {
@@ -15,36 +16,8 @@ const BLOCK_TYPES = {
   table: 31
 } as const;
 
-export const LANG_IDS: Record<string, number> = {
-  plaintext: 1,
-  text: 1,
-  bash: 7,
-  shell: 62,
-  sh: 62,
-  cpp: 9,
-  c: 10,
-  go: 22,
-  golang: 22,
-  json: 28,
-  java: 29,
-  javascript: 30,
-  js: 30,
-  nodejs: 30,
-  node: 30,
-  markdown: 40,
-  python: 49,
-  py: 49,
-  restful: 7,
-  rest: 7,
-  sql: 57,
-  typescript: 64,
-  ts: 64,
-  yaml: 67,
-  yml: 67
-};
-
 export function languageIdForMarkdownLanguage(language: string): number {
-  return LANG_IDS[language.toLowerCase()] ?? LANG_IDS.plaintext;
+  return codeLanguageId(language);
 }
 
 type ListMarker = {
