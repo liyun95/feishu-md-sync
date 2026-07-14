@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import type { FeishuAdapter, RemoteMarkdown } from '../adapters/feishu-adapter.js';
+import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
 import { canonicalMarkdown } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import {
@@ -43,6 +43,8 @@ export type RunPublishResult = {
     url?: string;
   };
 };
+
+const WHITEBOARD_READBACK_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 
 export type PublishAnalysis = {
   plan: PublishPlan;
@@ -664,7 +666,7 @@ async function applyWhiteboardPlan(input: {
         });
       }
 
-      const remote = await queryWhiteboard({ whiteboardToken });
+      const remote = await queryWhiteboardReadback({ queryWhiteboard, whiteboardToken });
       verifyWhiteboardReadback({ raw: remote.raw, expectedTexts: asset.expectedTexts });
       const blocks = await fetchDocBlocks({ doc: input.doc });
       verifyWhiteboardIdentity(blocks.blocks, input.doc, blockId, whiteboardToken);
@@ -688,6 +690,36 @@ async function applyWhiteboardPlan(input: {
     }
   }
   return [...entries.values()].sort((left, right) => left.assetKey.localeCompare(right.assetKey));
+}
+
+async function queryWhiteboardReadback(input: {
+  queryWhiteboard: (input: { whiteboardToken: string }) => Promise<RemoteWhiteboard>;
+  whiteboardToken: string;
+}): Promise<RemoteWhiteboard> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await input.queryWhiteboard({ whiteboardToken: input.whiteboardToken });
+    } catch (error) {
+      const delayMs = WHITEBOARD_READBACK_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isWhiteboardApplyingError(error)) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isWhiteboardApplyingError(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const record = error as { code?: unknown; cause?: unknown };
+    if (record.code === 4003101) return true;
+    if (record.cause !== undefined && isWhiteboardApplyingError(record.cause)) return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:"code"\s*:\s*4003101\b|\b4003101\b)/.test(message) &&
+    /(?:doc is applying|doc data is not ready|resource error|whiteboard)/i.test(message);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function summarizeWhiteboardOperation(operation: WhiteboardOperation): PublishWriteOperationSummary {

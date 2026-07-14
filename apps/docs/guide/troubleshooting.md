@@ -72,7 +72,9 @@ The local standalone image must map to exactly one remote image or Whiteboard bl
 
 ## `4003101: doc data is not ready ... whiteboard`
 
-Feishu may keep a newly created or recently updated Whiteboard in an asynchronous apply window. The CLI fails closed and does not write a receipt for that attempt. Wait for Feishu to finish applying the previous Whiteboard change, then rerun the same publish command; the Whiteboard update uses a board-, SVG-, and remote-state-specific idempotency token.
+Feishu may keep a newly created or recently updated Whiteboard in an asynchronous apply window. After one Whiteboard update, the CLI retries only the readback with bounded backoff; it does not repeat the update during that publish. A receipt is written only after the Whiteboard content and block identity can be verified.
+
+If the apply window outlasts the retry budget, the CLI fails closed and does not write a receipt. Inspect the remote document, wait for Feishu to finish applying the change, and then rerun the publish. Do not launch overlapping publish attempts for the same Whiteboard.
 
 ## Auth Or API Errors
 

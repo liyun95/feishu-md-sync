@@ -1164,6 +1164,69 @@ describe('runPublish', () => {
       });
   });
 
+  it('retries an applying Whiteboard readback without repeating the update', async () => {
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    let updated = false;
+    let updates = 0;
+    let postUpdateQueries = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '2' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+        { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => {
+        if (!updated) return { raw: whiteboardTextRaw('Existing') };
+        postUpdateQueries += 1;
+        if (postUpdateQueries <= 2) {
+          throw new Error(JSON.stringify({
+            ok: false,
+            error: {
+              code: 4003101,
+              message: 'doc is applying doc data is not ready resource error whiteboard'
+            }
+          }));
+        }
+        return { raw: whiteboardTextRaw('CAGRA') };
+      },
+      updateWhiteboard: async () => {
+        updates += 1;
+        updated = true;
+      },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(updates).toBe(1);
+    expect(postUpdateQueries).toBe(3);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({
+        version: 3,
+        whiteboards: [{ blockId: 'wb_block', whiteboardToken: 'wb_token' }]
+      });
+  });
+
   it('keeps the previous receipt when Whiteboard readback is missing expected text', async () => {
     const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
     let created = false;
