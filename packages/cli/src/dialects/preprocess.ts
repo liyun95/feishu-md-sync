@@ -1,4 +1,5 @@
 import type { DialectWorkspaceConfig, DocumentLinkResolver } from '../link-resolvers/types.js';
+import { preprocessDocusaurus } from './docusaurus.js';
 import { preprocessGfm } from './gfm.js';
 import type { DialectName, DialectResult } from './types.js';
 
@@ -12,6 +13,14 @@ export async function preprocessDialect(input: {
 }): Promise<DialectResult> {
   if (input.dialect === 'gfm') {
     return preprocessGfm({ sourcePath: input.sourcePath, markdown: input.markdown });
+  }
+  if (input.dialect === 'docusaurus') {
+    return preprocessDocusaurus({
+      sourcePath: input.sourcePath,
+      markdown: input.markdown,
+      config: input.config,
+      linkResolver: input.linkResolver
+    });
   }
   return {
     dialect: input.dialect,
