@@ -80,4 +80,12 @@ describe('CLI error contract', () => {
     expect(result.stderr).not.toContain('"ok"');
     expect(result.stderr.match(/Invalid --strategy/g)).toHaveLength(1);
   });
+
+  it('rejects unsupported output formats before command execution', async () => {
+    const result = await runCli(['doctor', 'auth', '--format', 'yaml']);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Invalid --format yaml. Expected pretty or json.');
+  });
 });

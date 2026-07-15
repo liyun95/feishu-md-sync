@@ -10,7 +10,7 @@ import {
 import { confirmationRequired, validationFailure } from '../../core/cli-failure.js';
 import { parseFeishuTarget } from '../../core/doc-id.js';
 import { runPublish } from '../../publish/run-publish.js';
-import { printFormatted, setFailedExitCode } from '../output.js';
+import { parseOutputFormat, printFormatted, setFailedExitCode } from '../output.js';
 
 type PublishCommandOptions = {
   target?: string;
@@ -46,7 +46,7 @@ export function registerPublishCommand(program: Command): void {
       (value: string, previous: string[]) => [...previous, value],
       []
     )
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: PublishCommandOptions) => {
       const requested = publishRequestFromArgv(opts);
       if (requested.syncWhiteboards && requested.create) {

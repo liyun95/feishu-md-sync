@@ -429,6 +429,7 @@ function larkCliFailure(error: LarkCliErrorEnvelope | undefined): CliFailure {
     subtype: error?.subtype ?? 'lark_cli_error',
     message: error?.message ?? 'lark-cli returned an unknown error',
     hint: error?.hint,
+    requiredFlags: error?.type === 'confirmation_required' ? ['--yes'] : undefined,
     retryable: error?.retryable === true,
     missingScopes: error?.missing_scopes,
     consoleUrl: error?.console_url
@@ -440,7 +441,7 @@ function mapLarkCliFailureType(type: string | undefined): CliFailureType {
   if (type === 'authorization') return 'authorization';
   if (type === 'config') return 'config';
   if (type === 'network') return 'network';
-  if (type === 'confirmation') return 'confirmation_required';
+  if (type === 'confirmation' || type === 'confirmation_required') return 'confirmation_required';
   if (type === 'validation') return 'validation';
   if (type === 'policy') return 'authorization';
   return 'internal';

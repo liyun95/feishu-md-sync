@@ -5,7 +5,7 @@ import { registerPublishCommand } from './commands/publish.js';
 import { normalizeCliFailure, validationFailure } from '../core/cli-failure.js';
 import { renderCliFailure, requestedOutputFormat } from './error-output.js';
 import { buildAuthDoctorReport, loadCliEnv } from './env.js';
-import { printFormatted } from './output.js';
+import { parseOutputFormat, printFormatted } from './output.js';
 import { CLI_VERSION } from './version.js';
 
 const topLevelCommands = ['publish', 'status', 'pull', 'diff', 'merge', 'doctor', 'help'];
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   doctor
     .command('auth')
     .description('show lark-cli auth hints and loaded .env files')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (opts: FormatCommandOptions) => {
       printFormatted(buildAuthDoctorReport(envLoadReport), opts.format);
     });

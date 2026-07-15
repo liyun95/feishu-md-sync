@@ -405,6 +405,34 @@ describe('LarkCliAdapter', () => {
     expect((failure as Error).message).not.toContain('secret-value');
   });
 
+  it('maps official lark-cli confirmation requirements to exit 10 semantics', async () => {
+    const adapter = new LarkCliAdapter({
+      exec: async () => ({
+        stdout: '',
+        stderr: JSON.stringify({
+          ok: false,
+          error: {
+            type: 'confirmation_required',
+            subtype: 'high_risk_write',
+            message: 'docs +update requires confirmation',
+            hint: 'add --yes to confirm',
+            risk: { level: 'high-risk-write', action: 'docs +update' }
+          }
+        })
+      })
+    });
+
+    const failure = await adapter.fetchDocMarkdown({ doc: 'doc_token' }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CliFailure);
+    expect((failure as CliFailure).exitCode).toBe(10);
+    expect((failure as CliFailure).details).toMatchObject({
+      type: 'confirmation_required',
+      subtype: 'high_risk_write',
+      requiredFlags: ['--yes']
+    });
+  });
+
   it('replaces an image block with an inline SVG Whiteboard and returns its identity', async () => {
     const calls: Array<{ args: string[]; stdin?: string }> = [];
     const adapter = new LarkCliAdapter({
