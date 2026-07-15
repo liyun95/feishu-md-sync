@@ -46,6 +46,7 @@ Area labels identify the affected subsystem. They do not determine the version n
 | `area:release` | npm packaging, publishing, versions, and release automation. |
 | `area:table` | Markdown and Feishu table support. |
 | `area:whiteboard` | SVG assets and Feishu Whiteboard support. |
+| `area:callout` | Feishu Callout parsing and scoped publishing. |
 | `area:code-block` | Fenced Markdown Code parsing, planning, and scoped Feishu publishing. |
 | `agent` | Agent-facing workflows and integrations. |
 
@@ -59,7 +60,7 @@ A GitHub Milestone answers which planned version will contain a pull request. As
 - Close a milestone after its npm package and GitHub Release are published.
 - Moving a pull request between milestones changes the release plan; it does not change Git history.
 
-A Git tag answers whether a version has actually shipped. Do not create a version tag when planning a release. Create `vX.Y.Z` only after the release commit is merged and npm publishing succeeds. The tag, GitHub Release, and package version must refer to the same release commit.
+A Git tag is the immutable release anchor, not a planning marker. Do not create it while a version is merely planned. Create `vX.Y.Z` only after the dedicated Release PR is merged and ready to publish; pushing the tag starts npm publishing. The tag, npm provenance, GitHub Release, and package version must refer to that same release commit.
 
 ## Pull request workflow
 
@@ -93,8 +94,8 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 
 6. Run the live Feishu smoke tests with the dedicated test document and identity.
 7. Merge the Release PR after all required checks pass.
-8. Publish through the Trusted Publisher workflow.
-9. Confirm the package is available from npm, then create the matching Git tag and GitHub Release.
+8. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. The workflow then publishes through npm Trusted Publishing, verifies the signed Sigstore provenance against that tag and commit, and creates the matching GitHub Release.
+9. Confirm the npm package and GitHub Release are available. If a post-publish step fails, rerun the same tag workflow; recovery accepts only matching package bytes and provenance from that exact tag commit.
 10. Close the milestone.
 
 ## Current version map
@@ -102,6 +103,6 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 | Version | Included work | State |
 | --- | --- | --- |
 | `v0.1.0` | New CLI surface, lark-cli onboarding, and initial npm packaging. | Published |
-| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Planned |
+| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Ready for release |
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.
