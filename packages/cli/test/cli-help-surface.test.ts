@@ -54,4 +54,19 @@ describe('CLI help surface', () => {
     expect(result.stderr).toContain(`unknown command '${command}'`);
   });
 
+  it.each(['status', 'diff', 'publish', 'merge'])('documents source dialects for %s', async (command) => {
+    const result = await runCli([command, '--help']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--dialect <dialect>');
+    expect(result.stdout).toContain('gfm | docusaurus | milvus-authoring');
+  });
+
+  it('does not add source dialects to pull', async () => {
+    const result = await runCli(['pull', '--help']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('--dialect <dialect>');
+  });
+
 });

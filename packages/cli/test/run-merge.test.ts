@@ -7,6 +7,33 @@ import { runMerge } from '../src/merge/run-merge.js';
 import { hashText, writeLocalBaseSnapshot, writePublishReceipt } from '../src/receipts/publish-receipt.js';
 
 describe('runMerge', () => {
+  it('blocks non-GFM merge before fetching or writing', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-dialect-'));
+    const file = join(cwd, 'doc.md');
+    await writeFile(file, '---\nslug: /demo\n---\n\nLocal\n', 'utf8');
+    let fetches = 0;
+    const result = await runMerge({
+      cwd,
+      filePath: file,
+      target: { kind: 'docx', token: 'doc' },
+      dialect: 'docusaurus',
+      profile: 'none',
+      mode: 'check',
+      adapter: {
+        fetchDocMarkdown: async () => {
+          fetches += 1;
+          return { markdown: 'Remote' };
+        },
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+    expect(result.state).toBe('blocked');
+    expect(result.blockers[0].code).toBe('non-gfm-merge-unsupported');
+    expect(fetches).toBe(0);
+    await expect(readFile(file, 'utf8')).resolves.toContain('slug: /demo');
+  });
+
   it('preserves a local Code language alias when the resolved remote language is unchanged', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'fms-merge-code-'));
     const file = join(cwd, 'doc.md');

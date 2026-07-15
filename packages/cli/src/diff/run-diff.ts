@@ -35,6 +35,7 @@ export type RunDiffResult = {
   dialect: DialectName;
   dialectBlockers: DialectDiagnostic[];
   dialectWarnings: DialectDiagnostic[];
+  dialectDiagnostics: DialectDiagnostic[];
   linkResolution: LinkResolutionSummary;
   left: 'remote-current';
   right: 'publish-draft';
@@ -154,6 +155,10 @@ export async function runDiff(input: {
     dialect: context.dialect,
     dialectBlockers: context.publishContext.dialectBlockers,
     dialectWarnings: context.publishContext.dialectWarnings,
+    dialectDiagnostics: [
+      ...context.publishContext.dialectBlockers,
+      ...context.publishContext.dialectWarnings
+    ],
     linkResolution: context.publishContext.linkResolution,
     left: 'remote-current',
     right: 'publish-draft',
@@ -167,12 +172,21 @@ export async function runDiff(input: {
 export function diffSummaryLines(result: RunDiffResult): string[] {
   const lines = [
     `state: ${result.status.state}`,
+    `dialect: ${result.dialect}`,
+    `links: ${result.linkResolution.resolvedToFeishu} Feishu, ${result.linkResolution.resolvedToPublicSite} public fallback, ${result.linkResolution.unresolved} unresolved`,
     `local changed: ${result.status.localChanged}`,
     `remote changed: ${result.status.remoteChanged}`,
     `content matches remote: ${result.status.contentMatchesRemote}`,
     `recommendation: ${result.status.recommendation.action} - ${result.status.recommendation.reason}`,
     ''
   ];
+
+  for (const blocker of result.dialectBlockers) {
+    lines.push(`blocker[${blocker.code}]: ${blocker.message}${diagnosticLocation(blocker)}`);
+  }
+  for (const warning of result.dialectWarnings) {
+    lines.push(`warning[${warning.code}]: ${warning.message}${diagnosticLocation(warning)}`);
+  }
 
   if (!result.hasDiff) {
     lines.push('no diff');
@@ -222,4 +236,9 @@ export function diffSummaryLines(result: RunDiffResult): string[] {
 
   lines.push(result.diff.trimEnd());
   return lines;
+}
+
+function diagnosticLocation(diagnostic: DialectDiagnostic): string {
+  if (!diagnostic.location) return '';
+  return ` at ${diagnostic.location.file}:${diagnostic.location.line}${diagnostic.location.column ? `:${diagnostic.location.column}` : ''}`;
 }

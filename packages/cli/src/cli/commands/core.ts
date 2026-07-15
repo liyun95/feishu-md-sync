@@ -5,6 +5,8 @@ import {
   loadSyncConfig,
   resolveCalloutConfig,
   resolveCodeBlockConfig,
+  resolveDialect,
+  resolveDialectConfig,
   resolvePublishProfile
 } from '../../config/sync-config.js';
 import { parseFeishuTarget } from '../../core/doc-id.js';
@@ -26,6 +28,7 @@ type PullCommandOptions = {
 type StatusCommandOptions = {
   target?: string;
   profile?: string;
+  dialect?: string;
   syncWhiteboards?: boolean;
   format?: string;
 };
@@ -35,6 +38,7 @@ type MergeCommandOptions = {
   remote?: string;
   base?: string;
   profile?: string;
+  dialect?: string;
   check?: boolean;
   dryRun?: boolean;
   abort?: boolean;
@@ -49,6 +53,7 @@ export function registerCoreCommands(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
+    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
     .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
     .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
@@ -56,6 +61,7 @@ export function registerCoreCommands(program: Command): void {
       const target = parseNonFolderTarget(opts.target ?? '', 'status');
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
+      const dialect = resolveDialect({ cliDialect: opts.dialect, config });
       const callouts = resolveCalloutConfig(config);
       const codeBlocks = resolveCodeBlockConfig(config);
       const result = await runStatus({
@@ -63,6 +69,8 @@ export function registerCoreCommands(program: Command): void {
         sourcePath: path.resolve(cwd, markdownFile),
         target,
         profile,
+        dialect,
+        dialectConfig: resolveDialectConfig(config, dialect),
         callouts,
         codeBlocks,
         syncWhiteboards: opts.syncWhiteboards === true,
@@ -107,6 +115,7 @@ export function registerCoreCommands(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
+    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
     .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
     .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
@@ -114,6 +123,7 @@ export function registerCoreCommands(program: Command): void {
       const target = parseNonFolderTarget(opts.target ?? '', 'diff');
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
+      const dialect = resolveDialect({ cliDialect: opts.dialect, config });
       const callouts = resolveCalloutConfig(config);
       const codeBlocks = resolveCodeBlockConfig(config);
       const result = await runDiff({
@@ -121,6 +131,8 @@ export function registerCoreCommands(program: Command): void {
         sourcePath: path.resolve(cwd, markdownFile),
         target,
         profile,
+        dialect,
+        dialectConfig: resolveDialectConfig(config, dialect),
         callouts,
         codeBlocks,
         syncWhiteboards: opts.syncWhiteboards === true,
@@ -141,6 +153,7 @@ export function registerCoreCommands(program: Command): void {
     .option('--remote <file>', 'local remote snapshot Markdown file')
     .option('--base <file>', 'explicit merge base Markdown file')
     .option('--profile <profile>', 'local authoring profile: milvus | zilliz | none')
+    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
     .option('--check', 'check whether merge would conflict without writing')
     .option('--dry-run', 'show merge metadata without writing')
     .option('--abort', 'restore the local file from the previous merge state')
@@ -150,6 +163,7 @@ export function registerCoreCommands(program: Command): void {
       const cwd = process.cwd();
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
+      const dialect = resolveDialect({ cliDialect: opts.dialect, config });
       const callouts = resolveCalloutConfig(config);
       const codeBlocks = resolveCodeBlockConfig(config);
       const target = opts.target ? parseNonFolderTarget(opts.target, 'merge') : undefined;
@@ -161,13 +175,14 @@ export function registerCoreCommands(program: Command): void {
         basePath: opts.base ? path.resolve(cwd, opts.base) : undefined,
         saveRemotePath: opts.saveRemote ? path.resolve(cwd, opts.saveRemote) : undefined,
         profile,
+        dialect,
         callouts,
         codeBlocks,
         mode: resolveMergeMode(opts),
         adapter: new LarkCliAdapter()
       });
       printFormatted(result, opts.format);
-      if (result.state === 'conflict') process.exitCode = 1;
+      if (result.state === 'conflict' || result.state === 'blocked') process.exitCode = 1;
     });
 }
 

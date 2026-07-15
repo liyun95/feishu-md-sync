@@ -48,6 +48,7 @@ export type PublishStatusResult = {
   dialectDraftHash: string;
   dialectBlockers: DialectDiagnostic[];
   dialectWarnings: DialectDiagnostic[];
+  dialectDiagnostics: DialectDiagnostic[];
   linkResolution: LinkResolutionSummary;
   linkResolutionFingerprint: string;
   state: PublishStatusState;
@@ -433,6 +434,7 @@ function dialectStatusFields(context: PublishStatusContext): Pick<
   | 'dialectDraftHash'
   | 'dialectBlockers'
   | 'dialectWarnings'
+  | 'dialectDiagnostics'
   | 'linkResolution'
   | 'linkResolutionFingerprint'
 > {
@@ -441,6 +443,10 @@ function dialectStatusFields(context: PublishStatusContext): Pick<
     dialectDraftHash: context.publishContext.dialectDraftHash,
     dialectBlockers: context.publishContext.dialectBlockers,
     dialectWarnings: context.publishContext.dialectWarnings,
+    dialectDiagnostics: [
+      ...context.publishContext.dialectBlockers,
+      ...context.publishContext.dialectWarnings
+    ],
     linkResolution: context.publishContext.linkResolution,
     linkResolutionFingerprint: context.publishContext.linkResolutionFingerprint
   };

@@ -15,6 +15,7 @@ export type PublishPlan = {
   dialectDraftHash: string;
   dialectBlockers: DialectDiagnostic[];
   dialectWarnings: DialectDiagnostic[];
+  dialectDiagnostics: DialectDiagnostic[];
   linkResolution: LinkResolutionSummary;
   linkResolutionFingerprint: string;
   strategy: PublishStrategy;
@@ -66,6 +67,10 @@ export function buildPublishPlan(input: {
     dialectDraftHash: input.dialectDraftHash ?? publishDraftHash,
     dialectBlockers: input.dialectBlockers ?? [],
     dialectWarnings: input.dialectWarnings ?? [],
+    dialectDiagnostics: [
+      ...(input.dialectBlockers ?? []),
+      ...(input.dialectWarnings ?? [])
+    ],
     linkResolution: input.linkResolution ?? {
       resolvedToFeishu: 0,
       resolvedFromFreshCache: 0,

@@ -108,4 +108,39 @@ describe('CLI pretty output', () => {
     expect(lines).toContain('  → move: Build index -> Search');
     expect(lines).toContain('blocker[remote-code-conflict]: remote changed content');
   });
+
+  it('prints dialect, link summary, and structured diagnostics', () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((value?: unknown) => {
+      lines.push(String(value));
+    });
+
+    printFormatted({
+      mode: 'dry-run',
+      plan: {
+        strategy: 'blocked',
+        dialect: 'docusaurus',
+        linkResolution: {
+          resolvedToFeishu: 3,
+          resolvedToPublicSite: 1,
+          unresolved: 0
+        },
+        dialectBlockers: [{
+          code: 'unsupported-mdx-component',
+          message: 'Unsupported Docusaurus component <Tabs>.',
+          location: { file: 'article.md', line: 42 }
+        }],
+        dialectWarnings: [{
+          code: 'link-resolver-stale-cache',
+          message: 'Using cached Feishu Base mappings.'
+        }],
+        warnings: []
+      }
+    }, 'pretty');
+
+    expect(lines).toContain('dialect: docusaurus');
+    expect(lines).toContain('links: 3 Feishu, 1 public fallback, 0 unresolved');
+    expect(lines).toContain('blocker[unsupported-mdx-component]: Unsupported Docusaurus component <Tabs>. at article.md:42');
+    expect(lines).toContain('warning[link-resolver-stale-cache]: Using cached Feishu Base mappings.');
+  });
 });

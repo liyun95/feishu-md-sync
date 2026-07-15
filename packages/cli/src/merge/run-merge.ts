@@ -23,15 +23,17 @@ import { mergeLines, mergeWithoutBase, type MergeState } from './line-merge.js';
 import { assertNoMergeState, restoreMergeState, writeMergeState } from './merge-state.js';
 import { localSemanticDocument } from '../semantic/local-document.js';
 import type { SemanticCodeBlock } from '../semantic/types.js';
+import type { DialectDiagnostic, DialectName } from '../dialects/types.js';
 
 export type RunMergeMode = 'write' | 'check' | 'dry-run' | 'abort';
-export type RunMergeState = MergeState | 'aborted';
+export type RunMergeState = MergeState | 'aborted' | 'blocked';
 
 export type RunMergeResult = {
   mode: RunMergeMode;
   state: RunMergeState;
   file: string;
   profile: PublishProfileName;
+  dialect: DialectName;
   base?: {
     source: 'explicit' | 'receipt' | 'current-local' | 'none';
     hash?: string;
@@ -47,12 +49,14 @@ export type RunMergeResult = {
     changed: boolean;
   };
   warnings: string[];
+  blockers: DialectDiagnostic[];
 };
 
 export async function runMerge(input: {
   cwd: string;
   filePath: string;
   profile: PublishProfileName;
+  dialect?: DialectName;
   mode: RunMergeMode;
   target?: PublishReceiptTarget;
   remotePath?: string;
@@ -62,6 +66,7 @@ export async function runMerge(input: {
   codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<RunMergeResult> {
+  const dialect = input.dialect ?? 'gfm';
   if (input.mode === 'abort') {
     await restoreMergeState({ cwd: input.cwd, filePath: input.filePath });
     return {
@@ -69,8 +74,27 @@ export async function runMerge(input: {
       state: 'aborted',
       file: input.filePath,
       profile: input.profile,
+      dialect,
       summary: { conflicts: 0, changed: true },
-      warnings: []
+      warnings: [],
+      blockers: []
+    };
+  }
+
+  if (dialect !== 'gfm') {
+    return {
+      mode: input.mode,
+      state: 'blocked',
+      file: input.filePath,
+      profile: input.profile,
+      dialect,
+      summary: { conflicts: 0, changed: false },
+      warnings: [],
+      blockers: [{
+        code: 'non-gfm-merge-unsupported',
+        severity: 'blocker',
+        message: `${dialect} merge is blocked because Feishu cannot reconstruct source-only syntax; pull a review snapshot and reconcile manually.`
+      }]
     };
   }
 
@@ -115,13 +139,15 @@ export async function runMerge(input: {
     state: merge.state,
     file: input.filePath,
     profile: input.profile,
+    dialect,
     base: base.summary,
     remote: remote.summary,
     summary: {
       conflicts: merge.conflicts,
       changed: merge.changed
     },
-    warnings: [...base.warnings, ...remote.warnings]
+    warnings: [...base.warnings, ...remote.warnings],
+    blockers: []
   };
 }
 
