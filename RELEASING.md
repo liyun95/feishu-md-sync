@@ -52,6 +52,17 @@ Area labels identify the affected subsystem. They do not determine the version n
 
 Add more area labels only when a stable subsystem needs its own release-history filter.
 
+### Skill impact
+
+Every pull request declares one Agent Skill impact value in its description:
+
+| Value | Use when |
+| --- | --- |
+| `update` | The change modifies commands, flags, JSON fields, exit codes, safety gates, recommended workflow sequencing, or routing with official Lark Skills. Update `skills/feishu-md-sync/` in the same release line. |
+| `none` | The change preserves the Agent-facing contract, such as an internal refactor, performance improvement, or implementation-only bug fix. |
+
+Skill impact does not independently determine the package version. It ensures the tagged Skill and tagged npm CLI remain compatible.
+
 ## Milestones and Git tags
 
 A GitHub Milestone answers which planned version will contain a pull request. Assign user-visible changes to a version milestone before merging when the target version is known.
@@ -71,6 +82,7 @@ Before a user-visible pull request is ready to merge:
 3. Apply the relevant area labels.
 4. Assign the target version milestone, or state why the change is not assigned yet.
 5. Add a short release-note sentence that describes the user-visible outcome.
+6. Declare `Skill impact: update | none` and review the Skill when the Agent contract changes.
 
 Use `release:none` for documentation or infrastructure work that should not independently trigger an npm version bump. Such work may still be mentioned in release notes when it materially affects installation, operation, or maintenance.
 
@@ -89,20 +101,30 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
    npm run test:coverage
    npm run typecheck
    npm run test:package
+   npm run test:skill
    npm run docs:build
    ```
 
 6. Run the live Feishu smoke tests with the dedicated test document and identity.
 7. Merge the Release PR after all required checks pass.
 8. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. The workflow then publishes through npm Trusted Publishing, verifies the signed Sigstore provenance against that tag and commit, and creates the matching GitHub Release.
-9. Confirm the npm package and GitHub Release are available. If a post-publish step fails, rerun the same tag workflow; recovery accepts only matching package bytes and provenance from that exact tag commit.
-10. Close the milestone.
+9. Install the released CLI and matching tagged Skill in an isolated environment, then run the Skill validation and a read-only Feishu dogfood.
+10. Confirm the npm package, GitHub Release, and tagged Skill are available. If a post-publish step fails, rerun the same tag workflow; recovery accepts only matching package bytes and provenance from that exact tag commit.
+11. Close the milestone.
+
+Release notes must show both matching installation commands:
+
+```bash
+npm install --global feishu-md-sync@X.Y.Z
+npx skills add 'liyun95/feishu-md-sync#vX.Y.Z' --skill feishu-md-sync --global --yes
+```
 
 ## Current version map
 
 | Version | Included work | State |
 | --- | --- | --- |
 | `v0.1.0` | New CLI surface, lark-cli onboarding, and initial npm packaging. | Published |
-| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Ready for release |
+| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Published |
+| `v0.3.0` | Agent-ready CLI contract, version-matched Agent Skill, structured failures, and Skill distribution validation. | Planned |
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.

@@ -1,0 +1,84 @@
+# Agent Usage
+
+`feishu-md-sync` ships a thin Agent Skill for workflows where local Markdown is the source of truth. The Skill calls the installed CLI, interprets its JSON plan, and enforces the same dry-run and confirmation gates a careful human operator would use.
+
+## Install Matching Versions
+
+Install the CLI and Skill from the same release:
+
+```bash
+npm install --global feishu-md-sync@0.3.0
+npx skills add 'liyun95/feishu-md-sync#v0.3.0' \
+  --skill feishu-md-sync \
+  --global \
+  --yes
+```
+
+The `v0.3.x` Skill requires `feishu-md-sync >=0.3.0 <0.4.0`. Stable users should install from a release tag, not `main`, because `main` may describe unreleased CLI behavior.
+
+## Invoke The Skill
+
+Use the Skill explicitly while dogfooding:
+
+```text
+Use $feishu-md-sync to synchronize ./doc.md with https://example.feishu.cn/docx/DocToken. Review the dry-run first and do not bypass any safety gate.
+```
+
+For a new document:
+
+```text
+Use $feishu-md-sync to create a Feishu document from ./doc.md under this Wiki parent. Show me the dry-run plan before writing.
+```
+
+An explicit request to publish, synchronize, or create authorizes a safe write after the dry-run. The Agent must stop again when the plan requires untracked-remote, collaboration-risk, Whiteboard-overwrite, or destructive-replacement confirmation.
+
+## Workflow
+
+For an existing document, the Skill runs:
+
+```text
+status -> diff -> publish dry-run -> decision -> optional write -> status
+```
+
+It never chooses `document-replace`, enables `--sync-whiteboards`, or appends a `--confirm-*` flag without the matching user intent and approval. Blocked plans and overlapping remote changes stop the write.
+
+Pull writes an independent snapshot by default. Merge begins with `merge --check`, and a conflict stops before publish.
+
+## Routing With Official Lark Skills
+
+- `$feishu-md-sync`: local Markdown status, diff, pull, merge, create, and publish.
+- `$lark-doc`: ad hoc remote-only document reading or editing.
+- `$lark-shared`: login, user/bot identity, missing scopes, app configuration, and permission repair.
+
+The Skill does not store App credentials. Authentication and Feishu IO remain owned by the official `lark-cli`.
+
+## Development Builds
+
+Install the Skill from a local checkout to get a symlinked development copy:
+
+```bash
+npx skills add /path/to/feishu-md-sync \
+  --skill feishu-md-sync \
+  --global \
+  --yes
+```
+
+Build the CLI, then point the Skill at the executable from one worktree:
+
+```bash
+npm run build
+export FEISHU_MD_SYNC_BIN='/path/to/worktree/packages/cli/dist/cli/index.js'
+```
+
+`FEISHU_MD_SYNC_BIN` must be one absolute executable path, not a shell command. An unreleased build outside the published version range is accepted only when its help exposes every command and safety option required by the Skill. Without this explicit override, the Skill uses `feishu-md-sync` from `PATH` and enforces the stable version range.
+
+## Upgrade
+
+Upgrade the CLI and reinstall the Skill from the same new tag:
+
+```bash
+npm install --global feishu-md-sync@0.3.1
+npx skills add 'liyun95/feishu-md-sync#v0.3.1' --skill feishu-md-sync --global --yes
+```
+
+Do not update the Skill independently to `main` while keeping an older npm CLI.
