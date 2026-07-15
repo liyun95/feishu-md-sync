@@ -1,4 +1,6 @@
 import type { PublishProfileName } from '../profiles/publish-profile.js';
+import type { DialectDiagnostic, DialectName } from '../dialects/types.js';
+import type { LinkResolutionSummary } from '../link-resolvers/types.js';
 import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type { PublishBlockPatchPlan } from './block-patch-plan.js';
 import type { ScopedPatchPlan } from './scoped-patch-plan.js';
@@ -9,6 +11,12 @@ export type PublishStrategy = 'no-op' | 'block-patch' | 'blocked' | 'section-rep
 export type PublishPlan = {
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  dialect: DialectName;
+  dialectDraftHash: string;
+  dialectBlockers: DialectDiagnostic[];
+  dialectWarnings: DialectDiagnostic[];
+  linkResolution: LinkResolutionSummary;
+  linkResolutionFingerprint: string;
   strategy: PublishStrategy;
   safeToWrite: boolean;
   remoteChanged: boolean;
@@ -33,6 +41,12 @@ export type PublishPlan = {
 export function buildPublishPlan(input: {
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  dialect?: DialectName;
+  dialectDraftHash?: string;
+  dialectBlockers?: DialectDiagnostic[];
+  dialectWarnings?: DialectDiagnostic[];
+  linkResolution?: LinkResolutionSummary;
+  linkResolutionFingerprint?: string;
   localSource: string;
   publishDraft: string;
   remoteMarkdown: string;
@@ -47,10 +61,45 @@ export function buildPublishPlan(input: {
   const localSourceHash = hashText(input.localSource);
   const publishDraftHash = hashText(input.publishDraft);
   const remoteSnapshotHash = hashText(input.remoteMarkdown);
+  const dialectFields = {
+    dialect: input.dialect ?? 'gfm' as const,
+    dialectDraftHash: input.dialectDraftHash ?? publishDraftHash,
+    dialectBlockers: input.dialectBlockers ?? [],
+    dialectWarnings: input.dialectWarnings ?? [],
+    linkResolution: input.linkResolution ?? {
+      resolvedToFeishu: 0,
+      resolvedFromFreshCache: 0,
+      resolvedFromStaleCache: 0,
+      resolvedToPublicSite: 0,
+      unresolved: 0
+    },
+    linkResolutionFingerprint: input.linkResolutionFingerprint ?? hashText('[]')
+  };
+  if (dialectFields.dialectBlockers.length > 0) {
+    return {
+      target: input.target,
+      profile: input.profile,
+      ...dialectFields,
+      strategy: 'blocked',
+      safeToWrite: false,
+      remoteChanged: false,
+      localSourceHash,
+      publishDraftHash,
+      remoteSnapshotHash,
+      requiresCollaborationRiskConfirmation: false,
+      requiresUntrackedRemoteConfirmation: false,
+      risks: [
+        ...dialectFields.dialectBlockers.map(({ message }) => message),
+        'dialect preprocessing is blocked; no remote operation was planned'
+      ],
+      warnings: input.transformWarnings
+    };
+  }
   if (input.target.kind === 'folder' || input.createDocument === true) {
     return {
       target: input.target,
       profile: input.profile,
+      ...dialectFields,
       strategy: 'create-document',
       safeToWrite: true,
       remoteChanged: false,
@@ -79,6 +128,7 @@ export function buildPublishPlan(input: {
     return {
       target: input.target,
       profile: input.profile,
+      ...dialectFields,
       strategy: 'document-replace',
       safeToWrite: false,
       remoteChanged,
@@ -121,6 +171,7 @@ export function buildPublishPlan(input: {
       return {
         target: input.target,
         profile: input.profile,
+        ...dialectFields,
         strategy: 'blocked',
         safeToWrite: false,
         remoteChanged,
@@ -145,6 +196,7 @@ export function buildPublishPlan(input: {
       return {
         target: input.target,
         profile: input.profile,
+        ...dialectFields,
         strategy: 'no-op',
         safeToWrite: !requiresUntrackedRemoteConfirmation && !requiresCollaborationRiskConfirmation,
         remoteChanged,
@@ -168,6 +220,7 @@ export function buildPublishPlan(input: {
     return {
       target: input.target,
       profile: input.profile,
+      ...dialectFields,
       strategy: 'block-patch',
       safeToWrite: !requiresCollaborationRiskConfirmation && !requiresUntrackedRemoteConfirmation,
       remoteChanged,
@@ -188,6 +241,7 @@ export function buildPublishPlan(input: {
     return {
       target: input.target,
       profile: input.profile,
+      ...dialectFields,
       strategy: 'no-op',
       safeToWrite: true,
       remoteChanged,
@@ -206,6 +260,7 @@ export function buildPublishPlan(input: {
       return {
         target: input.target,
         profile: input.profile,
+        ...dialectFields,
         strategy: 'no-op',
         safeToWrite: true,
         remoteChanged,
@@ -234,6 +289,7 @@ export function buildPublishPlan(input: {
     return {
       target: input.target,
       profile: input.profile,
+      ...dialectFields,
       strategy: 'block-patch',
       safeToWrite: Boolean(input.receipt) && !input.blockPatch.requiresCollaborationRiskConfirmation,
       remoteChanged,
@@ -263,6 +319,7 @@ export function buildPublishPlan(input: {
   return {
     target: input.target,
     profile: input.profile,
+    ...dialectFields,
     strategy,
     safeToWrite: false,
     remoteChanged,

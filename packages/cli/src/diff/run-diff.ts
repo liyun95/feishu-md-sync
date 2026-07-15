@@ -21,12 +21,18 @@ import {
 } from '../callouts/callout-summary.js';
 import { summarizeCodeBlockChanges, type CodeBlockChangeSummary } from '../code-blocks/code-summary.js';
 import type { CodeBlockConfig } from '../code-blocks/code-language.js';
+import type { DialectDiagnostic, DialectName } from '../dialects/types.js';
+import type { DialectWorkspaceConfig, LinkResolutionSummary } from '../link-resolvers/types.js';
 
 export type RunDiffResult = {
   mode: 'read-only';
   target: PublishReceiptTarget;
   sourcePath: string;
   profile: PublishProfileName;
+  dialect: DialectName;
+  dialectBlockers: DialectDiagnostic[];
+  dialectWarnings: DialectDiagnostic[];
+  linkResolution: LinkResolutionSummary;
   left: 'remote-current';
   right: 'publish-draft';
   hasDiff: boolean;
@@ -52,6 +58,8 @@ export async function runDiff(input: {
   sourcePath: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  dialect?: DialectName;
+  dialectConfig?: DialectWorkspaceConfig;
   syncWhiteboards?: boolean;
   callouts?: CalloutConfig;
   codeBlocks?: CodeBlockConfig;
@@ -68,21 +76,24 @@ export async function runDiff(input: {
     blockers: [],
     warnings: []
   };
-  if (input.syncWhiteboards ||
+  if (context.publishContext.dialectBlockers.length === 0 && (input.syncWhiteboards ||
     context.localSource.includes('<table') ||
     /(^|\n) {0,3}(?:`{3,}|~{3,})/.test(context.localSource) ||
     /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
     context.receipt?.version === 2 ||
-    context.receipt?.version === 3) {
+    context.receipt?.version === 3)) {
     try {
       const analysis = await analyzeExistingPublish({
         cwd: input.cwd,
         file: input.sourcePath,
         target: input.target,
         profile: input.profile,
+        dialect: context.dialect,
+        dialectConfig: input.dialectConfig,
         strategy: 'auto',
         adapter: input.adapter,
         localSource: context.localSource,
+        publishContext: context.publishContext,
         syncWhiteboards: input.syncWhiteboards,
         callouts: input.callouts,
         codeBlocks: input.codeBlocks
@@ -130,12 +141,18 @@ export async function runDiff(input: {
   }
   const hasScopedDiff = scoped.text.length > 0 || scoped.callouts.length > 0 || scoped.codeBlocks.length > 0 ||
     scoped.tables.length > 0 || scoped.whiteboards.some((asset) => asset.state !== 'clean') || scoped.blockers.length > 0;
-  const hasDiff = context.remoteCanonical !== context.publishDraftCanonical || hasScopedDiff;
+  const hasDiff = context.remoteCanonical !== context.publishDraftCanonical ||
+    hasScopedDiff ||
+    context.publishContext.dialectBlockers.length > 0;
   return {
     mode: 'read-only',
     target: input.target,
     sourcePath: input.sourcePath,
     profile: input.profile,
+    dialect: context.dialect,
+    dialectBlockers: context.publishContext.dialectBlockers,
+    dialectWarnings: context.publishContext.dialectWarnings,
+    linkResolution: context.publishContext.linkResolution,
     left: 'remote-current',
     right: 'publish-draft',
     hasDiff,

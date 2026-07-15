@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { confirmationRequired, validationFailure } from '../core/cli-failure.js';
 import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
 import { renderCodeBlockXml } from '../code-blocks/code-xml.js';
@@ -16,6 +15,8 @@ import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { canonicalMarkdown } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
+import type { DialectName } from '../dialects/types.js';
+import type { DialectWorkspaceConfig } from '../link-resolvers/types.js';
 import {
   canUpgradeLegacyReceipt,
   hashText,
@@ -51,6 +52,7 @@ import { findPageBlock, renderableDirectChildBlocks } from './block-state.js';
 import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
 import type { CalloutOperation } from './callout-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
+import { buildPublishContext, type PublishContext } from './publish-context.js';
 import { applyPublishTransformForProfile } from './profile-transform.js';
 import { planScopedPatch, type ScopedPatchOperation, type ScopedPatchPlan } from './scoped-patch-plan.js';
 import { diffCorrespondingTable, findCorrespondingRemoteTable } from './table-diff.js';
@@ -73,6 +75,7 @@ export type PublishAnalysis = {
   resolvedDocumentId: string;
   localSource: string;
   publishDraft: string;
+  publishContext: PublishContext;
   blockPatchDraft: string;
   remote: RemoteMarkdown;
   receipt: PublishReceipt | undefined;
@@ -87,6 +90,8 @@ export async function runPublish(input: {
   file: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  dialect?: DialectName;
+  dialectConfig?: DialectWorkspaceConfig;
   write: boolean;
   create: boolean;
   strategy: 'auto' | PublishStrategy;
@@ -114,10 +119,31 @@ export async function runPublish(input: {
     throw validationFailure({ message: '--sync-whiteboards is not supported with --strategy document-replace' });
   }
 
-  const localSource = await readFile(input.file, 'utf8');
-  const transform = applyPublishTransformForProfile(localSource, input.profile);
+  const publishContext = await buildPublishContext({
+    cwd: input.cwd,
+    sourcePath: input.file,
+    dialect: input.dialect ?? 'gfm',
+    dialectConfig: input.dialectConfig ?? {},
+    profile: input.profile,
+    adapter: input.adapter
+  });
+  if (publishContext.dialectBlockers.length > 0) {
+    const plan = buildPublishPlan({
+      target: input.target,
+      profile: input.profile,
+      ...publishPlanDialectFields(publishContext),
+      localSource: publishContext.localSource,
+      publishDraft: publishContext.publishDraft,
+      remoteMarkdown: '',
+      receipt: undefined,
+      transformWarnings: publishContext.transformWarnings,
+      createDocument: input.target.kind === 'folder' || input.create
+    });
+    if (input.write) throw new Error(`Scoped publish is blocked: ${plan.risks.join('; ')}`);
+    return { mode: 'dry-run', plan };
+  }
   if (input.target.kind === 'folder' || (input.target.kind === 'wiki' && input.create)) {
-    return createPublish({ ...input, localSource, publishDraft: transform.markdown, transformWarnings: transform.warnings });
+    return createPublish({ ...input, publishContext });
   }
 
   const analysis = await analyzeExistingPublish({
@@ -127,7 +153,7 @@ export async function runPublish(input: {
     profile: input.profile,
     strategy: input.strategy,
     adapter: input.adapter,
-    localSource,
+    publishContext,
     syncWhiteboards: input.syncWhiteboards,
     callouts: input.callouts,
     codeBlocks: input.codeBlocks,
@@ -309,16 +335,31 @@ export async function analyzeExistingPublish(input: {
   file: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  dialect?: DialectName;
+  dialectConfig?: DialectWorkspaceConfig;
   strategy: 'auto' | PublishStrategy;
   adapter: FeishuAdapter;
   localSource?: string;
+  publishContext?: PublishContext;
   syncWhiteboards?: boolean;
   callouts?: CalloutConfig;
   codeBlocks?: CodeBlockConfig;
   confirmedRemoteWhiteboardOverwrites?: string[];
 }): Promise<PublishAnalysis> {
-  const localSource = input.localSource ?? await readFile(input.file, 'utf8');
-  const transform = applyPublishTransformForProfile(localSource, input.profile);
+  const publishContext = input.publishContext ?? await buildPublishContext({
+    cwd: input.cwd,
+    sourcePath: input.file,
+    localSource: input.localSource,
+    dialect: input.dialect ?? 'gfm',
+    dialectConfig: input.dialectConfig ?? {},
+    profile: input.profile,
+    adapter: input.adapter
+  });
+  const localSource = publishContext.localSource;
+  const transform = {
+    markdown: publishContext.publishDraft,
+    warnings: publishContext.transformWarnings
+  };
   const resolvedDocumentId = input.adapter.resolveDocumentId
     ? await withRateLimitRetry(() => input.adapter.resolveDocumentId!({ target: input.target }))
     : input.target.token;
@@ -334,6 +375,7 @@ export async function analyzeExistingPublish(input: {
       plan: buildPublishPlan({
         target: input.target,
         profile: input.profile,
+        ...publishPlanDialectFields(publishContext),
         localSource,
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
@@ -344,6 +386,7 @@ export async function analyzeExistingPublish(input: {
       resolvedDocumentId,
       localSource,
       publishDraft: transform.markdown,
+      publishContext,
       blockPatchDraft,
       remote,
       receipt
@@ -361,6 +404,7 @@ export async function analyzeExistingPublish(input: {
       plan: buildPublishPlan({
         target: input.target,
         profile: input.profile,
+        ...publishPlanDialectFields(publishContext),
         localSource,
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
@@ -371,6 +415,7 @@ export async function analyzeExistingPublish(input: {
       resolvedDocumentId,
       localSource,
       publishDraft: transform.markdown,
+      publishContext,
       blockPatchDraft,
       remote,
       receipt,
@@ -393,6 +438,7 @@ export async function analyzeExistingPublish(input: {
       plan: buildPublishPlan({
         target: input.target,
         profile: input.profile,
+        ...publishPlanDialectFields(publishContext),
         localSource,
         publishDraft: transform.markdown,
         remoteMarkdown: remote.markdown,
@@ -403,6 +449,7 @@ export async function analyzeExistingPublish(input: {
       resolvedDocumentId,
       localSource,
       publishDraft: transform.markdown,
+      publishContext,
       blockPatchDraft,
       remote,
       receipt,
@@ -458,6 +505,7 @@ export async function analyzeExistingPublish(input: {
   const plan = buildPublishPlan({
     target: input.target,
     profile: input.profile,
+    ...publishPlanDialectFields(publishContext),
     localSource,
     publishDraft: transform.markdown,
     remoteMarkdown: remote.markdown,
@@ -471,6 +519,7 @@ export async function analyzeExistingPublish(input: {
     resolvedDocumentId,
     localSource,
     publishDraft: transform.markdown,
+    publishContext,
     blockPatchDraft,
     remote,
     receipt,
@@ -569,26 +618,28 @@ async function createPublish(input: {
   profile: PublishProfileName;
   write: boolean;
   adapter: FeishuAdapter;
-  localSource: string;
-  publishDraft: string;
-  transformWarnings: string[];
+  publishContext: PublishContext;
 }): Promise<RunPublishResult> {
-  const title = resolvePublishTitle({ sourcePath: input.file, markdown: input.publishDraft }).title;
+  const title = resolvePublishTitle({
+    sourcePath: input.file,
+    markdown: input.publishContext.publishDraft
+  }).title;
   const plan = buildPublishPlan({
     target: input.target,
     profile: input.profile,
-    localSource: input.localSource,
-    publishDraft: input.publishDraft,
+    ...publishPlanDialectFields(input.publishContext),
+    localSource: input.publishContext.localSource,
+    publishDraft: input.publishContext.publishDraft,
     remoteMarkdown: '',
     receipt: undefined,
-    transformWarnings: input.transformWarnings,
+    transformWarnings: input.publishContext.transformWarnings,
     createDocument: true
   });
   if (!input.write) return { mode: 'dry-run', plan };
 
   const created = await input.adapter.createDocument({
     title,
-    markdown: input.publishDraft,
+    markdown: input.publishContext.publishDraft,
     parentToken: input.target.token
   });
   const createdTarget = { kind: 'docx' as const, token: created.documentId };
@@ -600,7 +651,7 @@ async function createPublish(input: {
       target: createdTarget,
       resolvedDocumentId: created.documentId,
       profile: input.profile,
-      localSource: input.localSource,
+      localSource: input.publishContext.localSource,
       localSourceHash: plan.localSourceHash,
       publishDraftHash: plan.publishDraftHash,
       remoteMarkdown: after.markdown,
@@ -612,7 +663,7 @@ async function createPublish(input: {
       cwd: input.cwd,
       target: createdTarget,
       profile: input.profile,
-      localSource: input.localSource,
+      localSource: input.publishContext.localSource,
       localSourceHash: plan.localSourceHash,
       publishDraftHash: plan.publishDraftHash,
       remoteMarkdown: after.markdown,
@@ -1759,6 +1810,25 @@ function markdownBodyForBlockPatch(publishDraft: string, remoteMarkdown: string)
   const remoteTitle = leadingH1Title(remoteMarkdown);
   if (remoteTitle !== publishTitle) return publishDraft;
   return stripLeadingH1(publishDraft);
+}
+
+function publishPlanDialectFields(context: PublishContext): Pick<
+  PublishPlan,
+  | 'dialect'
+  | 'dialectDraftHash'
+  | 'dialectBlockers'
+  | 'dialectWarnings'
+  | 'linkResolution'
+  | 'linkResolutionFingerprint'
+> {
+  return {
+    dialect: context.dialect,
+    dialectDraftHash: context.dialectDraftHash,
+    dialectBlockers: context.dialectBlockers,
+    dialectWarnings: context.dialectWarnings,
+    linkResolution: context.linkResolution,
+    linkResolutionFingerprint: context.linkResolutionFingerprint
+  };
 }
 
 function leadingH1Title(markdown: string): string | undefined {

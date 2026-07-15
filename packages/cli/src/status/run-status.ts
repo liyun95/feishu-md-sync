@@ -1,10 +1,14 @@
-import { readFile } from 'node:fs/promises';
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
 import { applyTrackedCalloutTypes, calloutTypeHints } from '../callouts/callout-baseline.js';
 import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { canonicalMarkdown, canonicalMarkdownHash } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
+import type { DialectDiagnostic, DialectName } from '../dialects/types.js';
+import type {
+  DialectWorkspaceConfig,
+  LinkResolutionSummary
+} from '../link-resolvers/types.js';
 import {
   hashText,
   publishReceiptPath,
@@ -13,7 +17,7 @@ import {
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
 import { readRemoteSemanticSnapshot } from '../receipts/semantic-snapshot.js';
-import { applyPublishTransformForProfile } from '../publish/profile-transform.js';
+import { buildPublishContext, type PublishContext } from '../publish/publish-context.js';
 import { analyzeExistingPublish, withRateLimitRetry } from '../publish/run-publish.js';
 import type { SemanticLocator } from '../semantic/types.js';
 import { remoteSemanticDocument } from '../semantic/remote-document.js';
@@ -31,12 +35,19 @@ export type PublishStatusRecommendationAction =
   | 'publish-dry-run'
   | 'pull-review'
   | 'resolve-divergence'
-  | 'adopt-or-replace';
+  | 'adopt-or-replace'
+  | 'fix-source';
 
 export type PublishStatusResult = {
   target: PublishReceiptTarget;
   sourcePath: string;
   profile: PublishProfileName;
+  dialect: DialectName;
+  dialectDraftHash: string;
+  dialectBlockers: DialectDiagnostic[];
+  dialectWarnings: DialectDiagnostic[];
+  linkResolution: LinkResolutionSummary;
+  linkResolutionFingerprint: string;
   state: PublishStatusState;
   localChanged: boolean;
   remoteChanged: boolean;
@@ -73,6 +84,8 @@ export type PublishStatusContext = {
   target: PublishReceiptTarget;
   sourcePath: string;
   profile: PublishProfileName;
+  dialect: DialectName;
+  publishContext: PublishContext;
   localSource: string;
   publishDraft: string;
   publishDraftCanonical: string;
@@ -88,6 +101,8 @@ export async function runStatus(input: {
   sourcePath: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  dialect?: DialectName;
+  dialectConfig?: DialectWorkspaceConfig;
   syncWhiteboards?: boolean;
   callouts?: CalloutConfig;
   codeBlocks?: CodeBlockConfig;
@@ -95,6 +110,7 @@ export async function runStatus(input: {
 }): Promise<PublishStatusResult> {
   const context = await loadPublishStatusContext(input);
   const result = statusFromContext(context);
+  if (context.publishContext.dialectBlockers.length > 0) return result;
   if (!input.syncWhiteboards && !shouldAnalyzeScopes(context)) return result;
 
   try {
@@ -103,9 +119,12 @@ export async function runStatus(input: {
       file: input.sourcePath,
       target: input.target,
       profile: input.profile,
+      dialect: context.dialect,
+      dialectConfig: input.dialectConfig,
       strategy: 'auto',
       adapter: input.adapter,
       localSource: context.localSource,
+      publishContext: context.publishContext,
       syncWhiteboards: input.syncWhiteboards,
       callouts: input.callouts,
       codeBlocks: input.codeBlocks
@@ -147,12 +166,21 @@ export async function loadPublishStatusContext(input: {
   sourcePath: string;
   target: PublishReceiptTarget;
   profile: PublishProfileName;
+  dialect?: DialectName;
+  dialectConfig?: DialectWorkspaceConfig;
   callouts?: CalloutConfig;
   codeBlocks?: CodeBlockConfig;
   adapter: FeishuAdapter;
 }): Promise<PublishStatusContext> {
-  const localSource = await readFile(input.sourcePath, 'utf8');
-  const transform = applyPublishTransformForProfile(localSource, input.profile);
+  const publishContext = await buildPublishContext({
+    cwd: input.cwd,
+    sourcePath: input.sourcePath,
+    dialect: input.dialect ?? 'gfm',
+    dialectConfig: input.dialectConfig ?? {},
+    profile: input.profile,
+    adapter: input.adapter
+  });
+  const localSource = publishContext.localSource;
   const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
   const codeBlocks = input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG;
   const remoteRaw = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({ doc: input.target.token }));
@@ -181,7 +209,7 @@ export async function loadPublishStatusContext(input: {
     typeHints
   });
   const remote = { ...remoteRaw, markdown: normalized.markdown };
-  const publishDraftCanonical = canonicalMarkdown(canonicalizeCodeLanguagesForComparison(transform.markdown, codeBlocks));
+  const publishDraftCanonical = canonicalMarkdown(canonicalizeCodeLanguagesForComparison(publishContext.publishDraft, codeBlocks));
   const remoteCanonical = canonicalMarkdown(canonicalizeCodeLanguagesForComparison(remote.markdown, codeBlocks));
 
   return {
@@ -189,14 +217,16 @@ export async function loadPublishStatusContext(input: {
     target: input.target,
     sourcePath: input.sourcePath,
     profile: input.profile,
+    dialect: publishContext.dialect,
+    publishContext,
     localSource,
-    publishDraft: transform.markdown,
+    publishDraft: publishContext.publishDraft,
     publishDraftCanonical,
     remoteMarkdown: remote.markdown,
     remoteCanonical,
     remoteRevision: remote.revision,
     receipt,
-    transformWarnings: [...transform.warnings, ...normalized.warnings]
+    transformWarnings: [...publishContext.transformWarnings, ...normalized.warnings]
   };
 }
 
@@ -223,6 +253,7 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
       target: context.target,
       sourcePath: context.sourcePath,
       profile: context.profile,
+      ...dialectStatusFields(context),
       state,
       localChanged: true,
       remoteChanged: !contentMatchesRemote,
@@ -243,7 +274,11 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
       codeBlocks: [],
       codeBlockers: [],
       scopeSummary: emptyScopeSummary(),
-      recommendation: recommendationFor({ state, contentMatchesRemote })
+      recommendation: recommendationFor({
+        state,
+        contentMatchesRemote,
+        dialectBlockers: context.publishContext.dialectBlockers
+      })
     };
   }
 
@@ -256,6 +291,7 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     target: context.target,
     sourcePath: context.sourcePath,
     profile: context.profile,
+    ...dialectStatusFields(context),
     state,
     localChanged,
     remoteChanged,
@@ -276,7 +312,11 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     codeBlocks: [],
     codeBlockers: [],
     scopeSummary: emptyScopeSummary(),
-    recommendation: recommendationFor({ state, contentMatchesRemote })
+    recommendation: recommendationFor({
+      state,
+      contentMatchesRemote,
+      dialectBlockers: context.publishContext.dialectBlockers
+    })
   };
 }
 
@@ -308,7 +348,11 @@ export function statusWithWhiteboards(
     localChanged,
     remoteChanged,
     whiteboards,
-    recommendation: recommendationFor({ state, contentMatchesRemote: status.contentMatchesRemote })
+    recommendation: recommendationFor({
+      state,
+      contentMatchesRemote: status.contentMatchesRemote,
+      dialectBlockers: status.dialectBlockers
+    })
   };
 }
 
@@ -331,7 +375,14 @@ function statusStateFor(input: { localChanged: boolean; remoteChanged: boolean }
 function recommendationFor(input: {
   state: PublishStatusState;
   contentMatchesRemote: boolean;
+  dialectBlockers?: DialectDiagnostic[];
 }): PublishStatusResult['recommendation'] {
+  if ((input.dialectBlockers?.length ?? 0) > 0) {
+    return {
+      action: 'fix-source',
+      reason: 'source dialect preprocessing is blocked'
+    };
+  }
   if (input.state === 'clean') {
     return {
       action: 'no-action',
@@ -371,5 +422,24 @@ function recommendationFor(input: {
   return {
     action: 'adopt-or-replace',
     reason: 'remote is untracked and differs from the current publish draft'
+  };
+}
+
+function dialectStatusFields(context: PublishStatusContext): Pick<
+  PublishStatusResult,
+  | 'dialect'
+  | 'dialectDraftHash'
+  | 'dialectBlockers'
+  | 'dialectWarnings'
+  | 'linkResolution'
+  | 'linkResolutionFingerprint'
+> {
+  return {
+    dialect: context.publishContext.dialect,
+    dialectDraftHash: context.publishContext.dialectDraftHash,
+    dialectBlockers: context.publishContext.dialectBlockers,
+    dialectWarnings: context.publishContext.dialectWarnings,
+    linkResolution: context.publishContext.linkResolution,
+    linkResolutionFingerprint: context.publishContext.linkResolutionFingerprint
   };
 }
