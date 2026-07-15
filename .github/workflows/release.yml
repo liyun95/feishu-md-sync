@@ -88,8 +88,7 @@ jobs:
           PACKAGE_INTEGRITY: ${{ steps.pack.outputs.integrity }}
           PACKAGE_TARBALL: ${{ steps.pack.outputs.tarball }}
         run: |
-          existing_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)"
-          if test -n "$existing_integrity"; then
+          if existing_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity 2>/dev/null)"; then
             if test "$existing_integrity" != "$PACKAGE_INTEGRITY"; then
               echo "npm already contains $PACKAGE_NAME@$PACKAGE_VERSION with different package bytes." >&2
               exit 1
