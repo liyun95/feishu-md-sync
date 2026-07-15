@@ -1,4 +1,9 @@
 import type { FeishuBlock } from '../feishu/types.js';
+import {
+  planCodeBlockChanges,
+  type CodeBlockOperation,
+  type CodePlanBlocker
+} from '../code-blocks/code-plan.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { normalizeWhitespace, semanticHash, stripExecutionMetadata } from '../semantic/normalize.js';
@@ -53,14 +58,16 @@ export type ScopedPatchOperation =
   | ScopedTextCreateOperation
   | ScopedTextDeleteOperation
   | TableReplaceOperation
-  | CalloutOperation;
+  | CalloutOperation
+  | CodeBlockOperation;
 
 export type ScopedPatchBlocker = {
   code:
     | 'correspondence-ambiguous'
     | 'unsupported-local-change'
     | 'remote-scope-conflict'
-    | CalloutPlanBlocker['code'];
+    | CalloutPlanBlocker['code']
+    | CodePlanBlocker['code'];
   locator?: SemanticLocator;
   message: string;
 };
@@ -97,7 +104,13 @@ export function planScopedPatch(input: {
 
   for (const node of input.localCurrent.nodes) {
     if (node.kind !== 'opaque') continue;
-    if (!input.tracked) {
+    if (node.description === 'unsupported indented fenced Code block') {
+      blockers.push({
+        code: 'unsupported-local-change',
+        locator: node.locator,
+        message: `unsupported local change: ${node.description}`
+      });
+    } else if (!input.tracked) {
       warnings.push(`adopting opaque local scope: ${node.description}`);
     } else if (localChanged.has(locatorKey(node.locator))) {
       blockers.push({
@@ -130,11 +143,15 @@ export function planScopedPatch(input: {
 
   const textPlanning = planTextScopes({ ...input, localChanged, remoteChanged, blockers, warnings });
   const calloutPlanning = planCalloutChanges(input);
+  const codePlanning = planCodeBlockChanges(input);
   blockers.push(...calloutPlanning.blockers);
+  blockers.push(...codePlanning.blockers);
   warnings.push(...calloutPlanning.warnings);
+  warnings.push(...codePlanning.warnings);
   const operations: ScopedPatchOperation[] = [
     ...textPlanning.operations,
-    ...calloutPlanning.operations
+    ...calloutPlanning.operations,
+    ...codePlanning.operations
   ];
   if (textPlanning.fallbackReason) {
     blockers.push({
@@ -220,14 +237,16 @@ export function planScopedPatch(input: {
     operations,
     blockers,
     warnings: uniqueWarnings,
-    requiresCollaborationRiskConfirmation: calloutPlanning.requiresCollaborationRiskConfirmation || operations.some((operation) => {
+    requiresCollaborationRiskConfirmation: calloutPlanning.requiresCollaborationRiskConfirmation ||
+      codePlanning.requiresCollaborationRiskConfirmation || operations.some((operation) => {
       return operation.kind === 'update' || operation.kind === 'delete' || operation.kind === 'table-replace';
     }),
     scopeSummary: {
       localChanged: locatorsForKeys(input.localCurrent, localChanged),
       remoteChanged: locatorsForKeys(input.remoteCurrent, remoteChanged),
       overlappingConflicts: blockers.flatMap((blocker) => {
-        return (blocker.code === 'remote-scope-conflict' || blocker.code === 'remote-callout-conflict') && blocker.locator
+        return (blocker.code === 'remote-scope-conflict' || blocker.code === 'remote-callout-conflict' ||
+          blocker.code === 'remote-code-conflict' || blocker.code === 'remote-code-scope-changed') && blocker.locator
           ? [blocker.locator]
           : [];
       }),
@@ -291,7 +310,10 @@ function planTextScopes(input: {
     remoteBlocks: remoteEntries.map((entry) => entry.block),
     desiredBlocks: desiredEntries.map((entry) => entry.block)
   });
-  if (!textPlan.safeToWrite) return { operations: [], fallbackReason: textPlan.fallbackReason };
+  if (!textPlan.safeToWrite) {
+    if (textSequenceEquivalent(remoteEntries, desiredEntries)) return { operations: [] };
+    return { operations: [], fallbackReason: textPlan.fallbackReason };
+  }
 
   const operations = textPlan.operations.flatMap((operation): ScopedPatchOperation[] => {
     if (operation.kind === 'update') {
@@ -343,11 +365,33 @@ function planTextScopes(input: {
   return { operations };
 }
 
+function textSequenceEquivalent(remoteEntries: PlanningEntry[], desiredEntries: PlanningEntry[]): boolean {
+  const remoteText = remoteEntries.filter((entry): entry is PlanningEntry & { node: SemanticTextBlock } => {
+    return entry.node.kind === 'text';
+  });
+  const desiredText = desiredEntries.filter((entry): entry is PlanningEntry & { node: SemanticTextBlock } => {
+    return entry.node.kind === 'text';
+  });
+  return remoteText.length === desiredText.length && remoteText.every((entry, index) => {
+    const desired = desiredText[index];
+    return Boolean(desired &&
+      entry.node.blockType === desired.node.blockType &&
+      locatorKey(entry.node.locator) === locatorKey(desired.node.locator) &&
+      textRepresentationsEquivalent(entry.node.markdown, desired.node.markdown));
+  });
+}
+
 type PlanningEntry = { node: SemanticNode; block: FeishuBlock };
 
 function planningEntries(document: SemanticDocument): PlanningEntry[] {
   return document.nodes.flatMap((node): PlanningEntry[] => {
     if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout') return [];
+    if (node.kind === 'code') {
+      return [{
+        node,
+        block: placeholderBlock('__FMS_CODE_BLOCK__', node.remoteBlockId)
+      }];
+    }
     if (node.kind === 'table') {
       return [{
         node,
@@ -407,6 +451,13 @@ function findTableByIdentity(document: SemanticDocument | undefined, source: Sem
 
 function semanticNodeHash(node: SemanticNode): string {
   if (node.kind === 'callout') return calloutContentHash(node);
+  if (node.kind === 'code') {
+    return semanticHash({
+      content: node.content,
+      resolvedLanguage: node.resolvedLanguage,
+      issues: node.issues
+    });
+  }
   return semanticHash(stripExecutionMetadata(node));
 }
 

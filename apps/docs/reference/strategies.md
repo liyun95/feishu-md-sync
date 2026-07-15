@@ -16,13 +16,23 @@ It can also include `table-replace` operations. Table plans identify the section
 
 Callout plans create or delete a complete Callout and update, insert, or delete supported body children. Existing presentation and container identity are preserved. Type changes and overlapping local/remote edits to the same child are blocked.
 
+Code plans use these operation kinds:
+
+- `code-update` - replace one Code block through XML while preserving its remote caption.
+- `code-create` - insert a new captionless Code block after a resolved semantic anchor.
+- `code-move` - move an existing block with `block_move_after` while preserving identity.
+- `code-delete` - delete a tracked, remotely unchanged Code block.
+- `code-section-reconcile` - reproduce only the Code ordering/content in affected heading scopes when stable one-to-one correspondence is unavailable.
+
 With `--sync-whiteboards`, the same plan may also contain:
 
 - `whiteboard-create` - replace one corresponding remote image block with a Whiteboard.
 - `whiteboard-adopt` - adopt and verify one existing corresponding Whiteboard.
 - `whiteboard-update` - overwrite the SVG content of the already tracked Whiteboard while retaining its token and block identity.
 
-Text, Callout, table, and Whiteboard operations are planned together. Any blocker makes the complete publish `blocked`; the CLI does not silently publish only the other scopes.
+Text, Callout, Code, table, and Whiteboard operations are planned together. Any blocker makes the complete publish `blocked`; the CLI does not silently publish only the other scopes.
+
+Write order is text/Callout child/Code updates, creates, Code moves or placement, table replacement, Whiteboards, then deletes. Every Code write is followed by a fresh block read because replacement and deletion invalidate block IDs. Section reconcile creates, replaces, and moves desired blocks before deleting obsolete blocks.
 
 ## `blocked`
 

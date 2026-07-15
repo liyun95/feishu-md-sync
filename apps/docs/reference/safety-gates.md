@@ -30,8 +30,9 @@
 - Creating or adopting an untracked Whiteboard requires both `--confirm-untracked-remote` and `--confirm-collaboration-risk`.
 - Any Whiteboard write requires `--confirm-collaboration-risk` because the image block or board content changes.
 - Updating or deleting existing Callout body blocks requires `--confirm-collaboration-risk`; deleting the complete Callout is allowed only when it is tracked and unchanged remotely.
+- Updating, moving, deleting, or reconciling Code blocks requires `--confirm-collaboration-risk`. Pure Code creation does not independently require it.
 - A remotely changed Whiteboard blocks the complete publish unless its normalized PNG key is explicitly passed with `--confirm-remote-whiteboard-overwrite <asset-key>`.
-- A remote change inside the same managed text, Callout child, or table scope blocks the write.
+- A remote change inside the same managed text, Callout child, Code field/scope, or table scope blocks the write.
 - A remote change outside locally changed scopes produces a warning but does not block the disjoint scoped write.
 
 ## Pull Gates
@@ -45,7 +46,7 @@
 
 ## Status And Diff Gates
 
-`status` and `diff` are read-only. For Callouts, HTML tables, semantic receipts, and `--sync-whiteboards`, they also fetch Docx blocks to report scope-aware conflicts, child or row-level changes, and per-asset Whiteboard state. They never write files, remote content, or receipts.
+`status` and `diff` are read-only. For Code blocks, Callouts, HTML tables, semantic receipts, and `--sync-whiteboards`, they also fetch Docx blocks to report scope-aware conflicts, field/child/row-level changes, movement, reconcile summaries, and per-asset Whiteboard state. They never write files, remote content, or receipts.
 
 Use `publish` dry-run for the detailed write plan.
 

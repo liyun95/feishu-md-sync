@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { cellPlainText, normalizeHeading, normalizeRowKey, semanticHash } from '../src/semantic/normalize.js';
+import {
+  cellPlainText,
+  normalizeHeading,
+  normalizeRowKey,
+  semanticHash,
+  stripExecutionMetadata
+} from '../src/semantic/normalize.js';
 import type { SemanticCell } from '../src/semantic/types.js';
 
 describe('semantic normalization', () => {
@@ -24,5 +30,22 @@ describe('semantic normalization', () => {
 
   it('hashes semantically identical objects deterministically', () => {
     expect(semanticHash({ b: 2, a: 1 })).toBe(semanticHash({ a: 1, b: 2 }));
+  });
+
+  it('retains managed Code fields while stripping execution identity', () => {
+    expect(stripExecutionMetadata({
+      kind: 'code',
+      content: 'print(1)\n',
+      sourceLanguage: 'py',
+      resolvedLanguage: 'python',
+      caption: 'Example',
+      remoteBlockId: 'code1'
+    })).toEqual({
+      kind: 'code',
+      content: 'print(1)\n',
+      sourceLanguage: 'py',
+      resolvedLanguage: 'python',
+      caption: 'Example'
+    });
   });
 });

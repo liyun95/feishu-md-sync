@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
 import { markdownToFeishuBlocks } from '../src/markdown/blocks.js';
+import { feishuBlocksToMarkdown } from '../src/markdown/from-blocks.js';
 import {
   hashText,
   readLocalBaseSnapshot,
@@ -12,12 +13,30 @@ import {
   writePublishReceipt
 } from '../src/receipts/publish-receipt.js';
 import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
-import { runPublish } from '../src/publish/run-publish.js';
+import { runPublish, textCreatePlacementMatches } from '../src/publish/run-publish.js';
 import { semanticHash } from '../src/semantic/normalize.js';
 import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
 import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runPublish', () => {
+  it('checks text creation placement against cross-kind direct-child order', () => {
+    const misplaced = [
+      { block_id: 'doc', block_type: 1, children: ['p1', 'p2', 'code1'] },
+      textBlock('p1', 'Before.'),
+      textBlock('p2', 'After.'),
+      codeBlock('code1', 'print(1)', 49)
+    ];
+    const placed = [
+      { block_id: 'doc', block_type: 1, children: ['p1', 'code1', 'p2'] },
+      textBlock('p1', 'Before.'),
+      codeBlock('code1', 'print(1)', 49),
+      textBlock('p2', 'After.')
+    ];
+
+    expect(textCreatePlacementMatches(misplaced, 'doc', 'p2', 'code1')).toBe(false);
+    expect(textCreatePlacementMatches(placed, 'doc', 'p2', 'code1')).toBe(true);
+  });
+
   it('returns a dry-run plan without writing remotely', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
@@ -655,21 +674,34 @@ Next text.`, 'utf8');
     });
   });
 
-  it('blocks code block body updates until language-preserving IO is available', async () => {
+  it('writes a Code block body update through caption-preserving XML', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, '```python\nprint("new")\n```', 'utf8');
+    let updated = false;
+    const calls: string[] = [];
     const adapter: FeishuAdapter = {
-      fetchDocMarkdown: async () => ({ markdown: '```python\nprint("old")\n```' }),
+      fetchDocMarkdown: async () => ({ markdown: updated ? '```python\nprint("new")\n```' : '```python\nprint("old")\n```' }),
       fetchDocBlocks: async () => ({
         blocks: [
           { block_id: 'doc_token', block_type: 1, children: ['code1'] },
-          codeBlock('code1', 'print("old")', 49)
+          {
+            ...codeBlock('code1', updated ? 'print("new")' : 'print("old")', 49),
+            code: {
+              ...(codeBlock('code1', '', 49).code as object),
+              elements: [{ text_run: { content: updated ? 'print("new")' : 'print("old")', text_element_style: {} } }],
+              style: { language: 49, caption: 'Example' }
+            }
+          }
         ]
       }),
       replaceDocument: async () => {},
-      replaceBlock: async () => {},
+      replaceBlock: async ({ blockId, content, format }) => {
+        calls.push(`replace:${blockId}:${format}:${content}`);
+        updated = true;
+      },
       insertBlocksAfter: async () => {},
+      moveBlocksAfter: async () => {},
       deleteBlocks: async () => {},
       createDocument: async () => ({ documentId: 'created' })
     };
@@ -679,22 +711,60 @@ Next text.`, 'utf8');
       file: markdownPath,
       target: { kind: 'docx', token: 'doc_token' },
       profile: 'none',
-      write: false,
+      write: true,
       create: false,
       strategy: 'auto',
       confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
       adapter
     });
 
-    expect(result.plan.strategy).toBe('blocked');
-    expect(result.plan.scopedPatch?.operations).toEqual([]);
-    expect(result.plan.scopedPatch?.blockers).toContainEqual(expect.objectContaining({
-      code: 'unsupported-local-change',
-      message: 'code block updates are unsupported until language-preserving IO is available'
-    }));
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(calls).toEqual([
+      'replace:code1:xml:<pre lang="python" caption="Example"><code>print("new")</code></pre>'
+    ]);
   });
 
-  it('adopts a missing remote code language when the body is unchanged', async () => {
+  it('reports a partial write when the first Code mutation fails readback verification', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-code-readback-partial-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '```python\nprint("new")\n```', 'utf8');
+    let writes = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: writes ? '```python\nprint("new")\n```' : '```python\nprint("old")\n```' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+        codeBlock('code1', 'print("old")', 49)
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => { writes += 1; },
+      insertBlocksAfter: async () => {},
+      moveBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({ kind: 'code-update' })],
+      failedOperation: expect.objectContaining({ kind: 'code-readback' }),
+      receiptWritten: false
+    });
+  });
+
+  it('plans a language repair when the remote Code language is missing', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, '```python\nprint("same")\n```', 'utf8');
@@ -725,10 +795,9 @@ Next text.`, 'utf8');
       adapter
     });
 
-    expect(result.plan.strategy).toBe('no-op');
-    expect(result.plan.scopedPatch?.operations).toEqual([]);
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({ kind: 'code-update' }));
     expect(result.plan.scopedPatch?.blockers).toEqual([]);
-    expect(result.plan.warnings).toContain('adopting text representation difference at text:[]:0');
   });
 
   it('writes a block-patch create with the planned insert anchor', async () => {
@@ -1870,7 +1939,17 @@ function blocksForMarkdown(markdown: string, previous: Awaited<ReturnType<Requir
   const page = previous.find((block) => block.block_type === 1);
   const parsed = markdownToFeishuBlocks(markdown);
   const body = parsed[0]?.block_type === 3 ? parsed.slice(1) : parsed;
-  const withIds = body.map((block, index) => ({ ...block, block_id: `after-${index}` }));
+  const usedPreviousIds = new Set<string>();
+  const withIds = body.map((block, index) => {
+    const rendered = feishuBlocksToMarkdown([block]).trim();
+    const preserved = previous.find((candidate) => {
+      return candidate.block_id && !usedPreviousIds.has(candidate.block_id) &&
+        candidate.block_type === block.block_type &&
+        feishuBlocksToMarkdown([candidate]).trim() === rendered;
+    });
+    if (preserved?.block_id) usedPreviousIds.add(preserved.block_id);
+    return { ...block, block_id: preserved?.block_id ?? `after-${index}` };
+  });
   return [
     { ...(page ?? { block_id: 'page', block_type: 1 }), children: withIds.map((block) => block.block_id as string) },
     ...withIds

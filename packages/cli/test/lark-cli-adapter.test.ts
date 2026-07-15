@@ -177,12 +177,41 @@ describe('LarkCliAdapter', () => {
     ]);
   });
 
-  it('updates blocks through format-aware lark-cli docs +update commands', async () => {
-    const calls: string[][] = [];
+  it('fetches Code language and caption metadata from full XML', async () => {
+    const adapter = new LarkCliAdapter({
+      identity: 'user',
+      exec: async (args) => {
+        expect(args).toEqual([
+          'docs', '+fetch', '--doc', 'doc_token', '--doc-format', 'xml', '--detail', 'full',
+          '--format', 'json', '--as', 'user'
+        ]);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              document: {
+                content: '<pre id="code1" caption="Example&#xA;" lang="python"><code>print(1)</code></pre>' +
+                  '<pre id="code2" caption="&#xA;" lang="bash"><code>echo ok</code></pre>'
+              }
+            }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.fetchDocCodeMetadata({ doc: 'doc_token' })).resolves.toEqual([
+      { blockId: 'code1', language: 'python', caption: 'Example' },
+      { blockId: 'code2', language: 'bash' }
+    ]);
+  });
+
+  it('updates and moves blocks through format-aware lark-cli docs +update commands', async () => {
+    const calls: Array<{ args: string[]; stdin?: string }> = [];
     const adapter = new LarkCliAdapter({
       identity: 'bot',
-      exec: async (args) => {
-        calls.push(args);
+      exec: async (args, input) => {
+        calls.push({ args, stdin: input?.stdin });
         return { stdout: JSON.stringify({ ok: true, data: { result: 'success' } }), stderr: '' };
       }
     });
@@ -200,27 +229,17 @@ describe('LarkCliAdapter', () => {
       format: 'markdown'
     });
     await adapter.deleteBlocks({ doc: 'doc_token', blockIds: ['p2', 'p3'] });
+    await adapter.moveBlocksAfter({ doc: 'doc_token', blockId: 'p1', sourceBlockIds: ['code1'] });
 
     expect(calls).toEqual([
-      [
-        'docs',
-        '+update',
-        '--doc',
-        'doc_token',
-        '--command',
-        'block_replace',
-        '--block-id',
-        'p1',
-        '--doc-format',
-        'xml',
-        '--content',
-        '<table><tr><td>Value</td></tr></table>',
-        '--format',
-        'json',
-        '--as',
-        'bot'
-      ],
-      [
+      {
+        args: [
+          'docs', '+update', '--doc', 'doc_token', '--command', 'block_replace',
+          '--block-id', 'p1', '--doc-format', 'xml', '--content', '-', '--format', 'json', '--as', 'bot'
+        ],
+        stdin: '<table><tr><td>Value</td></tr></table>'
+      },
+      { args: [
         'docs',
         '+update',
         '--doc',
@@ -237,8 +256,8 @@ describe('LarkCliAdapter', () => {
         'json',
         '--as',
         'bot'
-      ],
-      [
+      ], stdin: undefined },
+      { args: [
         'docs',
         '+update',
         '--doc',
@@ -251,7 +270,11 @@ describe('LarkCliAdapter', () => {
         'json',
         '--as',
         'bot'
-      ]
+      ], stdin: undefined },
+      { args: [
+        'docs', '+update', '--doc', 'doc_token', '--command', 'block_move_after',
+        '--block-id', 'p1', '--src-block-ids', 'code1', '--format', 'json', '--as', 'bot'
+      ], stdin: undefined }
     ]);
   });
 

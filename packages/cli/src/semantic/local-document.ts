@@ -1,3 +1,8 @@
+import {
+  DEFAULT_CODE_BLOCK_CONFIG,
+  type CodeBlockConfig
+} from '../code-blocks/code-language.js';
+import { findNextFencedCode, type CodeBlockIssue } from '../code-blocks/code-markdown.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { parseHtmlTable } from './html-table.js';
@@ -9,11 +14,15 @@ import type { SemanticDocument, SemanticLocator, SemanticNode } from './types.js
 type LocalSegment =
   | { kind: 'markdown'; content: string }
   | { kind: 'asset'; alt: string; source: string }
+  | { kind: 'code'; content: string; sourceLanguage: string; resolvedLanguage: string; issues: CodeBlockIssue[] }
   | { kind: 'table'; content: string }
   | { kind: 'callout'; content: string }
   | { kind: 'opaque'; content: string; description: string };
 
-export function localSemanticDocument(markdown: string): SemanticDocument {
+export function localSemanticDocument(
+  markdown: string,
+  codeBlocks: CodeBlockConfig = DEFAULT_CODE_BLOCK_CONFIG
+): SemanticDocument {
   const normalized = markdown.replace(/\r\n/g, '\n');
   const { frontmatter, body } = extractFrontmatter(normalized);
   const nodes: SemanticNode[] = [];
@@ -29,7 +38,7 @@ export function localSemanticDocument(markdown: string): SemanticDocument {
     });
   }
 
-  for (const segment of splitLocalSegments(body)) {
+  for (const segment of splitLocalSegments(body, codeBlocks)) {
     if (segment.kind === 'asset') {
       nodes.push({
         kind: 'asset',
@@ -37,6 +46,17 @@ export function localSemanticDocument(markdown: string): SemanticDocument {
         representation: 'image',
         alt: segment.alt,
         source: segment.source
+      });
+      continue;
+    }
+    if (segment.kind === 'code') {
+      nodes.push({
+        kind: 'code',
+        locator: nextLocator(headingPath, 'code', ordinals),
+        content: segment.content,
+        sourceLanguage: segment.sourceLanguage,
+        resolvedLanguage: segment.resolvedLanguage,
+        issues: segment.issues
       });
       continue;
     }
@@ -88,13 +108,41 @@ function extractFrontmatter(markdown: string): { frontmatter?: string; body: str
   };
 }
 
-function splitLocalSegments(markdown: string): LocalSegment[] {
+function splitLocalSegments(markdown: string, codeBlocks: CodeBlockConfig): LocalSegment[] {
   const segments: LocalSegment[] = [];
   let cursor = 0;
 
   while (cursor < markdown.length) {
     const tail = markdown.slice(cursor);
     const openingIndex = tail.search(/<(table|div)\b/i);
+    const code = findNextFencedCode(markdown, cursor, codeBlocks);
+    const indentedCode = findNextIndentedFence(markdown, cursor);
+    const htmlIndex = openingIndex === -1 ? -1 : cursor + openingIndex;
+    if (indentedCode &&
+      (!code || indentedCode.start < code.start) &&
+      (htmlIndex === -1 || indentedCode.start < htmlIndex)) {
+      pushMarkdown(segments, markdown.slice(cursor, indentedCode.start));
+      segments.push({
+        kind: 'opaque',
+        content: markdown.slice(indentedCode.start, indentedCode.end),
+        description: 'unsupported indented fenced Code block'
+      });
+      cursor = indentedCode.end;
+      continue;
+    }
+    if (code && (htmlIndex === -1 || code.start < htmlIndex) &&
+      (!indentedCode || code.start < indentedCode.start)) {
+      pushMarkdown(segments, markdown.slice(cursor, code.start));
+      segments.push({
+        kind: 'code',
+        content: code.content,
+        sourceLanguage: code.sourceLanguage,
+        resolvedLanguage: code.resolvedLanguage,
+        issues: code.issues
+      });
+      cursor = code.end;
+      continue;
+    }
     if (openingIndex === -1) {
       pushMarkdown(segments, tail);
       break;
@@ -132,6 +180,29 @@ function splitLocalSegments(markdown: string): LocalSegment[] {
   }
 
   return segments;
+}
+
+function findNextIndentedFence(markdown: string, from: number): { start: number; end: number } | undefined {
+  const pattern = /(^|\n)( {4,})(`{3,}|~{3,})[^\n]*(?:\n|$)/g;
+  pattern.lastIndex = from;
+  const opening = pattern.exec(markdown);
+  if (!opening) return undefined;
+  const start = opening.index + (opening[1] ? 1 : 0);
+  const fence = opening[3]!;
+  const marker = fence[0];
+  let lineStart = pattern.lastIndex;
+  while (lineStart <= markdown.length) {
+    const lineEnd = markdown.indexOf('\n', lineStart);
+    const end = lineEnd === -1 ? markdown.length : lineEnd;
+    const line = markdown.slice(lineStart, end);
+    const closing = line.match(/^ {4,}(`+|~+)[ \t]*$/);
+    if (closing?.[1]?.[0] === marker && closing[1].length >= fence.length) {
+      return { start, end: lineEnd === -1 ? end : lineEnd + 1 };
+    }
+    if (lineEnd === -1) break;
+    lineStart = lineEnd + 1;
+  }
+  return { start, end: markdown.length };
 }
 
 function isCalloutDiv(content: string): boolean {

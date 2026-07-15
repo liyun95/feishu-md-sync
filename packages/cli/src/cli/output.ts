@@ -45,7 +45,12 @@ function prettyLines(value: unknown): string[] | undefined {
       }
     }
     appendCalloutSummaryLines(lines, record.callouts);
+    appendCodeSummaryLines(lines, record.codeBlocks);
     for (const value of Array.isArray(record.calloutBlockers) ? record.calloutBlockers : []) {
+      const blocker = asRecord(value);
+      if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.message)}`);
+    }
+    for (const value of Array.isArray(record.codeBlockers) ? record.codeBlockers : []) {
       const blocker = asRecord(value);
       if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.message)}`);
     }
@@ -72,6 +77,11 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     const label = locatorLabel(locator);
     if (String(operation.kind).startsWith('callout-')) {
       lines.push(`${String(operation.kind)}: ${label}`);
+      continue;
+    }
+    if (String(operation.kind).startsWith('code-')) {
+      const desired = asRecord(operation.desiredCode);
+      lines.push(`code[${String(desired?.resolvedLanguage ?? 'plaintext')}]: ${label} (${String(operation.kind)})`);
       continue;
     }
     if (operation.kind === 'table-replace') {
@@ -114,6 +124,30 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     lines.push(`requires: --confirm-remote-whiteboard-overwrite ${String(assetKey)}`);
   }
   return lines;
+}
+
+function appendCodeSummaryLines(lines: string[], value: unknown): void {
+  for (const item of Array.isArray(value) ? value : []) {
+    const code = asRecord(item);
+    const locator = asRecord(code?.locator);
+    if (!code || !locator) continue;
+    if (code.action === 'reconcile') {
+      lines.push(`code-section: ${locatorLabel(locator)} [reconcile]`);
+      lines.push(`  + ${String(code.additions ?? 0)} code blocks`);
+      lines.push(`  - ${String(code.deletions ?? 0)} code blocks`);
+      continue;
+    }
+    lines.push(`code[${String(code.language ?? 'plaintext')}]: ${locatorLabel(locator)}`);
+    if (code.contentChanged === true) lines.push('  ~ content');
+    const language = asRecord(code.languageChange);
+    if (language) lines.push(`  → language: ${String(language.from)} -> ${String(language.to)}`);
+    const move = asRecord(code.move);
+    if (move) {
+      const from = Array.isArray(move.from) ? move.from.map(String).join(' > ') : '';
+      const to = Array.isArray(move.to) ? move.to.map(String).join(' > ') : '';
+      lines.push(`  → move: ${from || '<root>'} -> ${to || '<root>'}`);
+    }
+  }
 }
 
 function appendCalloutSummaryLines(lines: string[], value: unknown): void {

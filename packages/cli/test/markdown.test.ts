@@ -208,4 +208,10 @@ The name of the database.
     expect((blocks[0].code as { style: { language: number } }).style.language).toBe(languageId);
     expect(feishuBlocksToMarkdown(blocks)).toBe(source);
   });
+
+  it('does not silently downgrade an unknown Code block language', () => {
+    expect(() => markdownToFeishuBlocks('```milvusql\nSELECT 1;\n```\n')).toThrow(
+      'unsupported Code block language: milvusql'
+    );
+  });
 });

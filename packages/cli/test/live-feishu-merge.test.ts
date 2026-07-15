@@ -8,6 +8,7 @@ import { parseFeishuTarget } from '../src/core/doc-id.js';
 const runLive = process.env.FEISHU_MD_SYNC_LIVE === '1';
 const cli = new URL('../src/cli/index.ts', import.meta.url).pathname;
 const tsxLoader = new URL('../../../node_modules/tsx/dist/esm/index.mjs', import.meta.url).pathname;
+const LIVE_COMMAND_TIMEOUT_MS = 60_000;
 
 describe.skipIf(!runLive)('live Feishu merge', () => {
   it('uses a live test doc as remote setup and merges fetched changes into a local file', async () => {
@@ -76,7 +77,7 @@ function overwriteRemoteMarkdown(target: string, markdown: string): Promise<void
   if (identity === 'bot' || identity === 'user') args.push('--as', identity);
 
   return new Promise((resolve, reject) => {
-    execFile('lark-cli', args, { encoding: 'utf8', timeout: 25_000 }, (error, stdout, stderr) => {
+    execFile('lark-cli', args, { encoding: 'utf8', timeout: LIVE_COMMAND_TIMEOUT_MS }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(`remote setup failed\nstdout:\n${stdout}\nstderr:\n${stderr}`));
         return;

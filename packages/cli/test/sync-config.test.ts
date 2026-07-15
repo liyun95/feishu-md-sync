@@ -6,6 +6,7 @@ import {
   DEFAULT_CALLOUT_CONFIG,
   loadSyncConfig,
   resolveCalloutConfig,
+  resolveCodeBlockConfig,
   resolvePublishProfile
 } from '../src/config/sync-config.js';
 
@@ -78,6 +79,38 @@ describe('sync config', () => {
 
     await expect(loadSyncConfig({ cwd: dir })).rejects.toThrow(
       'callouts.noteTitle must be a non-empty string.'
+    );
+  });
+
+  it('loads Code block language aliases', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-config-'));
+    await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
+      codeBlocks: {
+        languageAliases: {
+          curl: 'bash',
+          conf: 'plaintext'
+        }
+      }
+    }), 'utf8');
+
+    const config = await loadSyncConfig({ cwd: dir });
+
+    expect(resolveCodeBlockConfig(config)).toEqual({
+      languageAliases: {
+        curl: 'bash',
+        conf: 'plaintext'
+      }
+    });
+  });
+
+  it('rejects malformed Code block aliases', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-config-'));
+    await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
+      codeBlocks: { languageAliases: { curl: '' } }
+    }), 'utf8');
+
+    await expect(loadSyncConfig({ cwd: dir })).rejects.toThrow(
+      'codeBlocks.languageAliases.curl must be a non-empty string.'
     );
   });
 });

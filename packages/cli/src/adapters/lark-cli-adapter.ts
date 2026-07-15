@@ -6,6 +6,7 @@ import type {
   CreatedWhiteboard,
   FeishuAdapter,
   RemoteBlocks,
+  RemoteCodeMetadata,
   RemoteMarkdown,
   RemoteWhiteboard
 } from './feishu-adapter.js';
@@ -102,6 +103,27 @@ export class LarkCliAdapter implements FeishuAdapter {
     return { blocks };
   }
 
+  async fetchDocCodeMetadata(input: { doc: string }): Promise<RemoteCodeMetadata[]> {
+    const result = await this.exec(withIdentity([
+      'docs',
+      '+fetch',
+      '--doc',
+      input.doc,
+      '--doc-format',
+      'xml',
+      '--detail',
+      'full',
+      '--format',
+      'json'
+    ], this.identity));
+    const parsed = parseLarkCliJson(result);
+    const content = markdownContentFromData(parsed.data);
+    if (typeof content !== 'string') {
+      throw new Error('lark-cli docs +fetch did not return XML document content.');
+    }
+    return codeMetadataFromXml(content);
+  }
+
   async replaceDocument(input: { doc: string; markdown: string }): Promise<void> {
     parseLarkCliJson(await this.exec(withIdentity([
       'docs',
@@ -129,9 +151,31 @@ export class LarkCliAdapter implements FeishuAdapter {
       doc: input.doc,
       command: 'block_replace',
       blockId: input.blockId,
-      content: input.content,
-      format: input.format
+      content: input.format === 'xml' ? '-' : input.content,
+      format: input.format,
+      stdin: input.format === 'xml' ? input.content : undefined
     });
+  }
+
+  async moveBlocksAfter(input: {
+    doc: string;
+    blockId: string;
+    sourceBlockIds: string[];
+  }): Promise<void> {
+    parseLarkCliJson(await this.exec(withIdentity([
+      'docs',
+      '+update',
+      '--doc',
+      input.doc,
+      '--command',
+      'block_move_after',
+      '--block-id',
+      input.blockId,
+      '--src-block-ids',
+      input.sourceBlockIds.join(','),
+      '--format',
+      'json'
+    ], this.identity)));
   }
 
   async insertBlocksAfter(input: {
@@ -342,6 +386,38 @@ function markdownContentFromData(data: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+function codeMetadataFromXml(xml: string): RemoteCodeMetadata[] {
+  return [...xml.matchAll(/<pre\b([^>]*)>/gi)].flatMap((match) => {
+    const attributes = parseXmlAttributes(match[1] ?? '');
+    const blockId = attributes.id;
+    const language = attributes.lang;
+    if (!blockId || !language) return [];
+    const caption = attributes.caption?.replace(/\n+$/g, '');
+    return [{
+      blockId,
+      language,
+      ...(caption ? { caption } : {})
+    }];
+  });
+}
+
+function parseXmlAttributes(source: string): Record<string, string> {
+  return Object.fromEntries([...source.matchAll(/([A-Za-z_:][\w:.-]*)="([^"]*)"/g)].map((match) => {
+    return [match[1]!, decodeXmlEntities(match[2] ?? '')];
+  }));
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/g, (_, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 function revisionFromData(data: unknown): string | undefined {

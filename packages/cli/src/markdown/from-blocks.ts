@@ -1,23 +1,9 @@
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
+import { codeLanguageForId } from '../code-blocks/code-language.js';
 import { calloutTypeForTitle } from '../callouts/callout-presentation.js';
 import { renderCanonicalCallout } from '../callouts/callout-markdown.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { normalizeMarkdownLinkUrl } from './links.js';
-
-const LANGUAGE_BY_ID: Record<number, string> = {
-  7: 'bash',
-  9: 'cpp',
-  22: 'go',
-  28: 'json',
-  29: 'java',
-  30: 'javascript',
-  40: 'markdown',
-  49: 'python',
-  50: 'python',
-  57: 'sql',
-  64: 'typescript',
-  67: 'yaml'
-};
 
 export function feishuBlocksToMarkdown(
   blocks: FeishuBlock[],
@@ -48,8 +34,9 @@ function renderBlock(block: FeishuBlock, callouts: CalloutConfig): string {
 
   if (block.block_type === 14) {
     const code = block.code as { elements?: TextElement[]; style?: { language?: number } } | undefined;
-    const lang = code?.style?.language ? LANGUAGE_BY_ID[code.style.language] ?? '' : '';
-    return `\`\`\`${lang}\n${renderElements(code?.elements)}\n\`\`\``;
+    const lang = codeLanguageForId(code?.style?.language ?? 1);
+    const content = renderElements(code?.elements);
+    return `\`\`\`${lang}\n${content}\n\`\`\``;
   }
 
   if (block.block_type === 31) {

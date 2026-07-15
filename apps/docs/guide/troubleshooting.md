@@ -40,6 +40,8 @@ Do not retry destructive writes blindly. Inspect the Feishu document and rerun a
 
 Common Callout blockers include `callout-type-change`, unsupported changed body content, and `remote-callout-conflict` when local and remote changed the same child block. Keep the canonical `<div class="alert note|warning">` wrapper, resolve the overlapping body edit, or move unsupported content outside the Callout before rerunning the dry-run.
 
+Common Code blockers include `unsupported-code-language`, `unsupported-code-info-string`, `remote-code-conflict`, `remote-code-scope-changed`, `code-correspondence-ambiguous`, and `caption-correspondence-ambiguous`. Configure a language alias, remove unsupported fence attributes, or resolve the overlapping remote edit before rerunning. The CLI does not automatically replace the whole document around a Code blocker.
+
 Resolve the local or remote conflict and rerun the dry-run. Whole-document replacement remains available only when you deliberately select `--strategy document-replace --confirm-destructive`.
 
 ## `Cannot identify remote Callout type from title ...`
