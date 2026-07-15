@@ -14,14 +14,17 @@ New-core receipt locations:
 
 `publish` receipts are target-oriented. They record the last successful local Markdown to Feishu write and are used to detect remote drift before later block-patch writes.
 
-Version 2 receipts also record the resolved Docx identity and a verified remote semantic snapshot. This lets the planner distinguish a conflicting edit inside a managed table or Callout from an unrelated remote edit elsewhere in the document.
+Current publishes write version 4 receipts. Version 4 records the selected source dialect, dialect dependencies, the stable mappings used for document links, tracked Whiteboard assets, and an exact sidecar snapshot of the final publish draft. Older version 1 through 3 receipts remain readable and are interpreted as `gfm`.
 
-Version 3 extends that semantic baseline with tracked Whiteboard assets. It is written when `publish --sync-whiteboards --write` completes verification.
+The exact publish-draft snapshot matters when the local source depends on `Variables.json`, fragments, profile transformation, or a changing Base mapping. Later scoped planning compares against what was actually published rather than trying to reconstruct the old draft from current dependencies.
 
 Stored data includes:
 
 - target kind and token
 - profile
+- dialect and dialect draft hash
+- dialect dependency fingerprints
+- resolved document links and their link-resolution fingerprint
 - local source hash
 - publish draft hash
 - remote snapshot hash
@@ -29,10 +32,11 @@ Stored data includes:
 - local base snapshot path and hash
 - resolved Docx document ID
 - remote semantic snapshot path and hash
-- Whiteboard asset entries in version 3
+- exact publish-draft snapshot path and hash
+- Whiteboard asset entries
 - update timestamp
 
-Each version 3 Whiteboard entry records:
+Each Whiteboard entry records:
 
 - normalized PNG asset key and sibling SVG path
 - local SVG hash
@@ -42,7 +46,7 @@ Each version 3 Whiteboard entry records:
 
 These values let later runs distinguish a local SVG update from a remote Whiteboard edit and verify that updates retain the same remote identity. Whiteboard entries are persisted only after raw-state and document-block readback succeeds.
 
-Callout and Code block baselines live in the existing remote semantic snapshot; neither feature introduces a new receipt version. The Code baseline records exact content, canonical language, caption, section, and order. The local base snapshot retains the authoring fence alias, while comparisons use the resolved language. Execution-only block IDs are fetched again during writes rather than treated as durable semantic identity.
+Callout and Code block baselines live in the remote semantic snapshot. The Code baseline records exact content, canonical language, caption, section, and order. The local base snapshot retains the authoring fence alias, while comparisons use the resolved language. Execution-only block IDs are fetched again during writes rather than treated as durable semantic identity.
 
 The Callout baseline records the Callout type and body children while treating the Feishu title, emoji, colors, and container presentation as remote-managed. This also lets a tracked Callout keep a customized remote title without losing its `note` or `warning` identity.
 
@@ -81,7 +85,13 @@ The remote semantic baseline is stored alongside the local base:
 .sync/feishu-md-sync/bases/<target-kind>-<target-token>-remote-semantic.json
 ```
 
-Execution-only Feishu block IDs are removed from the general semantic snapshot before it is written. Version 3 stores the Whiteboard block IDs separately because safe Whiteboard updates must retain that exact identity. A legacy version 1 receipt is upgraded only when its recorded remote raw hash still matches the current remote document.
+Version 4 also stores the exact prior publish draft:
+
+```text
+.sync/feishu-md-sync/bases/<target-kind>-<target-token>-publish.md
+```
+
+Execution-only Feishu block IDs are removed from the general semantic snapshot before it is written. Whiteboard block IDs remain separate because safe Whiteboard updates must retain that exact identity. A legacy version 1 receipt is upgraded only when its recorded remote raw hash still matches the current remote document.
 
 Scoped writes stop after the first failed operation. The CLI does not roll back already verified operations and does not write a new receipt for a partial write. Inspect the remote result and rerun the same publish; the next plan uses the actual remote state and skips Callout children or Code operations that already converged.
 

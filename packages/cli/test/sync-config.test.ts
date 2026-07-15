@@ -7,6 +7,8 @@ import {
   loadSyncConfig,
   resolveCalloutConfig,
   resolveCodeBlockConfig,
+  resolveDialect,
+  resolveDialectConfig,
   resolvePublishProfile
 } from '../src/config/sync-config.js';
 
@@ -16,9 +18,13 @@ describe('sync config', () => {
 
     await expect(loadSyncConfig({ cwd: dir })).resolves.toEqual({
       defaultProfile: undefined,
-      profiles: {}
+      profiles: {},
+      dialects: {}
     });
-    expect(resolvePublishProfile({ cliProfile: undefined, config: { profiles: {} } })).toBe('none');
+    expect(resolvePublishProfile({
+      cliProfile: undefined,
+      config: { profiles: {}, dialects: {} }
+    })).toBe('none');
   });
 
   it('loads defaultProfile from feishu-md-sync.config.json', async () => {
@@ -46,7 +52,10 @@ describe('sync config', () => {
     await expect(loadSyncConfig({ cwd: dir })).rejects.toThrow(
       'Invalid defaultProfile cloud. Expected zilliz, milvus, or none.'
     );
-    expect(() => resolvePublishProfile({ cliProfile: 'cloud', config: { profiles: {} } })).toThrow(
+    expect(() => resolvePublishProfile({
+      cliProfile: 'cloud',
+      config: { profiles: {}, dialects: {} }
+    })).toThrow(
       'Invalid --profile cloud. Expected zilliz, milvus, or none.'
     );
   });
@@ -111,6 +120,66 @@ describe('sync config', () => {
 
     await expect(loadSyncConfig({ cwd: dir })).rejects.toThrow(
       'codeBlocks.languageAliases.curl must be a non-empty string.'
+    );
+  });
+
+  it('loads a Docusaurus dialect and read-only Base resolver', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-config-dialect-'));
+    await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
+      defaultDialect: 'docusaurus',
+      dialects: {
+        docusaurus: {
+          publicSiteBaseUrl: 'https://docs.zilliz.com/docs',
+          linkResolver: {
+            type: 'lark-base',
+            baseUrl: 'https://zilliverse.feishu.cn/base/base_token',
+            keyField: 'Slug',
+            urlField: 'Docs',
+            placementTypeField: 'Placement Type',
+            referenceField: 'Ref Target Doc',
+            acceptedPlacementTypes: ['canonical', 'ref']
+          }
+        }
+      }
+    }), 'utf8');
+
+    const config = await loadSyncConfig({ cwd: dir });
+
+    expect(resolveDialect({ cliDialect: undefined, config })).toBe('docusaurus');
+    expect(resolveDialect({ cliDialect: 'gfm', config })).toBe('gfm');
+    expect(resolveDialectConfig(config, 'docusaurus')).toMatchObject({
+      publicSiteBaseUrl: 'https://docs.zilliz.com/docs',
+      linkResolver: { type: 'lark-base', keyField: 'Slug' }
+    });
+  });
+
+  it('rejects unknown dialect names', () => {
+    expect(() => resolveDialect({
+      cliDialect: 'mdx',
+      config: { profiles: {}, dialects: {} }
+    })).toThrow('Invalid --dialect mdx. Expected gfm, docusaurus, or milvus-authoring.');
+  });
+
+  it('rejects resolver keys that imply write behavior', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-config-dialect-write-'));
+    await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
+      dialects: {
+        docusaurus: {
+          linkResolver: {
+            type: 'lark-base',
+            baseUrl: 'https://example.feishu.cn/base/base_token',
+            keyField: 'Slug',
+            urlField: 'Docs',
+            placementTypeField: 'Placement Type',
+            acceptedPlacementTypes: ['canonical'],
+            writeBack: true
+          }
+        }
+      }
+    }), 'utf8');
+
+    await expect(loadSyncConfig({ cwd: dir })).rejects.toThrow(
+      'dialects.docusaurus.linkResolver.writeBack is not supported.'
     );
   });
 });

@@ -44,6 +44,18 @@ It never chooses `document-replace`, enables `--sync-whiteboards`, or appends a 
 
 Pull writes an independent snapshot by default. Merge begins with `merge --check`, and a conflict stops before publish.
 
+For a Docusaurus source, use one consistent dialect across status, diff, and publish:
+
+```bash
+feishu-md-sync status article.md --target "$TARGET" --dialect docusaurus --profile none --format json
+feishu-md-sync diff article.md --target "$TARGET" --dialect docusaurus --profile none --format json
+feishu-md-sync publish article.md --target "$TARGET" --dialect docusaurus --profile none --format json
+```
+
+Agents should branch on `dialectBlockers`, `dialectDiagnostics`, and `linkResolution`. A dialect blocker means the source must be fixed; confirmation flags cannot bypass it. `linkResolution` identifies Feishu mappings, cache use, public-site fallbacks, and unresolved links without requiring the Agent to parse warning text.
+
+Do not run automatic merge for `docusaurus` or `milvus-authoring`. Pull a separate review snapshot and reconcile the canonical source manually.
+
 ## Routing With Official Lark Skills
 
 - `$feishu-md-sync`: local Markdown status, diff, pull, merge, create, and publish.

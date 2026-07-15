@@ -41,6 +41,8 @@ function prettyLines(value: unknown): string[] | undefined {
     const recommendation = asRecord(record.recommendation)!;
     const lines = [
       `state: ${record.state}`,
+      `dialect: ${String(record.dialect ?? 'gfm')}`,
+      linkSummaryLine(record.linkResolution),
       `local changed: ${String(record.localChanged)}`,
       `remote changed: ${String(record.remoteChanged)}`,
       `recommendation: ${String(recommendation.action)} - ${String(recommendation.reason)}`
@@ -65,6 +67,8 @@ function prettyLines(value: unknown): string[] | undefined {
       const blocker = asRecord(value);
       if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.assetKey)} - ${String(blocker.message)}`);
     }
+    appendDialectDiagnostics(lines, record.dialectBlockers, 'blocker');
+    appendDialectDiagnostics(lines, record.dialectWarnings, 'warning');
     return lines;
   }
   return undefined;
@@ -73,8 +77,12 @@ function prettyLines(value: unknown): string[] | undefined {
 function publishPlanLines(result: Record<string, unknown>, plan: Record<string, unknown>): string[] {
   const lines = [
     `mode: ${String(result.mode)}`,
-    `strategy: ${String(plan.strategy)}`
+    `strategy: ${String(plan.strategy)}`,
+    `dialect: ${String(plan.dialect ?? 'gfm')}`,
+    linkSummaryLine(plan.linkResolution)
   ];
+  appendDialectDiagnostics(lines, plan.dialectBlockers, 'blocker');
+  appendDialectDiagnostics(lines, plan.dialectWarnings, 'warning');
   const scoped = asRecord(plan.scopedPatch);
   const operations = Array.isArray(scoped?.operations) ? scoped.operations : [];
   for (const value of operations) {
@@ -131,6 +139,30 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     lines.push(`requires: --confirm-remote-whiteboard-overwrite ${String(assetKey)}`);
   }
   return lines;
+}
+
+function appendDialectDiagnostics(
+  lines: string[],
+  value: unknown,
+  label: 'blocker' | 'warning'
+): void {
+  for (const item of Array.isArray(value) ? value : []) {
+    const diagnostic = asRecord(item);
+    if (!diagnostic) continue;
+    const location = asRecord(diagnostic.location);
+    const suffix = location
+      ? ` at ${String(location.file)}:${String(location.line)}${location.column ? `:${String(location.column)}` : ''}`
+      : '';
+    lines.push(`${label}[${String(diagnostic.code)}]: ${String(diagnostic.message)}${suffix}`);
+  }
+}
+
+function linkSummaryLine(value: unknown): string {
+  const summary = asRecord(value);
+  const feishu = Number(summary?.resolvedToFeishu ?? 0);
+  const publicFallback = Number(summary?.resolvedToPublicSite ?? 0);
+  const unresolved = Number(summary?.unresolved ?? 0);
+  return `links: ${feishu} Feishu, ${publicFallback} public fallback, ${unresolved} unresolved`;
 }
 
 function appendCodeSummaryLines(lines: string[], value: unknown): void {

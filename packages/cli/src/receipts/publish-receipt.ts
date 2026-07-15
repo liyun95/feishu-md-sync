@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
+import type { DialectDependency, DialectName } from '../dialects/types.js';
+import type { ResolvedDocumentLink } from '../link-resolvers/types.js';
 
 export type PublishReceiptTarget = {
   kind: 'docx' | 'wiki' | 'folder';
@@ -60,10 +62,45 @@ export type PublishReceiptV3 = Omit<PublishReceiptV2, 'version'> & {
   whiteboards: WhiteboardReceiptEntry[];
 };
 
-export type PublishReceipt = PublishReceiptV1 | PublishReceiptV2 | PublishReceiptV3;
+export type PublishReceiptV4 = {
+  version: 4;
+  target: PublishReceiptTarget;
+  resolvedDocumentId?: string;
+  profile: PublishProfileName;
+  dialect: DialectName;
+  dialectDraftHash: string;
+  dialectDependencies: DialectDependency[];
+  linkResolutionFingerprint: string;
+  resolvedLinks: ResolvedDocumentLink[];
+  localSourceHash: string;
+  publishDraftHash: string;
+  publishBaseSnapshot: SnapshotReference;
+  remoteSnapshotHash: string;
+  remoteRevision?: string;
+  localBaseSnapshot: LocalBaseSnapshot;
+  remoteSemanticSnapshot?: SnapshotReference;
+  whiteboards: WhiteboardReceiptEntry[];
+  updatedAt: string;
+};
+
+export type PublishReceipt = PublishReceiptV1 | PublishReceiptV2 | PublishReceiptV3 | PublishReceiptV4;
 
 export function whiteboardEntries(receipt: PublishReceipt | undefined): WhiteboardReceiptEntry[] {
-  return receipt?.version === 3 ? receipt.whiteboards : [];
+  return receipt?.version === 3 || receipt?.version === 4 ? receipt.whiteboards : [];
+}
+
+export function receiptDialect(receipt: PublishReceipt): DialectName {
+  return receipt.version === 4 ? receipt.dialect : 'gfm';
+}
+
+export function hasRemoteSemanticSnapshot(
+  receipt: PublishReceipt | undefined
+): receipt is PublishReceiptV2 | PublishReceiptV3 | (PublishReceiptV4 & { remoteSemanticSnapshot: SnapshotReference }) {
+  return Boolean(
+    receipt &&
+    (receipt.version === 2 || receipt.version === 3 || receipt.version === 4) &&
+    receipt.remoteSemanticSnapshot
+  );
 }
 
 export function hashText(value: string): string {
@@ -80,6 +117,10 @@ export function baseSnapshotPath(input: { cwd: string; target: PublishReceiptTar
 
 export function baseSnapshotRelativePath(input: { target: PublishReceiptTarget }): string {
   return join('.sync', 'feishu-md-sync', 'bases', `${input.target.kind}-${input.target.token}-local.md`);
+}
+
+export function publishBaseSnapshotRelativePath(input: { target: PublishReceiptTarget }): string {
+  return join('.sync', 'feishu-md-sync', 'bases', `${input.target.kind}-${input.target.token}-publish.md`);
 }
 
 export async function readPublishReceipt(input: {
@@ -130,6 +171,34 @@ export async function readLocalBaseSnapshot(input: {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+export async function writePublishBaseSnapshot(input: {
+  cwd: string;
+  target: PublishReceiptTarget;
+  markdown: string;
+}): Promise<SnapshotReference> {
+  const path = publishBaseSnapshotRelativePath({ target: input.target });
+  await mkdir(dirname(join(input.cwd, path)), { recursive: true });
+  await writeFile(join(input.cwd, path), input.markdown, 'utf8');
+  return { path, hash: hashText(input.markdown) };
+}
+
+export async function readPublishBaseSnapshot(input: {
+  cwd: string;
+  snapshot: SnapshotReference;
+}): Promise<string | undefined> {
+  let markdown: string;
+  try {
+    markdown = await readFile(join(input.cwd, input.snapshot.path), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  if (hashText(markdown) !== input.snapshot.hash) {
+    throw new Error('Publish base snapshot hash mismatch.');
+  }
+  return markdown;
 }
 
 export function canUpgradeLegacyReceipt(input: {

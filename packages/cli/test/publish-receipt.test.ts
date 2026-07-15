@@ -6,12 +6,16 @@ import {
   baseSnapshotPath,
   hashText,
   publishReceiptPath,
+  readPublishBaseSnapshot,
   readLocalBaseSnapshot,
   readPublishReceipt,
+  receiptDialect,
   whiteboardEntries,
+  writePublishBaseSnapshot,
   writeLocalBaseSnapshot,
   writePublishReceipt,
-  type PublishReceiptV3
+  type PublishReceiptV3,
+  type PublishReceiptV4
 } from '../src/receipts/publish-receipt.js';
 
 describe('publish receipt', () => {
@@ -95,6 +99,71 @@ describe('publish receipt', () => {
 
     await expect(readPublishReceipt({ cwd: dir, target: receipt.target })).resolves.toEqual(receipt);
     expect(whiteboardEntries(receipt)).toEqual(receipt.whiteboards);
+  });
+
+  it('stores dialect metadata and an exact prior publish draft snapshot', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-receipt-v4-'));
+    const snapshot = await writePublishBaseSnapshot({
+      cwd: dir,
+      target: { kind: 'wiki', token: 'wiki_token' },
+      markdown: '# Published\n\nResolved [link](https://example.feishu.cn/wiki/next).\n'
+    });
+    const receipt: PublishReceiptV4 = {
+      version: 4,
+      target: { kind: 'wiki', token: 'wiki_token' },
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      dialect: 'docusaurus',
+      dialectDraftHash: 'dialect',
+      dialectDependencies: [],
+      linkResolutionFingerprint: 'links',
+      resolvedLinks: [],
+      localSourceHash: 'source',
+      publishDraftHash: 'publish',
+      publishBaseSnapshot: snapshot,
+      remoteSnapshotHash: 'remote',
+      localBaseSnapshot: { path: 'local.md', hash: 'local' },
+      remoteSemanticSnapshot: { path: 'remote.json', hash: 'semantic' },
+      whiteboards: [],
+      updatedAt: '2026-07-15T00:00:00.000Z'
+    };
+    await writePublishReceipt({ cwd: dir, receipt });
+    await expect(readPublishReceipt({ cwd: dir, target: receipt.target })).resolves.toEqual(receipt);
+    await expect(readPublishBaseSnapshot({ cwd: dir, snapshot })).resolves.toContain('Resolved [link]');
+  });
+
+  it('treats legacy receipts as gfm and keeps V3 Whiteboards readable', () => {
+    expect(receiptDialect({
+      version: 1,
+      target: { kind: 'docx', token: 'legacy' },
+      profile: 'none',
+      localSourceHash: 'local',
+      publishDraftHash: 'draft',
+      remoteSnapshotHash: 'remote',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })).toBe('gfm');
+    expect(whiteboardEntries({
+      version: 3,
+      target: { kind: 'docx', token: 'doc' },
+      resolvedDocumentId: 'doc',
+      profile: 'none',
+      localSourceHash: 'local',
+      publishDraftHash: 'draft',
+      remoteSnapshotHash: 'remote',
+      localBaseSnapshot: { path: 'base.md', hash: 'base' },
+      remoteSemanticSnapshot: { path: 'remote.json', hash: 'semantic' },
+      whiteboards: [{
+        assetKey: 'assets/diagram.png',
+        pngPath: 'assets/diagram.png',
+        svgPath: 'assets/diagram.svg',
+        svgHash: 'svg',
+        whiteboardToken: 'whiteboard',
+        blockId: 'block',
+        remoteStateHash: 'remote-state',
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })).toHaveLength(1);
   });
 
   it('treats legacy receipts as having no Whiteboard entries', () => {

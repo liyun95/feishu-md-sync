@@ -68,6 +68,29 @@ feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write
 
 When the merge already makes the local publish draft match the remote document, the final `publish --write` is a no-op remote write: it refreshes the local receipt and merge base snapshot without changing Feishu content.
 
+## Source Dialects and Profiles
+
+Dialect and profile solve different problems. A dialect describes the syntax in the source file; a profile applies product-content wording after that syntax has been converted into publishable Markdown.
+
+| Source | Dialect | Profile |
+| --- | --- | --- |
+| Ordinary Markdown | `gfm` | `none` |
+| Zilliz Cloud Docusaurus source | `docusaurus` | `none` |
+| Milvus canonical source | `milvus-authoring` | `none` |
+| Milvus source published with Zilliz wording | `milvus-authoring` | `zilliz` |
+
+`gfm` and profile `none` are the defaults. Select another source dialect with `--dialect` or `defaultDialect` in `feishu-md-sync.config.json`:
+
+```bash
+feishu-md-sync status article.md --target "$TARGET" --dialect docusaurus --profile none
+feishu-md-sync diff article.md --target "$TARGET" --dialect docusaurus --profile none
+feishu-md-sync publish article.md --target "$TARGET" --dialect docusaurus --profile none
+```
+
+Docusaurus preprocessing removes frontmatter and explicit heading anchors, converts standard `:::note` and `:::warning` admonitions, and can resolve relative document links through a configured read-only Feishu Base. Milvus authoring preprocessing expands `Variables.json` values and recursive `fragments/` references. Unsupported MDX components, custom admonitions, missing variables, fragment cycles, and unknown Milvus directives block the complete publish before any remote write.
+
+`pull` remains a separate Feishu-safe snapshot. Automatic merge is available only for `gfm`; Docusaurus and Milvus authoring sources must be reconciled manually because Feishu cannot reconstruct their source-only syntax.
+
 Preview creating a new document under a Drive folder or Wiki parent:
 
 ```bash

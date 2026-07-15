@@ -5,6 +5,8 @@ import {
   loadSyncConfig,
   resolveCalloutConfig,
   resolveCodeBlockConfig,
+  resolveDialect,
+  resolveDialectConfig,
   resolvePublishProfile
 } from '../../config/sync-config.js';
 import { confirmationRequired, validationFailure } from '../../core/cli-failure.js';
@@ -15,6 +17,7 @@ import { parseOutputFormat, printFormatted, setFailedExitCode } from '../output.
 type PublishCommandOptions = {
   target?: string;
   profile?: string;
+  dialect?: string;
   write?: boolean;
   create?: boolean;
   strategy?: string;
@@ -33,6 +36,7 @@ export function registerPublishCommand(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'existing Feishu/Lark docx URL or token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
+    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
     .option('--write', 'write to Feishu/Lark; omitted means dry-run')
     .option('--create', 'create a new document under a folder or wiki target')
     .option('--strategy <strategy>', 'write strategy: auto | block-patch | document-replace', 'auto')
@@ -68,6 +72,7 @@ export function registerPublishCommand(program: Command): void {
       const cwd = process.cwd();
       const config = await loadSyncConfig({ cwd });
       const profile = resolvePublishProfile({ cliProfile: opts.profile, config });
+      const dialect = resolveDialect({ cliDialect: opts.dialect, config });
       const callouts = resolveCalloutConfig(config);
       const codeBlocks = resolveCodeBlockConfig(config);
       const result = await runPublish({
@@ -75,6 +80,8 @@ export function registerPublishCommand(program: Command): void {
         file: path.resolve(cwd, markdownFile),
         target,
         profile,
+        dialect,
+        dialectConfig: resolveDialectConfig(config, dialect),
         callouts,
         codeBlocks,
         write: requested.write,
