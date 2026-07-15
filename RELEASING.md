@@ -60,7 +60,7 @@ A GitHub Milestone answers which planned version will contain a pull request. As
 - Close a milestone after its npm package and GitHub Release are published.
 - Moving a pull request between milestones changes the release plan; it does not change Git history.
 
-A Git tag answers whether a version has actually shipped. Do not create a version tag when planning a release. Create `vX.Y.Z` only after the release commit is merged and npm publishing succeeds. The tag, GitHub Release, and package version must refer to the same release commit.
+A Git tag is the immutable release anchor, not a planning marker. Do not create it while a version is merely planned. Create `vX.Y.Z` only after the dedicated Release PR is merged and ready to publish; pushing the tag starts npm publishing. The tag, npm provenance, GitHub Release, and package version must refer to that same release commit.
 
 ## Pull request workflow
 
