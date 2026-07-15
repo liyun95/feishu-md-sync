@@ -13,17 +13,18 @@ permissions:
 
 jobs:
   publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -33,22 +34,27 @@ jobs:
           package-manager-cache: false
 
       - name: Install Trusted Publisher compatible npm
-        run: npm install --global npm@11
+        run: npm install --global npm@11.18.0
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify requested version matches package version
+      - name: Verify release source and version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           node --input-type=module -e "import manifest from './packages/cli/package.json' with { type: 'json' }; if (process.env.RELEASE_VERSION !== manifest.version) { throw new Error('requested version ' + process.env.RELEASE_VERSION + ' does not match package version ' + manifest.version); }"
-
-      - name: Verify checkout is current main
-        run: |
           git fetch origin main:refs/remotes/origin/main --no-tags
-          if test "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)"; then
-            echo "Release checkout is not the current origin/main commit." >&2
+          if test "$GITHUB_REF" != "refs/heads/main"; then
+            echo "Release workflow must be dispatched from main." >&2
+            exit 1
+          fi
+          if test "$(git rev-parse HEAD)" != "$GITHUB_SHA"; then
+            echo "Release checkout does not match the workflow commit $GITHUB_SHA." >&2
+            exit 1
+          fi
+          if test "$GITHUB_SHA" != "$(git rev-parse origin/main)"; then
+            echo "Release commit $GITHUB_SHA is no longer the current origin/main commit." >&2
             exit 1
           fi
 
@@ -67,5 +73,75 @@ jobs:
       - name: Smoke test npm package
         run: npm run test:package
 
+      - name: Pack release artifact
+        id: pack
+        run: |
+          mkdir -p release-artifacts
+          npm pack --workspace=feishu-md-sync --json --pack-destination release-artifacts > release-artifacts/pack.json
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const [pack] = JSON.parse(readFileSync('release-artifacts/pack.json', 'utf8'));
+          appendFileSync(process.env.GITHUB_OUTPUT, [
+            `name=${pack.name}`,
+            `version=${pack.version}`,
+            `integrity=${pack.integrity}`,
+            `tarball=release-artifacts/${pack.filename}`
+          ].join('\n') + '\n');
+          NODE
+
       - name: Publish with provenance
-        run: npm publish --workspace=feishu-md-sync --access public --provenance
+        env:
+          PACKAGE_NAME: ${{ steps.pack.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pack.outputs.version }}
+          PACKAGE_INTEGRITY: ${{ steps.pack.outputs.integrity }}
+          PACKAGE_TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          existing_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)"
+          if test -n "$existing_integrity"; then
+            if test "$existing_integrity" != "$PACKAGE_INTEGRITY"; then
+              echo "npm already contains $PACKAGE_NAME@$PACKAGE_VERSION with different package bytes." >&2
+              exit 1
+            fi
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published with the expected integrity; continuing recovery."
+          else
+            npm publish "$PACKAGE_TARBALL" --access public --provenance
+          fi
+
+      - name: Verify npm registry
+        env:
+          PACKAGE_NAME: ${{ steps.pack.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pack.outputs.version }}
+          PACKAGE_INTEGRITY: ${{ steps.pack.outputs.integrity }}
+        run: |
+          for attempt in {1..12}; do
+            registry_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)"
+            if test "$registry_integrity" = "$PACKAGE_INTEGRITY"; then
+              echo "Verified $PACKAGE_NAME@$PACKAGE_VERSION in the npm registry."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "npm registry did not expose the expected integrity for $PACKAGE_NAME@$PACKAGE_VERSION." >&2
+          exit 1
+
+      - name: Create matching Git tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          tag="v$RELEASE_VERSION"
+          notes_file=".github/releases/$tag.md"
+          test -f "$notes_file"
+          git fetch origin "refs/tags/$tag:refs/tags/$tag" --no-tags 2>/dev/null || true
+          if git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
+            tag_commit="$(git rev-parse "$tag^{commit}")"
+            if test "$tag_commit" != "$GITHUB_SHA"; then
+              echo "Existing tag $tag points to $tag_commit instead of $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists at the expected commit."
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "feishu-md-sync $tag" --notes-file "$notes_file" --latest
+          fi

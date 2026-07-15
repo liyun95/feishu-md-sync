@@ -94,8 +94,8 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 
 6. Run the live Feishu smoke tests with the dedicated test document and identity.
 7. Merge the Release PR after all required checks pass.
-8. Run the `Publish npm package` workflow manually with the package version. The workflow publishes from the current `main` commit through npm Trusted Publishing.
-9. Confirm the package is available from npm, then create the matching Git tag and GitHub Release from that same `main` commit.
+8. Run the `Publish npm package` workflow manually from `main` with the package version. The workflow pins the dispatch commit, publishes through npm Trusted Publishing, verifies registry integrity, and creates the matching Git tag and GitHub Release from that same commit.
+9. Confirm the npm package and GitHub Release are available.
 10. Close the milestone.
 
 ## Current version map
