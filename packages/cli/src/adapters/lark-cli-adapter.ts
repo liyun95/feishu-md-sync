@@ -6,6 +6,8 @@ import type {
   CreatedDocument,
   CreatedWhiteboard,
   FeishuAdapter,
+  RemoteBaseRecord,
+  RemoteBaseTable,
   RemoteBlocks,
   RemoteCodeMetadata,
   RemoteMarkdown,
@@ -31,6 +33,72 @@ export class LarkCliAdapter implements FeishuAdapter {
   constructor(input: { exec?: LarkCliExecutor; identity?: LarkCliIdentity } = {}) {
     this.exec = input.exec ?? runLarkCli;
     this.identity = input.identity ?? larkCliIdentityFromEnv();
+  }
+
+  async resolveBaseUrl(input: { url: string }): Promise<{ baseToken: string }> {
+    const parsed = parseLarkCliJson(await this.exec(withIdentity([
+      'base',
+      '+url-resolve',
+      '--url',
+      input.url,
+      '--format',
+      'json'
+    ], this.identity)));
+    const baseToken = baseTokenFromData(parsed.data);
+    if (!baseToken) {
+      throw new Error('lark-cli base +url-resolve did not return data.base_token.');
+    }
+    return { baseToken };
+  }
+
+  async fetchBaseTables(input: { baseToken: string }): Promise<RemoteBaseTable[]> {
+    const parsed = parseLarkCliJson(await this.exec(withIdentity([
+      'base',
+      '+base-block-list',
+      '--base-token',
+      input.baseToken,
+      '--format',
+      'json'
+    ], this.identity)));
+    return baseTablesFromData(parsed.data);
+  }
+
+  async fetchBaseRecords(input: {
+    baseToken: string;
+    tableId: string;
+    fields: string[];
+  }): Promise<RemoteBaseRecord[]> {
+    const records: RemoteBaseRecord[] = [];
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const fieldArgs = input.fields.flatMap((field) => ['--field-id', field]);
+      const parsed = parseLarkCliJson(await this.exec(withIdentity([
+        'base',
+        '+record-list',
+        '--base-token',
+        input.baseToken,
+        '--table-id',
+        input.tableId,
+        '--limit',
+        '200',
+        '--offset',
+        String(offset),
+        ...fieldArgs,
+        '--format',
+        'json'
+      ], this.identity)));
+      const page = baseRecordPageFromData(parsed.data);
+      records.push(...page.records);
+      offset += page.records.length;
+      hasMore = page.hasMore;
+      if (hasMore && page.records.length === 0) {
+        throw new Error('lark-cli base +record-list returned an empty page with has_more=true.');
+      }
+    }
+
+    return records;
   }
 
   async resolveDocumentId(input: { target: PublishReceiptTarget }): Promise<string> {
@@ -337,6 +405,63 @@ function wikiNodeFromData(data: unknown): Record<string, unknown> | undefined {
   return node && typeof node === 'object' && !Array.isArray(node)
     ? node as Record<string, unknown>
     : undefined;
+}
+
+function baseTokenFromData(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
+  const token = (data as { base_token?: unknown }).base_token;
+  return typeof token === 'string' && token.length > 0 ? token : undefined;
+}
+
+function baseTablesFromData(data: unknown): RemoteBaseTable[] {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  const blocks = (data as { blocks?: unknown }).blocks;
+  if (!Array.isArray(blocks)) return [];
+  return blocks.flatMap((block) => {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) return [];
+    const record = block as { id?: unknown; name?: unknown; type?: unknown };
+    if (record.type !== 'table' || typeof record.id !== 'string' || typeof record.name !== 'string') {
+      return [];
+    }
+    return [{ id: record.id, name: record.name }];
+  });
+}
+
+function baseRecordPageFromData(data: unknown): {
+  records: RemoteBaseRecord[];
+  hasMore: boolean;
+} {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { records: [], hasMore: false };
+  }
+  const page = data as {
+    fields?: unknown;
+    data?: unknown;
+    record_id_list?: unknown;
+    has_more?: unknown;
+  };
+  const fields = Array.isArray(page.fields) && page.fields.every((field) => typeof field === 'string')
+    ? page.fields as string[]
+    : [];
+  const rows = Array.isArray(page.data) ? page.data : [];
+  const recordIds = Array.isArray(page.record_id_list) &&
+    page.record_id_list.every((recordId) => typeof recordId === 'string')
+    ? page.record_id_list as string[]
+    : [];
+  const consistentRows = rows.every((row) => Array.isArray(row) && row.length === fields.length);
+  if (rows.length !== recordIds.length || !consistentRows) {
+    throw new Error('lark-cli base +record-list returned inconsistent columnar data.');
+  }
+  return {
+    records: rows.map((row, index) => ({
+      recordId: recordIds[index]!,
+      fields: Object.fromEntries(fields.map((field, fieldIndex) => [
+        field,
+        (row as unknown[])[fieldIndex]
+      ]))
+    })),
+    hasMore: page.has_more === true
+  };
 }
 
 function withIdentity(args: string[], identity: LarkCliIdentity): string[] {

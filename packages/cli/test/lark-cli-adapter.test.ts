@@ -3,6 +3,75 @@ import { LarkCliAdapter } from '../src/adapters/lark-cli-adapter.js';
 import { CliFailure } from '../src/core/cli-failure.js';
 
 describe('LarkCliAdapter', () => {
+  it('resolves a Base URL and lists table blocks', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'user',
+      exec: async (args) => {
+        calls.push(args);
+        if (args[1] === '+url-resolve') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { base_token: 'base_token' } }),
+            stderr: ''
+          };
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              blocks: [{ id: 'tbl_ai', name: 'AI Models', type: 'table', parent_id: null }]
+            }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.resolveBaseUrl({
+      url: 'https://example.feishu.cn/base/base_token'
+    })).resolves.toEqual({ baseToken: 'base_token' });
+    await expect(adapter.fetchBaseTables({ baseToken: 'base_token' })).resolves.toEqual([
+      { id: 'tbl_ai', name: 'AI Models' }
+    ]);
+    expect(calls).toEqual([
+      [
+        'base', '+url-resolve', '--url', 'https://example.feishu.cn/base/base_token',
+        '--format', 'json', '--as', 'user'
+      ],
+      [
+        'base', '+base-block-list', '--base-token', 'base_token',
+        '--format', 'json', '--as', 'user'
+      ]
+    ]);
+  });
+
+  it('paginates Base records and normalizes columnar rows', async () => {
+    const adapter = paginatedBaseAdapter();
+
+    await expect(adapter.fetchBaseRecords({
+      baseToken: 'base_token',
+      tableId: 'tbl_ai',
+      fields: ['Slug', 'Docs', 'Placement Type']
+    })).resolves.toEqual([
+      {
+        recordId: 'rec1',
+        fields: {
+          Slug: 'integrate-with-model-providers',
+          Docs: '[Integrate](https://example.feishu.cn/wiki/wiki1)',
+          'Placement Type': ['canonical']
+        }
+      },
+      {
+        recordId: 'rec2',
+        fields: {
+          Slug: 'openai',
+          Docs: '[OpenAI](https://example.feishu.cn/wiki/wiki2)',
+          'Placement Type': ['ref']
+        }
+      }
+    ]);
+  });
+
   it('resolves docx targets without invoking lark-cli', async () => {
     const calls: string[][] = [];
     const adapter = new LarkCliAdapter({
@@ -562,3 +631,46 @@ describe('LarkCliAdapter', () => {
     })).rejects.toThrow('lark-cli docs +update returned 2 Whiteboard blocks; expected exactly one');
   });
 });
+
+function paginatedBaseAdapter(): LarkCliAdapter {
+  return new LarkCliAdapter({
+    identity: 'user',
+    exec: async (args) => {
+      const offset = Number(args[args.indexOf('--offset') + 1]);
+      if (offset === 0) {
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              fields: ['Slug', 'Docs', 'Placement Type'],
+              data: [[
+                'integrate-with-model-providers',
+                '[Integrate](https://example.feishu.cn/wiki/wiki1)',
+                ['canonical']
+              ]],
+              record_id_list: ['rec1'],
+              has_more: true
+            }
+          }),
+          stderr: ''
+        };
+      }
+      return {
+        stdout: JSON.stringify({
+          ok: true,
+          data: {
+            fields: ['Slug', 'Docs', 'Placement Type'],
+            data: [[
+              'openai',
+              '[OpenAI](https://example.feishu.cn/wiki/wiki2)',
+              ['ref']
+            ]],
+            record_id_list: ['rec2'],
+            has_more: false
+          }
+        }),
+        stderr: ''
+      };
+    }
+  });
+}

@@ -31,8 +31,25 @@ export type RemoteWhiteboard = {
   raw: unknown;
 };
 
+export type RemoteBaseTable = {
+  id: string;
+  name: string;
+};
+
+export type RemoteBaseRecord = {
+  recordId: string;
+  fields: Record<string, unknown>;
+};
+
 export type FeishuAdapter = {
   resolveDocumentId?(input: { target: PublishReceiptTarget }): Promise<string>;
+  resolveBaseUrl?(input: { url: string }): Promise<{ baseToken: string }>;
+  fetchBaseTables?(input: { baseToken: string }): Promise<RemoteBaseTable[]>;
+  fetchBaseRecords?(input: {
+    baseToken: string;
+    tableId: string;
+    fields: string[];
+  }): Promise<RemoteBaseRecord[]>;
   fetchDocMarkdown(input: { doc: string }): Promise<RemoteMarkdown>;
   fetchDocBlocks?(input: { doc: string }): Promise<RemoteBlocks>;
   fetchDocCodeMetadata?(input: { doc: string }): Promise<RemoteCodeMetadata[]>;
