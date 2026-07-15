@@ -107,5 +107,5 @@ function exitCodeForType(type: CliFailureType): number {
 }
 
 function isValidationMessage(message: string): boolean {
-  return /^(?:error:\s*)?(?:invalid\b|expected\b|choose only\b|.+\brequires?\b|.+\baccepts only\b|.+\bdoes not support\b|.+\bdoes not exist\b|could not find a supported feishu token)/i.test(message);
+  return /^(?:error:\s*)?(?:unknown command\b|invalid\b|expected\b|choose only\b|.+\brequires?\b|.+\baccepts only\b|.+\bdoes not support\b|.+\bdoes not exist\b|could not find a supported feishu token)/i.test(message);
 }

@@ -2,6 +2,46 @@
 
 Examples use the installed `feishu-md-sync` binary. When developing from source, use `npm run dev -- <command> ...`.
 
+## Global options
+
+Print the installed package version:
+
+```bash
+feishu-md-sync --version
+```
+
+Commands that accept `--format json` write successful command results to stdout. Failures write one JSON object to stderr and use a categorized non-zero exit code:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "confirmation_required",
+    "subtype": "collaboration_risk",
+    "message": "block-patch replacing or deleting existing blocks requires --confirm-collaboration-risk",
+    "hint": "review the affected blocks and obtain explicit approval for the collaboration risk",
+    "requiredFlags": ["--confirm-collaboration-risk"],
+    "retryable": false
+  }
+}
+```
+
+Stable error categories and exits:
+
+| Error type | Exit | Meaning |
+| --- | ---: | --- |
+| `validation` | 2 | Invalid command, option, target, profile, or local input. |
+| `authentication` | 3 | No valid user login or token. |
+| `authorization` | 3 | The selected user or bot lacks permission or scope. |
+| `config` | 3 | Required local configuration or `lark-cli` is unavailable. |
+| `network` | 4 | Transport failure that may be retryable. |
+| `verification` | 5 | Post-write readback does not match the intended result. |
+| `internal` | 5 | Unexpected CLI or adapter failure. |
+| `conflict` | 1 | Local and remote changes cannot be reconciled safely. |
+| `confirmation_required` | 10 | The reviewed write needs explicit human approval. |
+
+Agents and scripts should branch on the exit code plus `error.type` and `error.subtype`, not on `error.message`. They must not automatically retry exit `10` with the listed confirmation flags. A blocked publish dry-run and a merge conflict remain complete domain results on stdout and exit `1` rather than becoming stderr error envelopes.
+
 ## `publish`
 
 ```bash

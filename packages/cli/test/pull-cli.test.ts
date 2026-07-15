@@ -44,7 +44,7 @@ describe('pull CLI', () => {
       'milvus'
     ]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain("required option '-o, --output <file>' not specified");
   });
 
