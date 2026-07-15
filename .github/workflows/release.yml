@@ -31,8 +31,8 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
-      - name: Install Trusted Publisher compatible npm
-        run: npm install --global npm@11.18.0
+      - name: Install pinned release tooling
+        run: npm install --global npm@11.18.0 @sigstore/cli@0.10.1
 
       - name: Install dependencies
         run: npm ci
@@ -87,15 +87,14 @@ jobs:
           PACKAGE_VERSION: ${{ steps.pack.outputs.version }}
           PACKAGE_INTEGRITY: ${{ steps.pack.outputs.integrity }}
           PACKAGE_TARBALL: ${{ steps.pack.outputs.tarball }}
-          EXPECTED_REPOSITORY: https://github.com/${{ github.repository }}
-          EXPECTED_SHA: ${{ github.sha }}
-          EXPECTED_REF: ${{ github.ref }}
-          EXPECTED_WORKFLOW: .github/workflows/release.yml
         run: |
           existing_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)"
           if test -n "$existing_integrity"; then
-            node .github/scripts/verify-npm-provenance.mjs
-            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published from this tagged commit; continuing recovery."
+            if test "$existing_integrity" != "$PACKAGE_INTEGRITY"; then
+              echo "npm already contains $PACKAGE_NAME@$PACKAGE_VERSION with different package bytes." >&2
+              exit 1
+            fi
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published; verifying signed provenance before recovery."
           else
             npm publish "$PACKAGE_TARBALL" --access public --provenance
           fi
@@ -109,9 +108,18 @@ jobs:
           EXPECTED_SHA: ${{ github.sha }}
           EXPECTED_REF: ${{ github.ref }}
           EXPECTED_WORKFLOW: .github/workflows/release.yml
+          EXPECTED_BUILD_TYPE: https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1
+          EXPECTED_BUILDER: https://github.com/actions/runner/github-hosted
+          EXPECTED_EVENT: push
+          EXPECTED_CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+          SIGSTORE_BUNDLE_PATH: release-artifacts/npm-provenance.sigstore
         run: |
           for attempt in {1..12}; do
-            if node .github/scripts/verify-npm-provenance.mjs; then
+            if node .github/scripts/download-npm-provenance.mjs \
+              && sigstore verify "$SIGSTORE_BUNDLE_PATH" \
+                --certificate-identity-uri "$EXPECTED_CERTIFICATE_IDENTITY" \
+                --certificate-issuer 'https://token.actions.githubusercontent.com' \
+              && node .github/scripts/verify-npm-provenance.mjs; then
               exit 0
             fi
             sleep 5
@@ -148,7 +156,7 @@ jobs:
             exit 1
           fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "GitHub Release $GITHUB_REF_NAME already exists."
+            gh release edit "$GITHUB_REF_NAME" --title "feishu-md-sync $GITHUB_REF_NAME" --notes-file "$notes_file" --draft=false --prerelease=false --latest
           else
             gh release create "$GITHUB_REF_NAME" --verify-tag --title "feishu-md-sync $GITHUB_REF_NAME" --notes-file "$notes_file" --latest
           fi
