@@ -1,6 +1,7 @@
 import type { DialectWorkspaceConfig, DocumentLinkResolver } from '../link-resolvers/types.js';
 import { preprocessDocusaurus } from './docusaurus.js';
 import { preprocessGfm } from './gfm.js';
+import { preprocessMilvusAuthoring } from './milvus-authoring.js';
 import type { DialectName, DialectResult } from './types.js';
 
 export async function preprocessDialect(input: {
@@ -16,6 +17,15 @@ export async function preprocessDialect(input: {
   }
   if (input.dialect === 'docusaurus') {
     return preprocessDocusaurus({
+      sourcePath: input.sourcePath,
+      markdown: input.markdown,
+      config: input.config,
+      linkResolver: input.linkResolver
+    });
+  }
+  if (input.dialect === 'milvus-authoring') {
+    return preprocessMilvusAuthoring({
+      cwd: input.cwd,
       sourcePath: input.sourcePath,
       markdown: input.markdown,
       config: input.config,
