@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
 
+# All runs mutate the same dedicated test document. Serialize PR and main runs
+# so one scenario cannot overwrite another run's baseline or amplify API limits.
+concurrency:
+  group: live-feishu-shared-test-document
+  cancel-in-progress: false
+
 jobs:
   live-feishu:
     runs-on: ubuntu-latest
