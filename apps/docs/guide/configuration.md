@@ -66,6 +66,50 @@ FEISHU_MD_SYNC_LARK_AS=bot
 
 `.env` is ignored by git. Do not commit real credentials.
 
+## Source Dialects and Document Links
+
+Use `defaultDialect` when a workspace consistently publishes one authoring format. A command-line `--dialect` value overrides it; otherwise the CLI defaults to `gfm`.
+
+```json
+{
+  "defaultDialect": "docusaurus",
+  "dialects": {
+    "docusaurus": {
+      "publicSiteBaseUrl": "https://docs.zilliz.com/docs",
+      "linkResolver": {
+        "type": "lark-base",
+        "baseUrl": "https://zilliverse.feishu.cn/base/Ac7xbs2k1ad7bjsCXr0ccHe9nMh",
+        "keyField": "Slug",
+        "urlField": "Docs",
+        "placementTypeField": "Placement Type",
+        "referenceField": "Ref Target Doc",
+        "acceptedPlacementTypes": ["canonical", "ref"]
+      }
+    },
+    "milvus-authoring": {
+      "sourceRoot": "site/en",
+      "publicSiteBaseUrl": "https://milvus.io/docs"
+    }
+  }
+}
+```
+
+The Base resolver is strictly read-only. It lists tables and records through the official `lark-cli`, but publish never creates or edits Base records. By default, `canonical` and `ref` rows are eligible mappings; `section` and `link` rows are ignored. Two different eligible Feishu URLs for the same slug are ambiguous and block the complete publish.
+
+Mappings are cached for one hour under:
+
+```text
+.sync/feishu-md-sync/link-resolvers/
+```
+
+When refresh fails, an existing cache is used with a `link-resolver-stale-cache` warning. Without a usable mapping, Docusaurus and Milvus authoring use `publicSiteBaseUrl` when configured; otherwise the relative link blocks publish. A source heading fragment is preserved for a public website fallback, but a Feishu cross-document link targets the document root and reports that the fragment was removed.
+
+Dialect selection precedence is:
+
+1. `--dialect`
+2. `defaultDialect`
+3. `gfm`
+
 ## Callout Titles
 
 New Callouts use `Notes` and `Warning` by default. To use localized presentation titles, add a workspace `feishu-md-sync.config.json` in the directory where you run the CLI:
@@ -156,6 +200,8 @@ Scope-aware status, diff, Code block publishing, and table publishing read Docx 
 | `查看云文档内容` | Use the official Markdown export API for docx documents. |
 | `文本内容转换为云文档块` | Use the official Markdown-to-docx-block conversion API before writing Markdown back. |
 | `查看知识空间节点信息` | Resolve a wiki URL to the underlying docx token. Required only when targets use `/wiki/...` links. |
+
+A configured `lark-base` link resolver also needs read access to the referenced Base and its records. It does not need Base write permissions.
 
 For a pull-only setup that never writes back to Feishu, `查看新版文档` can replace `创建及编辑新版文档`.
 
