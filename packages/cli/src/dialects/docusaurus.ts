@@ -287,7 +287,7 @@ function convertAdmonitions(input: {
 function stripHeadingAnchors(markdown: string): string {
   const ranges = protectedCodeRanges(markdown);
   return markdown.replace(
-    /^( {0,3}#{1,6}\s+.*?)[ \t]*\{#[A-Za-z0-9_-]+\}[ \t]*$/gm,
+    /^( {0,3}#{1,6}\s+.*?)[ \t]*\\?\{#[A-Za-z0-9_-]+\}[ \t]*$/gm,
     (match, heading: string, offset: number) => {
       return isProtectedOffset(offset, ranges) ? match : heading.trimEnd();
     }

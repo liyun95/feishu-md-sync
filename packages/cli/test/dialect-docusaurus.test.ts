@@ -19,6 +19,14 @@ describe('docusaurus dialect', () => {
     expect(result.blockers).toEqual([]);
   });
 
+  it('removes escaped and unescaped explicit heading anchors', async () => {
+    const result = await preprocessText(
+      '## Plain{#plain}\n## Escaped\\{#escaped}\n'
+    );
+
+    expect(result.markdown).toBe('## Plain\n## Escaped\n');
+  });
+
   it('turns note and warning directives into existing HTML Callout syntax', async () => {
     const result = await preprocessText(':::warning\nDo not expose the token.\n:::\n');
 
