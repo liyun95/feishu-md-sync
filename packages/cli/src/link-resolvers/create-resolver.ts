@@ -123,7 +123,7 @@ function resolverResult(input: {
 
 function baseTokenFromUrl(value: string): string | undefined {
   try {
-    const match = new URL(value).pathname.match(/^\/base\/([A-Za-z0-9]+)/);
+    const match = new URL(value).pathname.match(/^\/base\/([A-Za-z0-9_-]+)/);
     return match?.[1];
   } catch {
     return undefined;

@@ -78,8 +78,7 @@ export async function buildPublishContext(input: {
     linkResolutionFingerprint: sha256(stableStringify(resolvedLinks.map((link) => ({
       originalUrl: link.originalUrl,
       slug: link.slug,
-      resolvedUrl: link.resolvedUrl,
-      source: link.source
+      resolvedUrl: link.resolvedUrl
     })))),
     transformWarnings: transform.warnings
   };

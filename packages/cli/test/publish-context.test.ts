@@ -20,11 +20,11 @@ describe('publish context', () => {
   });
 
   it('applies dialect before profile and fingerprints only used links', async () => {
-    const context = await buildPublishContext({
+    const input = {
       cwd,
       sourcePath,
       localSource: '---\nslug: /demo\n---\n\nMilvus links to [Next](./next).\n',
-      dialect: 'docusaurus',
+      dialect: 'docusaurus' as const,
       dialectConfig: {
         publicSiteBaseUrl: 'https://docs.example.com/docs',
         linkResolver: {
@@ -36,13 +36,21 @@ describe('publish context', () => {
           acceptedPlacementTypes: ['canonical', 'ref']
         }
       },
-      profile: 'zilliz',
+      profile: 'zilliz' as const,
       adapter: baseAdapterFor({ next: 'https://example.feishu.cn/wiki/wiki_next' })
-    });
+    };
+    const context = await buildPublishContext(input);
     expect(context.dialectDraft).not.toContain('slug: /demo');
     expect(context.publishDraft).toContain('<include target="zilliz">Zilliz Cloud</include>');
     expect(context.publishDraft).toContain('https://example.feishu.cn/wiki/wiki_next');
     expect(context.linkResolutionFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    const cached = await buildPublishContext({
+      ...input,
+      adapter: baseAdapterThatRejectsNetwork()
+    });
+    expect(cached.resolvedLinks[0]?.source).toBe('fresh-cache');
+    expect(cached.linkResolutionFingerprint).toBe(context.linkResolutionFingerprint);
   });
 
   it('returns blockers without calling remote write methods', async () => {
@@ -103,4 +111,21 @@ function trackingAdapter(): FeishuAdapter & { writeCalls: number } {
     }
   };
   return adapter;
+}
+
+function baseAdapterThatRejectsNetwork(): FeishuAdapter {
+  return {
+    fetchDocMarkdown: async () => ({ markdown: '' }),
+    replaceDocument: async () => {},
+    createDocument: async () => ({ documentId: 'created' }),
+    resolveBaseUrl: async () => {
+      throw new Error('fresh cache must not resolve the Base URL');
+    },
+    fetchBaseTables: async () => {
+      throw new Error('fresh cache must not list Base tables');
+    },
+    fetchBaseRecords: async () => {
+      throw new Error('fresh cache must not list Base records');
+    }
+  };
 }
