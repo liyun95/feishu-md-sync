@@ -4,6 +4,7 @@ import { registerCoreCommands } from './commands/core.js';
 import { registerPublishCommand } from './commands/publish.js';
 import { buildAuthDoctorReport, loadCliEnv } from './env.js';
 import { printFormatted } from './output.js';
+import { CLI_VERSION } from './version.js';
 
 const topLevelCommands = ['publish', 'status', 'pull', 'diff', 'merge', 'doctor', 'help'];
 
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
 
   program
     .name('feishu-md-sync')
+    .version(CLI_VERSION)
     .description('Sync local Markdown with Feishu/Lark online documents. Defaults to dry-run for remote writes.');
 
   registerPublishCommand(program);
