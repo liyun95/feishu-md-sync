@@ -269,7 +269,7 @@ Next text.`, 'utf8');
     expect(calls).toEqual(['replace:body1:Local body.']);
     expect(calloutBlocks(body).find((block) => block.block_type === 19)?.block_id).toBe('callout1');
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } }))
-      .resolves.toMatchObject({ version: 2, resolvedDocumentId: 'doc_token' });
+      .resolves.toMatchObject({ version: 4, resolvedDocumentId: 'doc_token' });
   });
 
   it('uses the tracked Callout type when the remote presentation title is customized', async () => {
@@ -316,7 +316,7 @@ Next text.`, 'utf8');
       textBlock('title1', title)
     );
     await expect(readPublishReceipt({ cwd: dir, target })).resolves.toMatchObject({
-      version: 2,
+      version: 4,
       remoteSnapshotHash: hashText(canonicalCallout(['Local body.']))
     });
   });
@@ -891,7 +891,7 @@ Next text.`, 'utf8');
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
   });
 
-  it('replaces only a matched HTML table and records a version 2 receipt', async () => {
+  it('replaces only a matched HTML table and records a version 4 receipt', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-table-run-'));
     const markdownPath = join(dir, 'doc.md');
     await writeFile(markdownPath, htmlParameterTable([
@@ -939,7 +939,7 @@ Next text.`, 'utf8');
 
     expect(adapter.calls[0]).toMatch(/^replace:table1:xml:<table>/);
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toMatchObject({
-      version: 2,
+      version: 4,
       resolvedDocumentId: 'doc_token'
     });
   });
@@ -1452,7 +1452,7 @@ Next text.`, 'utf8');
     expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({ code: 'whiteboard-adapter-unavailable' }));
   });
 
-  it('creates and verifies a Whiteboard before writing a version 3 receipt', async () => {
+  it('creates and verifies a Whiteboard before writing a version 4 receipt', async () => {
     const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
     let created = false;
     const adapter: FeishuAdapter = {
@@ -1496,7 +1496,7 @@ Next text.`, 'utf8');
     expect(created).toBe(true);
     await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
       .resolves.toMatchObject({
-        version: 3,
+        version: 4,
         whiteboards: [{
           assetKey: 'assets/cagra.png',
           blockId: 'wb_block',
@@ -1622,7 +1622,7 @@ Next text.`, 'utf8');
     })]);
     await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
       .resolves.toMatchObject({
-        version: 3,
+        version: 4,
         whiteboards: [{ blockId: 'wb_block', whiteboardToken: 'wb_token' }]
       });
   });
@@ -1685,7 +1685,7 @@ Next text.`, 'utf8');
     expect(postUpdateQueries).toBe(3);
     await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
       .resolves.toMatchObject({
-        version: 3,
+        version: 4,
         whiteboards: [{ blockId: 'wb_block', whiteboardToken: 'wb_token' }]
       });
   });

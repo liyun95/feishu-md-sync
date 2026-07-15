@@ -9,7 +9,7 @@ import type { FeishuBlock } from '../src/feishu/types.js';
 import {
   publishReceiptPath,
   readPublishReceipt,
-  type PublishReceiptV3
+  type PublishReceiptV4
 } from '../src/receipts/publish-receipt.js';
 
 const runLive = process.env.FEISHU_MD_SYNC_LIVE === '1';
@@ -634,9 +634,9 @@ function whiteboardTokenForBlock(block: { whiteboard?: unknown; board?: unknown 
 async function readWhiteboardReceipt(input: {
   cwd: string;
   target: ReturnType<typeof parseFeishuTarget>;
-}): Promise<PublishReceiptV3> {
+}): Promise<PublishReceiptV4> {
   const receipt = await readPublishReceipt(input);
-  if (receipt?.version !== 3) throw new Error('expected a version 3 publish receipt with Whiteboard state');
+  if (receipt?.version !== 4) throw new Error('expected a version 4 publish receipt with Whiteboard state');
   return receipt;
 }
 

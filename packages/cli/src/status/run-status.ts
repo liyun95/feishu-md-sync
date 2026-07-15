@@ -11,8 +11,10 @@ import type {
 } from '../link-resolvers/types.js';
 import {
   hashText,
+  hasRemoteSemanticSnapshot,
   publishReceiptPath,
   readPublishReceipt,
+  receiptDialect,
   type PublishReceipt,
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
@@ -194,7 +196,7 @@ export async function loadPublishStatusContext(input: {
     const codeMetadata = blocks.blocks.some((block) => block.block_type === 14) && input.adapter.fetchDocCodeMetadata
       ? await withRateLimitRetry(() => input.adapter.fetchDocCodeMetadata!({ doc: documentId }))
       : [];
-    const baseline = receipt?.version === 2 || receipt?.version === 3
+    const baseline = hasRemoteSemanticSnapshot(receipt)
       ? await readRemoteSemanticSnapshot({ cwd: input.cwd, snapshot: receipt.remoteSemanticSnapshot })
       : undefined;
     const current = applyTrackedCalloutTypes(
@@ -282,7 +284,8 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     };
   }
 
-  let localChanged = context.receipt.publishDraftHash !== publishDraftHash;
+  let localChanged = context.receipt.publishDraftHash !== publishDraftHash ||
+    receiptDialect(context.receipt) !== context.dialect;
   const remoteChanged = context.receipt.remoteSnapshotHash !== remoteSnapshotHash;
   if (localChanged && !remoteChanged && contentMatchesRemote) localChanged = false;
   const state = statusStateFor({ localChanged, remoteChanged });
@@ -324,8 +327,7 @@ function shouldAnalyzeScopes(context: PublishStatusContext): boolean {
   return context.localSource.includes('<table') ||
     /(^|\n) {0,3}(?:`{3,}|~{3,})/.test(context.localSource) ||
     /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
-    context.receipt?.version === 2 ||
-    context.receipt?.version === 3;
+    hasRemoteSemanticSnapshot(context.receipt);
 }
 
 export function statusWithWhiteboards(

@@ -1,6 +1,9 @@
 import type { FeishuAdapter } from '../adapters/feishu-adapter.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
-import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
+import {
+  hasRemoteSemanticSnapshot,
+  type PublishReceiptTarget
+} from '../receipts/publish-receipt.js';
 import { unifiedDiff } from '../core/diff.js';
 import {
   loadPublishStatusContext,
@@ -80,8 +83,7 @@ export async function runDiff(input: {
     context.localSource.includes('<table') ||
     /(^|\n) {0,3}(?:`{3,}|~{3,})/.test(context.localSource) ||
     /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
-    context.receipt?.version === 2 ||
-    context.receipt?.version === 3)) {
+    hasRemoteSemanticSnapshot(context.receipt))) {
     try {
       const analysis = await analyzeExistingPublish({
         cwd: input.cwd,
