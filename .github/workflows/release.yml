@@ -77,7 +77,7 @@ jobs:
             `name=${pack.name}`,
             `version=${pack.version}`,
             `integrity=${pack.integrity}`,
-            `tarball=release-artifacts/${pack.filename}`
+            `tarball=./release-artifacts/${pack.filename}`
           ].join('\n') + '\n');
           NODE
 
