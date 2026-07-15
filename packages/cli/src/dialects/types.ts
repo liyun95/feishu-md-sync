@@ -1,3 +1,8 @@
+import type {
+  LinkResolutionSummary,
+  ResolvedDocumentLink
+} from '../link-resolvers/types.js';
+
 export const DIALECT_NAMES = ['gfm', 'docusaurus', 'milvus-authoring'] as const;
 
 export type DialectName = typeof DIALECT_NAMES[number];
@@ -35,4 +40,15 @@ export type DialectDependency = {
   kind: 'file' | 'lark-base' | 'cache';
   identity: string;
   fingerprint: string;
+};
+
+export type DialectResult = {
+  dialect: DialectName;
+  markdown: string;
+  metadata: Record<string, unknown>;
+  warnings: DialectDiagnostic[];
+  blockers: DialectDiagnostic[];
+  dependencies: DialectDependency[];
+  resolvedLinks: ResolvedDocumentLink[];
+  linkResolution: LinkResolutionSummary;
 };

@@ -1,0 +1,37 @@
+import type { DialectWorkspaceConfig, DocumentLinkResolver } from '../link-resolvers/types.js';
+import { preprocessGfm } from './gfm.js';
+import type { DialectName, DialectResult } from './types.js';
+
+export async function preprocessDialect(input: {
+  cwd: string;
+  sourcePath: string;
+  markdown: string;
+  dialect: DialectName;
+  config: DialectWorkspaceConfig;
+  linkResolver?: DocumentLinkResolver;
+}): Promise<DialectResult> {
+  if (input.dialect === 'gfm') {
+    return preprocessGfm({ sourcePath: input.sourcePath, markdown: input.markdown });
+  }
+  return {
+    dialect: input.dialect,
+    markdown: input.markdown,
+    metadata: {},
+    warnings: [],
+    blockers: [{
+      code: 'unsupported-mdx-component',
+      severity: 'blocker',
+      message: `Built-in dialect ${input.dialect} is not enabled yet.`,
+      location: { file: input.sourcePath, line: 1, column: 1 }
+    }],
+    dependencies: [],
+    resolvedLinks: [],
+    linkResolution: {
+      resolvedToFeishu: 0,
+      resolvedFromFreshCache: 0,
+      resolvedFromStaleCache: 0,
+      resolvedToPublicSite: 0,
+      unresolved: 0
+    }
+  };
+}
