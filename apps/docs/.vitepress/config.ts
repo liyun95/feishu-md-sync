@@ -18,6 +18,7 @@ export default defineConfig({
         text: 'Get Started',
         items: [
           { text: 'Quickstart', link: '/guide/quickstart' },
+          { text: 'Agent Usage', link: '/guide/agent-usage' },
           { text: 'Configuration', link: '/guide/configuration' },
           { text: 'Troubleshooting', link: '/guide/troubleshooting' }
         ]

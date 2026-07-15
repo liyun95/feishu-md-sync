@@ -14,6 +14,8 @@ Target milestone: `vX.Y.Z | none`
 
 Release note: <!-- One sentence describing the user-visible change, or "none". -->
 
+Skill impact: `update | none`
+
 - [ ] Applied exactly one `release:*` label.
 - [ ] Applied the relevant change-type and area labels.
 - [ ] Assigned the target milestone, or explained why it is not assigned.

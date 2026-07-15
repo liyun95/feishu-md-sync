@@ -27,6 +27,23 @@ For a one-off run without a global install, use `npx --yes feishu-md-sync@latest
 
 The selected `lark-cli` identity must have access to the target document, Drive folder, or Wiki parent.
 
+### Agent Skill
+
+Install the Skill from the same release tag as the CLI:
+
+```bash
+npm install --global feishu-md-sync@0.3.0
+npx skills add 'liyun95/feishu-md-sync#v0.3.0' --skill feishu-md-sync --global --yes
+```
+
+Then ask an Agent:
+
+```text
+Use $feishu-md-sync to synchronize ./doc.md with this Feishu document. Review the dry-run first and do not bypass any safety gate.
+```
+
+The Skill drives the existing CLI; it does not replace it. It uses `$lark-shared` for authentication and permission repair and leaves ad hoc remote-only editing to `$lark-doc`. See the [Agent usage guide](./apps/docs/guide/agent-usage.md) for development builds, authorization behavior, and matching-version upgrades.
+
 Preview a publish plan:
 
 ```bash
@@ -125,6 +142,7 @@ npm run dev -- <args>
 npm run typecheck
 npm test
 npm run build
+npm run test:skill
 npm run docs:dev
 npm run docs:build
 ```

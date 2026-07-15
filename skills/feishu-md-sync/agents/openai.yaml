@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feishu Markdown Sync"
+  short_description: "Safely sync local Markdown with Feishu documents"
+  default_prompt: "Use $feishu-md-sync to inspect and synchronize local Markdown with a Feishu document using dry-run-first safety gates."
