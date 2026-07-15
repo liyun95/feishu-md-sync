@@ -1,6 +1,6 @@
 ---
 name: feishu-md-sync
-description: Safely synchronize local Markdown with Feishu/Lark documents through the feishu-md-sync CLI. Use when local Markdown is the source of truth and an agent needs status, diff, dry-run publish, scoped publish, document creation, pull, merge, receipt-aware conflict handling, or explicit SVG-to-Whiteboard synchronization. Do not use for ad hoc remote-only document editing or for creating diagram source assets.
+description: Use when local Markdown is the source of truth and an agent needs to synchronize it with Feishu/Lark through status, diff, dry-run publish, scoped publish, document creation, pull, merge, receipt-aware conflict handling, or explicit SVG-to-Whiteboard synchronization. Do not use for ad hoc remote-only document editing or for creating diagram source assets.
 ---
 
 # Feishu Markdown Sync
@@ -43,7 +43,7 @@ For PATH-based stable use, require `feishu-md-sync >=0.3.0 <0.4.0`. Stop and giv
 "$FMS" doctor auth --help
 ```
 
-Require the top-level commands `publish`, `status`, `diff`, `pull`, `merge`, and `doctor`. Require publish options `--write`, `--create`, `--strategy`, `--confirm-destructive`, `--confirm-collaboration-risk`, `--confirm-untracked-remote`, `--sync-whiteboards`, `--confirm-remote-whiteboard-overwrite`, and `--format`. Require merge option `--check`. Do not search arbitrary worktrees or guess another build.
+Require the top-level commands `publish`, `status`, `diff`, `pull`, `merge`, and `doctor`. Require every option used by this Skill: publish `--target`, `--profile`, `--write`, `--create`, `--strategy`, `--confirm-destructive`, `--confirm-collaboration-risk`, `--confirm-untracked-remote`, `--sync-whiteboards`, `--confirm-remote-whiteboard-overwrite`, and `--format`; status and diff `--target`, `--profile`, `--sync-whiteboards`, and `--format`; pull `--target`, `--output`, `--profile`, `--overwrite`, and `--format`; merge `--target`, `--profile`, `--check`, `--abort`, and `--format`; doctor auth `--format`. Do not search arbitrary worktrees or guess another build.
 
 ## Check Authentication
 
@@ -89,6 +89,12 @@ For a Drive folder or Wiki parent target:
 
 Review the dry-run. If the user explicitly requested creation and the plan is safe, repeat with `--write`. Do not combine `--create` with `--sync-whiteboards`.
 
+After creation, read the write result and run status against the returned `document.url` or `document.documentId`, not the original folder or Wiki parent:
+
+```bash
+"$FMS" status <markdown-file> --target <created-document-target> --profile <profile> --format json
+```
+
 ## Synchronize Whiteboards
 
 Do not infer Whiteboard intent from a sibling SVG. Enable it only when the user explicitly asks to synchronize diagram assets:
@@ -100,6 +106,12 @@ Do not infer Whiteboard intent from a sibling SVG. Enable it only when the user 
 ```
 
 A remotely changed Whiteboard must stop the workflow until the user approves the exact normalized PNG asset key. Never substitute a broad confirmation for asset-specific review.
+
+After a Whiteboard write, preserve the opt-in during final Whiteboard-aware status verification:
+
+```bash
+"$FMS" status <markdown-file> --target <target> --profile <profile> --sync-whiteboards --format json
+```
 
 ## Pull Remote Content
 
@@ -156,4 +168,4 @@ After every remote write, run:
 "$FMS" status <markdown-file> --target <target> --profile <profile> --format json
 ```
 
-Report success only when the write passed readback verification and the final status matches the intended synchronized state. Explain any residual state, warnings, or unrelated remote changes. When rendered document structure changed, ask the user to inspect the Feishu document visually.
+Use the returned document target after `--create`, and preserve `--sync-whiteboards` after a Whiteboard write. Report success only when the write passed readback verification and the final status matches the intended synchronized state. Explain any residual state, warnings, or unrelated remote changes. When rendered document structure changed, ask the user to inspect the Feishu document visually.

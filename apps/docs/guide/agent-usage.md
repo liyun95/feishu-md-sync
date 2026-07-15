@@ -54,7 +54,7 @@ The Skill does not store App credentials. Authentication and Feishu IO remain ow
 
 ## Development Builds
 
-Install the Skill from a local checkout to get a symlinked development copy:
+Install the Skill from a local checkout to get a development copy:
 
 ```bash
 npx skills add /path/to/feishu-md-sync \
@@ -62,6 +62,8 @@ npx skills add /path/to/feishu-md-sync \
   --global \
   --yes
 ```
+
+The installer copies the Skill into the Agent's global Skill directory. Reinstall it after changing `skills/feishu-md-sync/`; edits in the worktree do not automatically update the installed copy.
 
 Build the CLI, then point the Skill at the executable from one worktree:
 

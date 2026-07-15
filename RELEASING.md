@@ -101,7 +101,7 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
    npm run test:coverage
    npm run typecheck
    npm run test:package
-   npm run test:skill
+   npm run test:skill:release
    npm run docs:build
    ```
 
@@ -111,6 +111,8 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 9. Install the released CLI and matching tagged Skill in an isolated environment, then run the Skill validation and a read-only Feishu dogfood.
 10. Confirm the npm package, GitHub Release, and tagged Skill are available. If a post-publish step fails, rerun the same tag workflow; recovery accepts only matching package bytes and provenance from that exact tag commit.
 11. Close the milestone.
+
+`npm run test:skill` permits only an older pre-release development CLI while the next release is being assembled. Release PRs and tagged releases must use `npm run test:skill:release`, which rejects any CLI version outside the Skill's declared compatibility range.
 
 Release notes must show both matching installation commands:
 
