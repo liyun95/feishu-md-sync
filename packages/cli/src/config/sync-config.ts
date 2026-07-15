@@ -9,10 +9,20 @@ import {
   type PublishProfileConfig,
   type PublishProfileName
 } from '../profiles/publish-profile.js';
+import {
+  DIALECT_NAMES,
+  type DialectName
+} from '../dialects/types.js';
+import type {
+  DialectWorkspaceConfig,
+  LarkBaseLinkResolverConfig
+} from '../link-resolvers/types.js';
 
 export type SyncConfig = {
   defaultProfile?: PublishProfileName;
+  defaultDialect?: DialectName;
   profiles: Record<string, PublishProfileConfig>;
+  dialects: Partial<Record<DialectName, DialectWorkspaceConfig>>;
   callouts?: Partial<CalloutConfig>;
   codeBlocks?: Partial<CodeBlockConfig>;
 };
@@ -39,6 +49,26 @@ export function resolvePublishProfile(input: {
   return input.config.defaultProfile ?? 'none';
 }
 
+export function resolveDialect(input: {
+  cliDialect?: string;
+  config: SyncConfig;
+}): DialectName {
+  if (input.cliDialect) return parseDialectName(input.cliDialect, '--dialect');
+  return input.config.defaultDialect ?? 'gfm';
+}
+
+export function resolveDialectConfig(
+  config: SyncConfig,
+  dialect: DialectName
+): DialectWorkspaceConfig {
+  return config.dialects[dialect] ?? {};
+}
+
+export function parseDialectName(value: string, label: string): DialectName {
+  if ((DIALECT_NAMES as readonly string[]).includes(value)) return value as DialectName;
+  throw new Error(`Invalid ${label} ${value}. Expected gfm, docusaurus, or milvus-authoring.`);
+}
+
 export function resolveCalloutConfig(config: SyncConfig): CalloutConfig {
   return {
     noteTitle: config.callouts?.noteTitle ?? DEFAULT_CALLOUT_CONFIG.noteTitle,
@@ -58,7 +88,7 @@ export async function loadSyncConfig(input: LoadSyncConfigInput): Promise<SyncCo
   try {
     raw = await readFile(path, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { profiles: {} };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { profiles: {}, dialects: {} };
     throw error;
   }
 
@@ -70,13 +100,92 @@ export async function loadSyncConfig(input: LoadSyncConfigInput): Promise<SyncCo
   const defaultProfile = typeof parsed.defaultProfile === 'string'
     ? parsePublishProfileName(parsed.defaultProfile, 'defaultProfile')
     : undefined;
+  const defaultDialect = typeof parsed.defaultDialect === 'string'
+    ? parseDialectName(parsed.defaultDialect, 'defaultDialect')
+    : undefined;
 
   return {
     defaultProfile,
+    defaultDialect,
     profiles: parseProfiles(parsed.profiles),
+    dialects: parseDialects(parsed.dialects),
     callouts: parseCallouts(parsed.callouts),
     codeBlocks: parseCodeBlocks(parsed.codeBlocks)
   };
+}
+
+function parseDialects(value: unknown): Partial<Record<DialectName, DialectWorkspaceConfig>> {
+  if (value === undefined) return {};
+  if (!isRecord(value)) throw new Error('dialects must be a JSON object.');
+
+  const dialects: Partial<Record<DialectName, DialectWorkspaceConfig>> = {};
+  for (const [name, rawDialect] of Object.entries(value)) {
+    const dialect = parseDialectName(name, 'dialect name');
+    if (!isRecord(rawDialect)) throw new Error(`dialects.${name} must be a JSON object.`);
+    assertOnlyKeys(rawDialect, ['sourceRoot', 'publicSiteBaseUrl', 'linkResolver'], `dialects.${name}`);
+    dialects[dialect] = {
+      sourceRoot: parseOptionalNonEmptyString(rawDialect.sourceRoot, `dialects.${name}.sourceRoot`),
+      publicSiteBaseUrl: parseOptionalNonEmptyString(
+        rawDialect.publicSiteBaseUrl,
+        `dialects.${name}.publicSiteBaseUrl`
+      ),
+      linkResolver: parseLinkResolver(rawDialect.linkResolver, `dialects.${name}.linkResolver`)
+    };
+  }
+  return dialects;
+}
+
+function parseLinkResolver(
+  value: unknown,
+  label: string
+): LarkBaseLinkResolverConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`${label} must be a JSON object.`);
+  assertOnlyKeys(value, [
+    'type',
+    'baseUrl',
+    'keyField',
+    'urlField',
+    'placementTypeField',
+    'referenceField',
+    'acceptedPlacementTypes'
+  ], label);
+  if (value.type !== 'lark-base') {
+    throw new Error(`${label}.type must be lark-base.`);
+  }
+  const acceptedPlacementTypes = parseStringArray(
+    value.acceptedPlacementTypes,
+    `${label}.acceptedPlacementTypes`
+  );
+  if (!acceptedPlacementTypes || acceptedPlacementTypes.length === 0 ||
+    acceptedPlacementTypes.some((item) => item.trim() === '')) {
+    throw new Error(`${label}.acceptedPlacementTypes must be a non-empty array of non-empty strings.`);
+  }
+  return {
+    type: 'lark-base',
+    baseUrl: parseRequiredNonEmptyString(value.baseUrl, `${label}.baseUrl`),
+    keyField: parseRequiredNonEmptyString(value.keyField, `${label}.keyField`),
+    urlField: parseRequiredNonEmptyString(value.urlField, `${label}.urlField`),
+    placementTypeField: parseRequiredNonEmptyString(
+      value.placementTypeField,
+      `${label}.placementTypeField`
+    ),
+    referenceField: parseOptionalNonEmptyString(value.referenceField, `${label}.referenceField`),
+    acceptedPlacementTypes
+  };
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: string[], label: string): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!allowedSet.has(key)) throw new Error(`${label}.${key} is not supported.`);
+  }
+}
+
+function parseRequiredNonEmptyString(value: unknown, label: string): string {
+  const parsed = parseOptionalNonEmptyString(value, label);
+  if (parsed === undefined) throw new Error(`${label} must be a non-empty string.`);
+  return parsed;
 }
 
 function parseCodeBlocks(value: unknown): Partial<CodeBlockConfig> | undefined {
