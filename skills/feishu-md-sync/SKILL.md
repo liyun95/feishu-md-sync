@@ -29,7 +29,7 @@ test -n "$FMS" && test -x "$FMS"
 command -v lark-cli
 ```
 
-For PATH-based stable use, require `feishu-md-sync >=0.3.0 <0.4.0`. Stop and give the matching npm upgrade command when the version is outside this range or cannot be parsed.
+For PATH-based stable use, require `feishu-md-sync >=0.4.0 <0.5.0`. Stop and give the matching npm upgrade command when the version is outside this range or cannot be parsed.
 
 `FEISHU_MD_SYNC_BIN` explicitly selects an unreleased development build. If its package version is outside the stable range, continue only when all of these probes succeed:
 
@@ -43,7 +43,7 @@ For PATH-based stable use, require `feishu-md-sync >=0.3.0 <0.4.0`. Stop and giv
 "$FMS" doctor auth --help
 ```
 
-Require the top-level commands `publish`, `status`, `diff`, `pull`, `merge`, and `doctor`. Require every option used by this Skill: publish `--target`, `--profile`, `--write`, `--create`, `--strategy`, `--confirm-destructive`, `--confirm-collaboration-risk`, `--confirm-untracked-remote`, `--sync-whiteboards`, `--confirm-remote-whiteboard-overwrite`, and `--format`; status and diff `--target`, `--profile`, `--sync-whiteboards`, and `--format`; pull `--target`, `--output`, `--profile`, `--overwrite`, and `--format`; merge `--target`, `--profile`, `--check`, `--abort`, and `--format`; doctor auth `--format`. Do not search arbitrary worktrees or guess another build.
+Require the top-level commands `publish`, `status`, `diff`, `pull`, `merge`, and `doctor`. Require every option used by this Skill: publish `--target`, `--profile`, `--dialect`, `--write`, `--create`, `--strategy`, `--confirm-destructive`, `--confirm-collaboration-risk`, `--confirm-untracked-remote`, `--sync-whiteboards`, `--confirm-remote-whiteboard-overwrite`, and `--format`; status and diff `--target`, `--profile`, `--dialect`, `--sync-whiteboards`, and `--format`; pull `--target`, `--output`, `--profile`, `--overwrite`, and `--format`; merge `--target`, `--profile`, `--dialect`, `--check`, `--abort`, and `--format`; doctor auth `--format`. Do not search arbitrary worktrees or guess another build.
 
 ## Check Authentication
 
@@ -55,14 +55,30 @@ When Feishu IO fails with `authentication`, `authorization`, or `config`:
 
 Then invoke `$lark-shared` when available. Preserve the reported subtype, hint, missing scopes, and console URL. Never request, print, store, or move an App Secret into this project. Do not run a user login to repair bot permissions.
 
+## Resolve The Source Dialect
+
+When the user explicitly supplies `gfm`, `docusaurus`, or `milvus-authoring`, use that dialect. Otherwise, run the first status without `--dialect`, read `result.dialect`, and then reuse that selected dialect explicitly for diff, publish, merge, and final status. This preserves the workspace default or the CLI's `gfm` fallback without agent-side guessing.
+
+When `dialectDiagnostics` contains `dialect-suggestion`, explain the suggested dialect and ask the user before selecting it. Never infer and silently switch dialects from file contents, repository names, or warning text.
+
+## Handle Dialect And Link Diagnostics
+
+Inspect `dialectBlockers`, `dialectDiagnostics`, `linkResolution`, and resolved link details before any write.
+
+- Any `dialectBlockers` stop the workflow. Confirmation flags cannot bypass dialect or link blockers.
+- Report stale Base cache diagnostics. A stale cache remains usable when the affected links still resolve to Feishu.
+- Ambiguous or unresolved links stop the workflow.
+- A `link-resolver-unavailable` diagnostic with public fallback, or `linkResolution.resolvedToPublicSite > 0`, requires showing every public-site fallback URL and waiting for explicit user acceptance before writing.
+- Do not parse warning message prose when a structured diagnostic code or count is available.
+
 ## Publish An Existing Document
 
 Use JSON for every planning command:
 
 ```bash
-"$FMS" status <markdown-file> --target <target> --profile <profile> --format json
-"$FMS" diff <markdown-file> --target <target> --profile <profile> --format json
-"$FMS" publish <markdown-file> --target <target> --profile <profile> --format json
+"$FMS" status <markdown-file> --target <target> --dialect <dialect> --profile <profile> --format json
+"$FMS" diff <markdown-file> --target <target> --dialect <dialect> --profile <profile> --format json
+"$FMS" publish <markdown-file> --target <target> --dialect <dialect> --profile <profile> --format json
 ```
 
 Use profile `none` unless the user or workspace configuration requires `milvus` or `zilliz`.
@@ -84,7 +100,7 @@ After approval, repeat the reviewed publish command with `--write` and only the 
 For a Drive folder or Wiki parent target:
 
 ```bash
-"$FMS" publish <markdown-file> --target <folder-or-wiki-parent> --create --profile <profile> --format json
+"$FMS" publish <markdown-file> --target <folder-or-wiki-parent> --create --dialect <dialect> --profile <profile> --format json
 ```
 
 Review the dry-run. If the user explicitly requested creation and the plan is safe, repeat with `--write`. Do not combine `--create` with `--sync-whiteboards`.
@@ -92,7 +108,7 @@ Review the dry-run. If the user explicitly requested creation and the plan is sa
 After creation, read the write result and run status against the returned `document.url` or `document.documentId`, not the original folder or Wiki parent:
 
 ```bash
-"$FMS" status <markdown-file> --target <created-document-target> --profile <profile> --format json
+"$FMS" status <markdown-file> --target <created-document-target> --dialect <dialect> --profile <profile> --format json
 ```
 
 ## Synchronize Whiteboards
@@ -100,9 +116,9 @@ After creation, read the write result and run status against the returned `docum
 Do not infer Whiteboard intent from a sibling SVG. Enable it only when the user explicitly asks to synchronize diagram assets:
 
 ```bash
-"$FMS" status <markdown-file> --target <target> --profile <profile> --sync-whiteboards --format json
-"$FMS" diff <markdown-file> --target <target> --profile <profile> --sync-whiteboards --format json
-"$FMS" publish <markdown-file> --target <target> --profile <profile> --sync-whiteboards --format json
+"$FMS" status <markdown-file> --target <target> --dialect <dialect> --profile <profile> --sync-whiteboards --format json
+"$FMS" diff <markdown-file> --target <target> --dialect <dialect> --profile <profile> --sync-whiteboards --format json
+"$FMS" publish <markdown-file> --target <target> --dialect <dialect> --profile <profile> --sync-whiteboards --format json
 ```
 
 A remotely changed Whiteboard must stop the workflow until the user approves the exact normalized PNG asset key. Never substitute a broad confirmation for asset-specific review.
@@ -110,7 +126,7 @@ A remotely changed Whiteboard must stop the workflow until the user approves the
 After a Whiteboard write, preserve the opt-in during final Whiteboard-aware status verification:
 
 ```bash
-"$FMS" status <markdown-file> --target <target> --profile <profile> --sync-whiteboards --format json
+"$FMS" status <markdown-file> --target <target> --dialect <dialect> --profile <profile> --sync-whiteboards --format json
 ```
 
 ## Pull Remote Content
@@ -125,10 +141,12 @@ Do not replace canonical local Markdown by default. Use `--overwrite` only for a
 
 ## Merge Remote Changes
 
+Automatic merge is available only for `gfm`. Docusaurus and Milvus authoring sources contain source-only syntax that Feishu cannot reconstruct; for those dialects, pull an independent snapshot and reconcile the source manually.
+
 Check before writing the local file:
 
 ```bash
-"$FMS" merge <markdown-file> --target <target> --profile <profile> --check --format json
+"$FMS" merge <markdown-file> --target <target> --dialect <dialect> --profile <profile> --check --format json
 ```
 
 If the user requested a merge and the check is safe, run the same merge without `--check`. Treat a conflict result as a valid stop state: report the local conflict markers and do not publish. Use `merge --abort` only when the user asks to restore the pre-merge file.
@@ -165,7 +183,7 @@ Branch on exit code plus `error.type`, `error.subtype`, `retryable`, and declare
 After every remote write, run:
 
 ```bash
-"$FMS" status <markdown-file> --target <target> --profile <profile> --format json
+"$FMS" status <markdown-file> --target <target> --dialect <dialect> --profile <profile> --format json
 ```
 
 Use the returned document target after `--create`, and preserve `--sync-whiteboards` after a Whiteboard write. Report success only when the write passed readback verification and the final status matches the intended synchronized state. Explain any residual state, warnings, or unrelated remote changes. When rendered document structure changed, ask the user to inspect the Feishu document visually.

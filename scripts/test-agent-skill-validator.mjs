@@ -9,11 +9,10 @@ const validator = join(root, 'scripts', 'validate-agent-skill.mjs');
 const tempDir = mkdtempSync(join(tmpdir(), 'feishu-md-sync-skill-validator-'));
 
 try {
-  const compatibleDevelopmentCli = createFakeCli('0.2.0', fullHelp());
-  expectResult(compatibleDevelopmentCli, [], false, 'outside the Skill range');
-  expectResult(compatibleDevelopmentCli, ['--allow-development-version'], true);
-  expectResult(createFakeCli('0.3.0', fullHelp()), [], true);
-  expectResult(createFakeCli('0.3.0-rc.1', fullHelp()), [], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.3.0', fullHelp()), [], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.3.0', fullHelp()), ['--allow-development-version'], true);
+  expectResult(createFakeCli('0.4.0', fullHelp()), [], true);
+  expectResult(createFakeCli('0.4.0-rc.1', fullHelp()), [], false, 'outside the Skill range');
 
   const missingStatusFormat = fullHelp();
   missingStatusFormat.status = missingStatusFormat.status.replace('  --format <format>\n', '');
@@ -23,7 +22,16 @@ try {
   missingPullOutput.pull = missingPullOutput.pull.replace('  --output <file>\n', '');
   expectResult(createFakeCli('0.2.0', missingPullOutput), ['--allow-development-version'], false, 'pull help is missing --output');
 
-  expectResult(createFakeCli('0.4.0', fullHelp()), ['--allow-development-version'], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.5.0', fullHelp()), ['--allow-development-version'], false, 'outside the Skill range');
+
+  const missingPublishDialect = fullHelp();
+  missingPublishDialect.publish = missingPublishDialect.publish.replace('  --dialect <dialect>\n', '');
+  expectResult(
+    createFakeCli('0.4.0', missingPublishDialect),
+    [],
+    false,
+    'publish help is missing --dialect'
+  );
   process.stdout.write('Agent Skill validator regression checks passed.\n');
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
@@ -46,6 +54,7 @@ function fullHelp() {
     publish: [
       '  --target <target>',
       '  --profile <profile>',
+      '  --dialect <dialect>',
       '  --write',
       '  --create',
       '  --strategy',
@@ -56,10 +65,10 @@ function fullHelp() {
       '  --confirm-remote-whiteboard-overwrite',
       '  --format <format>'
     ].join('\n') + '\n',
-    status: '  --target <target>\n  --profile <profile>\n  --sync-whiteboards\n  --format <format>\n',
-    diff: '  --target <target>\n  --profile <profile>\n  --sync-whiteboards\n  --format <format>\n',
+    status: '  --target <target>\n  --profile <profile>\n  --dialect <dialect>\n  --sync-whiteboards\n  --format <format>\n',
+    diff: '  --target <target>\n  --profile <profile>\n  --dialect <dialect>\n  --sync-whiteboards\n  --format <format>\n',
     pull: '  --target <target>\n  --output <file>\n  --profile <profile>\n  --overwrite\n  --format <format>\n',
-    merge: '  --target <target>\n  --profile <profile>\n  --check\n  --abort\n  --format <format>\n',
+    merge: '  --target <target>\n  --profile <profile>\n  --dialect <dialect>\n  --check\n  --abort\n  --format <format>\n',
     'doctor auth': '  --format <format>\n'
   };
 }
