@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { CliFailure, type CliFailureType } from '../core/cli-failure.js';
 import type { FeishuBlock } from '../feishu/types.js';
 import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type {
@@ -351,7 +352,28 @@ function runLarkCli(args: string[], input: LarkCliExecInput = {}): Promise<LarkC
   return new Promise((resolve, reject) => {
     const child = execFile('lark-cli', args, { encoding: 'utf8' }, (error, stdout, stderr) => {
       if (error) {
-        reject(new Error(stderr.trim() || error.message));
+        const parsedFailure = larkCliFailureFromJson(stderr);
+        if (parsedFailure) {
+          reject(parsedFailure);
+          return;
+        }
+        if (error.code === 'ENOENT') {
+          reject(new CliFailure({
+            type: 'config',
+            subtype: 'lark_cli_missing',
+            message: 'lark-cli is not installed or is not available on PATH',
+            hint: 'install the official Lark CLI and verify it with lark-cli auth status --verify',
+            retryable: false
+          }, { cause: error }));
+          return;
+        }
+        reject(new CliFailure({
+          type: 'internal',
+          subtype: 'lark_cli_process_failed',
+          message: 'lark-cli exited without a structured error response',
+          hint: 'run the corresponding lark-cli command directly with --format json and inspect its stderr',
+          retryable: false
+        }, { cause: error }));
         return;
       }
       resolve({ stdout, stderr });
@@ -360,18 +382,68 @@ function runLarkCli(args: string[], input: LarkCliExecInput = {}): Promise<LarkC
   });
 }
 
-function parseLarkCliJson(result: LarkCliExecResult): { ok?: boolean; data?: unknown; error?: { message?: string } } {
+function parseLarkCliJson(result: LarkCliExecResult): { ok?: boolean; data?: unknown; error?: LarkCliErrorEnvelope } {
   const raw = result.stdout.trim() || result.stderr.trim();
-  let parsed: { ok?: boolean; data?: unknown; error?: { message?: string } };
+  let parsed: { ok?: boolean; data?: unknown; error?: LarkCliErrorEnvelope };
   try {
-    parsed = JSON.parse(raw) as { ok?: boolean; data?: unknown; error?: { message?: string } };
+    parsed = JSON.parse(raw) as { ok?: boolean; data?: unknown; error?: LarkCliErrorEnvelope };
   } catch {
-    throw new Error(`lark-cli returned non-JSON output: ${raw}`);
+    throw new CliFailure({
+      type: 'internal',
+      subtype: 'lark_cli_non_json',
+      message: 'lark-cli returned non-JSON output',
+      hint: 'rerun the corresponding lark-cli command directly with --format json',
+      retryable: false
+    });
   }
   if (parsed.ok === false) {
-    throw new Error(`lark-cli failed: ${parsed.error?.message ?? 'unknown error'}`);
+    throw larkCliFailure(parsed.error);
   }
   return parsed;
+}
+
+type LarkCliErrorEnvelope = {
+  type?: string;
+  subtype?: string;
+  message?: string;
+  hint?: string;
+  retryable?: boolean;
+  missing_scopes?: string[];
+  console_url?: string;
+};
+
+function larkCliFailureFromJson(raw: string): CliFailure | undefined {
+  if (!raw.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as { ok?: boolean; error?: LarkCliErrorEnvelope };
+    return parsed.ok === false ? larkCliFailure(parsed.error) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function larkCliFailure(error: LarkCliErrorEnvelope | undefined): CliFailure {
+  const type = mapLarkCliFailureType(error?.type);
+  return new CliFailure({
+    type,
+    subtype: error?.subtype ?? 'lark_cli_error',
+    message: error?.message ?? 'lark-cli returned an unknown error',
+    hint: error?.hint,
+    retryable: error?.retryable === true,
+    missingScopes: error?.missing_scopes,
+    consoleUrl: error?.console_url
+  });
+}
+
+function mapLarkCliFailureType(type: string | undefined): CliFailureType {
+  if (type === 'authentication') return 'authentication';
+  if (type === 'authorization') return 'authorization';
+  if (type === 'config') return 'config';
+  if (type === 'network') return 'network';
+  if (type === 'confirmation') return 'confirmation_required';
+  if (type === 'validation') return 'validation';
+  if (type === 'policy') return 'authorization';
+  return 'internal';
 }
 
 function markdownContentFromData(data: unknown): string | undefined {

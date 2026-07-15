@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LarkCliAdapter } from '../src/adapters/lark-cli-adapter.js';
+import { CliFailure } from '../src/core/cli-failure.js';
 
 describe('LarkCliAdapter', () => {
   it('resolves docx targets without invoking lark-cli', async () => {
@@ -354,15 +355,54 @@ describe('LarkCliAdapter', () => {
     ]]);
   });
 
-  it('throws a concise error when lark-cli returns an error envelope', async () => {
+  it('preserves typed details when lark-cli returns an error envelope', async () => {
     const adapter = new LarkCliAdapter({
       exec: async () => ({
         stdout: '',
-        stderr: JSON.stringify({ ok: false, error: { message: 'permission denied' } })
+        stderr: JSON.stringify({
+          ok: false,
+          identity: 'user',
+          error: {
+            type: 'authorization',
+            subtype: 'missing_scope',
+            message: 'permission denied',
+            hint: 'run lark-cli auth login --scope docx:document:readonly',
+            retryable: false,
+            missing_scopes: ['docx:document:readonly'],
+            console_url: 'https://open.feishu.cn/app/cli_xxx/auth'
+          }
+        })
       })
     });
 
-    await expect(adapter.fetchDocMarkdown({ doc: 'doc_token' })).rejects.toThrow('lark-cli failed: permission denied');
+    const failure = await adapter.fetchDocMarkdown({ doc: 'doc_token' }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CliFailure);
+    expect((failure as CliFailure).details).toEqual({
+      type: 'authorization',
+      subtype: 'missing_scope',
+      message: 'permission denied',
+      hint: 'run lark-cli auth login --scope docx:document:readonly',
+      retryable: false,
+      missingScopes: ['docx:document:readonly'],
+      consoleUrl: 'https://open.feishu.cn/app/cli_xxx/auth'
+    });
+  });
+
+  it('does not expose malformed lark-cli output in errors', async () => {
+    const adapter = new LarkCliAdapter({
+      exec: async () => ({ stdout: 'access_token=secret-value', stderr: '' })
+    });
+
+    const failure = await adapter.fetchDocMarkdown({ doc: 'doc_token' }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CliFailure);
+    expect((failure as CliFailure).details).toMatchObject({
+      type: 'internal',
+      subtype: 'lark_cli_non_json',
+      message: 'lark-cli returned non-JSON output'
+    });
+    expect((failure as Error).message).not.toContain('secret-value');
   });
 
   it('replaces an image block with an inline SVG Whiteboard and returns its identity', async () => {
