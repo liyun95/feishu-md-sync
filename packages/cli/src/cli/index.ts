@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, CommanderError } from 'commander';
 import { registerCoreCommands } from './commands/core.js';
 import { registerPublishCommand } from './commands/publish.js';
+import { normalizeCliFailure, validationFailure } from '../core/cli-failure.js';
+import { renderCliFailure, requestedOutputFormat } from './error-output.js';
 import { buildAuthDoctorReport, loadCliEnv } from './env.js';
 import { printFormatted } from './output.js';
 import { CLI_VERSION } from './version.js';
@@ -9,9 +11,11 @@ import { CLI_VERSION } from './version.js';
 const topLevelCommands = ['publish', 'status', 'pull', 'diff', 'merge', 'doctor', 'help'];
 
 main().catch((error: unknown) => {
-  const message = (error as Error).message;
-  console.error(message);
-  process.exitCode = 1;
+  const failure = error instanceof CommanderError
+    ? validationFailure({ message: error.message })
+    : normalizeCliFailure(error);
+  renderCliFailure(failure, requestedOutputFormat(process.argv));
+  process.exitCode = failure.exitCode;
 });
 
 async function main(): Promise<void> {
@@ -21,7 +25,9 @@ async function main(): Promise<void> {
   program
     .name('feishu-md-sync')
     .version(CLI_VERSION)
-    .description('Sync local Markdown with Feishu/Lark online documents. Defaults to dry-run for remote writes.');
+    .description('Sync local Markdown with Feishu/Lark online documents. Defaults to dry-run for remote writes.')
+    .exitOverride()
+    .configureOutput({ writeErr: () => undefined });
 
   registerPublishCommand(program);
   registerCoreCommands(program);
@@ -43,7 +49,14 @@ async function main(): Promise<void> {
     throw new Error(`error: unknown command '${unknownCommand}'`);
   }
 
-  await program.parseAsync();
+  try {
+    await program.parseAsync();
+  } catch (error) {
+    if (error instanceof CommanderError && (
+      error.code === 'commander.helpDisplayed' || error.code === 'commander.version'
+    )) return;
+    throw error;
+  }
 }
 
 type FormatCommandOptions = {
