@@ -43,7 +43,7 @@ describe('status CLI', () => {
 
     const result = await runCli(['status', file]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain("required option '--target <url-or-token>' not specified");
   });
 
@@ -74,6 +74,41 @@ describe('status CLI', () => {
     expect(result.stdout).toContain('"contentMatchesRemote": true');
     expect(result.stdout).toContain('"action": "publish-dry-run"');
   });
+
+  it('preserves lark-cli authorization failures in the JSON error contract', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-cli-'));
+    const binDir = join(dir, 'bin');
+    await mkdir(binDir);
+    const larkCli = join(binDir, 'lark-cli');
+    await createFailingLarkCli(larkCli);
+    const file = join(dir, 'doc.md');
+    await writeFile(file, 'Milvus stores vector data.', 'utf8');
+
+    const result = await runCli([
+      'status',
+      file,
+      '--target',
+      'doccn123456789012345678901234',
+      '--profile',
+      'none',
+      '--format',
+      'json'
+    ], {
+      PATH: `${binDir}:${process.env.PATH ?? ''}`
+    });
+
+    expect(result.status).toBe(3);
+    expect(result.stdout).toBe('');
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      ok: false,
+      error: {
+        type: 'authorization',
+        subtype: 'missing_scope',
+        missingScopes: ['docx:document:readonly'],
+        consoleUrl: 'https://open.feishu.cn/app/cli_xxx/auth'
+      }
+    });
+  });
 });
 
 async function createFakeLarkCli(path: string): Promise<void> {
@@ -89,6 +124,27 @@ async function createFakeLarkCli(path: string): Promise<void> {
     '    }',
     '  }',
     '}));'
+  ].join('\n'), 'utf8');
+  await chmod(path, 0o755);
+}
+
+async function createFailingLarkCli(path: string): Promise<void> {
+  await writeFile(path, [
+    '#!/usr/bin/env node',
+    'process.stderr.write(JSON.stringify({',
+    '  ok: false,',
+    '  identity: "user",',
+    '  error: {',
+    '    type: "authorization",',
+    '    subtype: "missing_scope",',
+    '    message: "permission denied",',
+    '    hint: "run lark-cli auth login --scope docx:document:readonly",',
+    '    retryable: false,',
+    '    missing_scopes: ["docx:document:readonly"],',
+    '    console_url: "https://open.feishu.cn/app/cli_xxx/auth"',
+    '  }',
+    '}));',
+    'process.exitCode = 3;'
   ].join('\n'), 'utf8');
   await chmod(path, 0o755);
 }

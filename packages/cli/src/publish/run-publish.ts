@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { confirmationRequired, validationFailure } from '../core/cli-failure.js';
 import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
 import { renderCodeBlockXml } from '../code-blocks/code-xml.js';
 import {
@@ -99,13 +100,18 @@ export async function runPublish(input: {
   adapter: FeishuAdapter;
 }): Promise<RunPublishResult> {
   if (input.write && input.strategy === 'document-replace' && !input.confirmDestructive) {
-    throw new Error('document-replace requires --confirm-destructive in non-interactive mode');
+    throw confirmationRequired({
+      subtype: 'destructive_write',
+      message: 'document-replace requires --confirm-destructive in non-interactive mode',
+      hint: 'review the document-replace dry-run and obtain explicit approval',
+      requiredFlags: ['--confirm-destructive']
+    });
   }
   if (input.syncWhiteboards && input.create) {
-    throw new Error('--sync-whiteboards is not supported with --create');
+    throw validationFailure({ message: '--sync-whiteboards is not supported with --create' });
   }
   if (input.syncWhiteboards && input.strategy === 'document-replace') {
-    throw new Error('--sync-whiteboards is not supported with --strategy document-replace');
+    throw validationFailure({ message: '--sync-whiteboards is not supported with --strategy document-replace' });
   }
 
   const localSource = await readFile(input.file, 'utf8');
@@ -135,10 +141,20 @@ export async function runPublish(input: {
   }
 
   if (plan.requiresUntrackedRemoteConfirmation && !input.confirmUntrackedRemote) {
-    throw new Error('publish for an untracked remote requires --confirm-untracked-remote');
+    throw confirmationRequired({
+      subtype: 'untracked_remote',
+      message: 'publish for an untracked remote requires --confirm-untracked-remote',
+      hint: 'review the dry-run and confirm that this workspace should adopt the existing remote document',
+      requiredFlags: ['--confirm-untracked-remote']
+    });
   }
   if (plan.requiresCollaborationRiskConfirmation && !input.confirmCollaborationRisk) {
-    throw new Error('block-patch replacing or deleting existing blocks requires --confirm-collaboration-risk');
+    throw confirmationRequired({
+      subtype: 'collaboration_risk',
+      message: 'block-patch replacing or deleting existing blocks requires --confirm-collaboration-risk',
+      hint: 'review the affected blocks and obtain explicit approval for the collaboration risk',
+      requiredFlags: ['--confirm-collaboration-risk']
+    });
   }
 
   if (plan.strategy === 'no-op') {

@@ -1,5 +1,20 @@
 # Troubleshooting
 
+## Machine-readable failures
+
+When automating the CLI, add `--format json`. Failures are written to stderr as `{ "ok": false, "error": ... }`. Use the process exit code and stable `error.type` or `error.subtype` fields for recovery decisions.
+
+- `validation`: fix the command or local input before retrying.
+- `authentication` or `authorization`: run `feishu-md-sync doctor auth --format json`, then verify the official `lark-cli` login, identity, scopes, and resource access.
+- `config`: install or configure `lark-cli`, or fix the reported workspace configuration.
+- `network`: retry only when `error.retryable` is `true`.
+- `confirmation_required`: show the dry-run risk to the user and wait for explicit approval. Do not append `requiredFlags` automatically.
+- `conflict`: inspect status and diff, then resolve or merge the overlapping change.
+- `verification`: inspect the remote document before retrying; the CLI did not accept the write as verified.
+- `internal`: preserve the command inputs and report the failure if it is reproducible.
+
+The official `lark-cli` error subtype, hint, missing scopes, and developer-console URL are preserved when available.
+
 ## `Feishu changed since the last receipt`
 
 The remote document changed after your last successful sync.

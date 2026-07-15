@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const packageDir = fileURLToPath(new URL('..', import.meta.url));
 const sourceDir = join(packageDir, 'src');
 const tempDir = mkdtempSync(join(tmpdir(), 'feishu-md-sync-package-'));
+const packageManifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
 
 try {
   assertLocalBinExecutable();
@@ -70,6 +71,10 @@ try {
     process.platform === 'win32' ? 'feishu-md-sync.cmd' : 'feishu-md-sync'
   );
   const help = execFileSync(binPath, ['--help'], { cwd: consumerDir, encoding: 'utf8' });
+  const version = execFileSync(binPath, ['--version'], { cwd: consumerDir, encoding: 'utf8' }).trim();
+  if (version !== packageManifest.version) {
+    throw new Error(`packaged CLI version differs: expected ${packageManifest.version}, got ${version}`);
+  }
   const actualCommands = [...help.matchAll(/^  ([a-z][\w-]*)(?:\s|\[|<)/gm)]
     .map((match) => match[1])
     .sort();

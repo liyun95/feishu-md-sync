@@ -46,7 +46,7 @@ describe('publish CLI', () => {
       'document-replace'
     ]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(10);
     expect(result.stderr).toContain('--confirm-destructive is required with --strategy document-replace --write');
   });
 
@@ -60,7 +60,7 @@ describe('publish CLI', () => {
       'cloud'
     ]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain('Invalid --profile cloud. Expected zilliz, milvus, or none.');
   });
 
@@ -74,7 +74,7 @@ describe('publish CLI', () => {
       'merge'
     ]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain('Invalid --strategy merge. Expected auto, block-patch, or document-replace.');
   });
 
@@ -106,7 +106,7 @@ describe('publish CLI', () => {
       '--sync-whiteboards'
     ]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain('--sync-whiteboards is not supported with --create');
   });
 
@@ -121,7 +121,7 @@ describe('publish CLI', () => {
       '--sync-whiteboards'
     ]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain('--sync-whiteboards is not supported with --strategy document-replace');
   });
 

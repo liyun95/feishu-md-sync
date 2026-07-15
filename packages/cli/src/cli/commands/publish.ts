@@ -7,9 +7,10 @@ import {
   resolveCodeBlockConfig,
   resolvePublishProfile
 } from '../../config/sync-config.js';
+import { confirmationRequired, validationFailure } from '../../core/cli-failure.js';
 import { parseFeishuTarget } from '../../core/doc-id.js';
 import { runPublish } from '../../publish/run-publish.js';
-import { printFormatted, setFailedExitCode } from '../output.js';
+import { parseOutputFormat, printFormatted, setFailedExitCode } from '../output.js';
 
 type PublishCommandOptions = {
   target?: string;
@@ -45,17 +46,22 @@ export function registerPublishCommand(program: Command): void {
       (value: string, previous: string[]) => [...previous, value],
       []
     )
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: PublishCommandOptions) => {
       const requested = publishRequestFromArgv(opts);
       if (requested.syncWhiteboards && requested.create) {
-        throw new Error('--sync-whiteboards is not supported with --create');
+        throw validationFailure({ message: '--sync-whiteboards is not supported with --create' });
       }
       if (requested.syncWhiteboards && requested.strategy === 'document-replace') {
-        throw new Error('--sync-whiteboards is not supported with --strategy document-replace');
+        throw validationFailure({ message: '--sync-whiteboards is not supported with --strategy document-replace' });
       }
       if (requested.write && requested.strategy === 'document-replace' && !requested.confirmDestructive) {
-        throw new Error('--confirm-destructive is required with --strategy document-replace --write');
+        throw confirmationRequired({
+          subtype: 'destructive_write',
+          message: '--confirm-destructive is required with --strategy document-replace --write',
+          hint: 'review the document-replace dry-run and obtain explicit approval',
+          requiredFlags: ['--confirm-destructive']
+        });
       }
 
       const target = parseFeishuTarget(opts.target ?? '');
@@ -99,7 +105,7 @@ function publishRequestFromArgv(opts: PublishCommandOptions): {
 } {
   const strategy = optionValueFromArgv('--strategy') ?? opts.strategy ?? 'auto';
   if (strategy !== 'auto' && strategy !== 'block-patch' && strategy !== 'document-replace') {
-    throw new Error(`Invalid --strategy ${strategy}. Expected auto, block-patch, or document-replace.`);
+    throw validationFailure({ message: `Invalid --strategy ${strategy}. Expected auto, block-patch, or document-replace.` });
   }
   return {
     write: opts.write === true || process.argv.includes('--write'),

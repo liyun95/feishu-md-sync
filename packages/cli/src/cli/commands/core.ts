@@ -12,7 +12,7 @@ import { diffSummaryLines, runDiff } from '../../diff/run-diff.js';
 import { runMerge, type RunMergeMode } from '../../merge/run-merge.js';
 import { runPull } from '../../pull/run-pull.js';
 import { runStatus } from '../../status/run-status.js';
-import { printFormatted } from '../output.js';
+import { parseOutputFormat, printFormatted } from '../output.js';
 
 type PullCommandOptions = {
   target?: string;
@@ -50,7 +50,7 @@ export function registerCoreCommands(program: Command): void {
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
     .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
       const cwd = process.cwd();
       const target = parseNonFolderTarget(opts.target ?? '', 'status');
@@ -79,7 +79,7 @@ export function registerCoreCommands(program: Command): void {
     .option('--profile <profile>', 'pull profile: zilliz | milvus | none')
     .option('--overwrite', 'allow pull to replace an existing output file')
     .option('--write-receipt', 'write a local pull snapshot receipt')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (opts: PullCommandOptions) => {
       const cwd = process.cwd();
       const target = parseNonFolderTarget(opts.target ?? '', 'pull');
@@ -108,7 +108,7 @@ export function registerCoreCommands(program: Command): void {
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
     .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
       const cwd = process.cwd();
       const target = parseNonFolderTarget(opts.target ?? '', 'diff');
@@ -145,7 +145,7 @@ export function registerCoreCommands(program: Command): void {
     .option('--dry-run', 'show merge metadata without writing')
     .option('--abort', 'restore the local file from the previous merge state')
     .option('--save-remote <file>', 'save fetched remote snapshot when using --target')
-    .option('--format <format>', 'output format: pretty | json', 'pretty')
+    .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: MergeCommandOptions) => {
       const cwd = process.cwd();
       const config = await loadSyncConfig({ cwd });

@@ -1,4 +1,11 @@
+import { validationFailure } from '../core/cli-failure.js';
+
 export type OutputFormat = 'pretty' | 'json';
+
+export function parseOutputFormat(value: string): OutputFormat {
+  if (value === 'pretty' || value === 'json') return value;
+  throw validationFailure({ message: `Invalid --format ${value}. Expected pretty or json.` });
+}
 
 export function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));

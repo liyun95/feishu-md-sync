@@ -43,7 +43,7 @@ describe('diff CLI', () => {
 
     const result = await runCli(['diff', file]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain("required option '--target <url-or-token>' not specified");
   });
 

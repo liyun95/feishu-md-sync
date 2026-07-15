@@ -42,14 +42,14 @@ describe('CLI help surface', () => {
   it.each(retiredCommands)('does not register retired command %s', async (command) => {
     const result = await runCli([command]);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain(`unknown command '${command}'`);
   });
 
   it.each(retiredCommands)('does not show top-level help for retired command %s --help', async (command) => {
     const result = await runCli([command, '--help']);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stdout).not.toContain('Usage: feishu-md-sync');
     expect(result.stderr).toContain(`unknown command '${command}'`);
   });
