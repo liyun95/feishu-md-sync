@@ -43,5 +43,8 @@ jobs:
       - name: Smoke test npm package
         run: npm run test:package
 
+      - name: Validate Agent Skill
+        run: npm run test:skill
+
       - name: Build docs
         run: npm run docs:build
