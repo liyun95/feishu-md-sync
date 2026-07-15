@@ -114,10 +114,11 @@ jobs:
           EXPECTED_CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
           SIGSTORE_BUNDLE_PATH: release-artifacts/npm-provenance.sigstore
         run: |
+          certificate_identity_pattern="$(node -e 'process.stdout.write("^" + process.env.EXPECTED_CERTIFICATE_IDENTITY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$")')"
           for attempt in {1..12}; do
             if node .github/scripts/download-npm-provenance.mjs \
               && sigstore verify "$SIGSTORE_BUNDLE_PATH" \
-                --certificate-identity-uri "$EXPECTED_CERTIFICATE_IDENTITY" \
+                --certificate-identity-uri "$certificate_identity_pattern" \
                 --certificate-issuer 'https://token.actions.githubusercontent.com' \
               && node .github/scripts/verify-npm-provenance.mjs; then
               exit 0

@@ -21,6 +21,12 @@ for (const name of required) {
 const packageSpec = `${process.env.PACKAGE_NAME}@${process.env.PACKAGE_VERSION}`;
 const bundle = JSON.parse(await readFile(process.env.SIGSTORE_BUNDLE_PATH, 'utf8'));
 const statement = JSON.parse(Buffer.from(bundle.dsseEnvelope.payload, 'base64').toString('utf8'));
+if (statement._type !== 'https://in-toto.io/Statement/v1') {
+  throw new Error(`Provenance statement type is ${statement._type}, expected https://in-toto.io/Statement/v1`);
+}
+if (statement.predicateType !== 'https://slsa.dev/provenance/v1') {
+  throw new Error(`Provenance predicate type is ${statement.predicateType}, expected https://slsa.dev/provenance/v1`);
+}
 const buildDefinition = statement.predicate?.buildDefinition;
 if (buildDefinition?.buildType !== process.env.EXPECTED_BUILD_TYPE) {
   throw new Error(`Provenance build type is ${buildDefinition?.buildType}, expected ${process.env.EXPECTED_BUILD_TYPE}`);
