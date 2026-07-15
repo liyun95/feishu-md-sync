@@ -46,6 +46,7 @@ Area labels identify the affected subsystem. They do not determine the version n
 | `area:release` | npm packaging, publishing, versions, and release automation. |
 | `area:table` | Markdown and Feishu table support. |
 | `area:whiteboard` | SVG assets and Feishu Whiteboard support. |
+| `area:callout` | Feishu Callout parsing and scoped publishing. |
 | `area:code-block` | Fenced Markdown Code parsing, planning, and scoped Feishu publishing. |
 | `agent` | Agent-facing workflows and integrations. |
 
@@ -93,8 +94,8 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 
 6. Run the live Feishu smoke tests with the dedicated test document and identity.
 7. Merge the Release PR after all required checks pass.
-8. Publish through the Trusted Publisher workflow.
-9. Confirm the package is available from npm, then create the matching Git tag and GitHub Release.
+8. Run the `Publish npm package` workflow manually with the package version. The workflow publishes from the current `main` commit through npm Trusted Publishing.
+9. Confirm the package is available from npm, then create the matching Git tag and GitHub Release from that same `main` commit.
 10. Close the milestone.
 
 ## Current version map
@@ -102,6 +103,6 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 | Version | Included work | State |
 | --- | --- | --- |
 | `v0.1.0` | New CLI surface, lark-cli onboarding, and initial npm packaging. | Published |
-| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Planned |
+| `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Ready for release |
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.
