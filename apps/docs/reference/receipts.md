@@ -14,7 +14,7 @@ New-core receipt locations:
 
 `publish` receipts are target-oriented. They record the last successful local Markdown to Feishu write and are used to detect remote drift before later block-patch writes.
 
-Current publishes write version 4 receipts. Version 4 records the selected source dialect, dialect dependencies, the stable mappings used for document links, tracked Whiteboard assets, and an exact sidecar snapshot of the final publish draft. Older version 1 through 3 receipts remain readable and are interpreted as `gfm`.
+Current publishes write version 4 receipts for ordinary documents and version 5 receipts when protected Zdoc resources are present. Version 4 records the selected source dialect, dialect dependencies, stable document-link mappings, tracked Whiteboard assets, and an exact sidecar snapshot of the final publish draft. Version 5 adds protected Supademo component identity, ISV block identity and shape, and placement fingerprints. Older versions remain readable; versions 1 through 3 are interpreted as `gfm`.
 
 The exact publish-draft snapshot matters when the local source depends on `Variables.json`, fragments, profile transformation, or a changing Base mapping. Later scoped planning compares against what was actually published rather than trying to reconstruct the old draft from current dependencies.
 
@@ -34,6 +34,7 @@ Stored data includes:
 - remote semantic snapshot path and hash
 - exact publish-draft snapshot path and hash
 - Whiteboard asset entries
+- protected Supademo entries in version 5
 - update timestamp
 
 Each Whiteboard entry records:
@@ -94,6 +95,8 @@ Version 4 also stores the exact prior publish draft:
 Execution-only Feishu block IDs are removed from the general semantic snapshot before it is written. Whiteboard block IDs remain separate because safe Whiteboard updates must retain that exact identity. A legacy version 1 receipt is upgraded only when its recorded remote raw hash still matches the current remote document.
 
 Scoped writes stop after the first failed operation. The CLI does not roll back already verified operations and does not write a new receipt for a partial write. Inspect the remote result and rerun the same publish; the next plan uses the actual remote state and skips Callout children or Code operations that already converged.
+
+For `zdoc-authoring`, removing a locally tracked Supademo placeholder is blocked and its version 5 mapping remains protected. Document creation also writes no receipt until post-create Callout and Procedures completion passes final readback. If the document was created but a later step fails, structured partial-write output includes the created document ID and URL for recovery.
 
 To adopt an existing document that is already synchronized, use a confirmed no-op publish:
 

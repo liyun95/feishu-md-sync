@@ -10,6 +10,9 @@ import { parseHtmlCallout } from './html-callout.js';
 import { splitMarkdownImageBlocks } from './markdown-image.js';
 import { semanticHash } from './normalize.js';
 import type { SemanticDocument, SemanticLocator, SemanticNode } from './types.js';
+import type { ZdocComponentInventory } from '../zdoc/types.js';
+import { canonicalizeMarkdownSemantics } from './markdown-equivalence.js';
+import { semanticTableFromFeishuBlock } from './feishu-table.js';
 
 type LocalSegment =
   | { kind: 'markdown'; content: string }
@@ -21,13 +24,18 @@ type LocalSegment =
 
 export function localSemanticDocument(
   markdown: string,
-  codeBlocks: CodeBlockConfig = DEFAULT_CODE_BLOCK_CONFIG
+  codeBlocks: CodeBlockConfig = DEFAULT_CODE_BLOCK_CONFIG,
+  zdoc?: ZdocComponentInventory
 ): SemanticDocument {
   const normalized = markdown.replace(/\r\n/g, '\n');
-  const { frontmatter, body } = extractFrontmatter(normalized);
+  const extracted = extractFrontmatter(normalized);
+  const frontmatter = extracted.frontmatter;
+  const body = canonicalizeMarkdownSemantics(extracted.body);
   const nodes: SemanticNode[] = [];
   const headingPath: string[] = [];
   const ordinals = new Map<string, number>();
+  const supademos = zdoc?.components.filter((component) => component.kind === 'supademo') ?? [];
+  let supademoIndex = 0;
 
   if (frontmatter) {
     nodes.push({
@@ -81,6 +89,43 @@ export function localSemanticDocument(
     for (const block of markdownToFeishuBlocks(segment.content)) {
       const rendered = feishuBlocksToMarkdown([block]).trim();
       if (!rendered) continue;
+      if (rendered === '<Procedures>' || rendered === '</Procedures>') {
+        nodes.push({
+          kind: 'authoring-token',
+          locator: nextLocator(headingPath, 'authoring-token', ordinals),
+          component: 'Procedures',
+          token: rendered === '<Procedures>' ? 'open' : 'close',
+          markdown: rendered
+        });
+        continue;
+      }
+      if (rendered === '<readonly-block type="isv"></readonly-block>') {
+        const supademo = supademos[supademoIndex];
+        supademoIndex += 1;
+        if (supademo) {
+          nodes.push({
+            kind: 'protected-resource',
+            locator: nextLocator(headingPath, 'protected-resource', ordinals),
+            resourceKind: 'supademo',
+            componentId: supademo.componentId
+          });
+        } else {
+          nodes.push({
+            kind: 'opaque',
+            locator: nextLocator(headingPath, 'opaque', ordinals),
+            description: 'unmatched local ISV placeholder',
+            fingerprint: semanticHash(rendered)
+          });
+        }
+        continue;
+      }
+      if (block.block_type === 31) {
+        nodes.push(semanticTableFromFeishuBlock(
+          block,
+          nextLocator(headingPath, 'table', ordinals)
+        ));
+        continue;
+      }
       if (block.block_type >= 3 && block.block_type <= 8) {
         const level = block.block_type - 2;
         const title = rendered.replace(/^#{1,6}\s+/, '').trim();

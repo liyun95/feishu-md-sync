@@ -15,6 +15,7 @@ export function parseHtmlCallout(html: string, locator: SemanticLocator): Semant
   }
 
   const body = (match[2] ?? '').trim();
+  const managedTitle = attributeValue(match[1] ?? '', 'data-fms-callout-title');
   const unsupported: string[] = [];
   detectUnsupportedMarkdown(body, unsupported);
   const blocks = markdownToFeishuBlocks(body);
@@ -31,6 +32,10 @@ export function parseHtmlCallout(html: string, locator: SemanticLocator): Semant
     kind: 'callout',
     locator,
     calloutType,
+    ...(managedTitle !== undefined ? {
+      titleManaged: true as const,
+      title: { markdown: decodeHtmlAttribute(managedTitle) }
+    } : {}),
     children: blocks.map((block, ordinal) => ({
       ordinal,
       blockType: block.block_type,
@@ -38,6 +43,21 @@ export function parseHtmlCallout(html: string, locator: SemanticLocator): Semant
     })),
     unsupported
   };
+}
+
+function attributeValue(attributes: string, name: string): string | undefined {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = attributes.match(new RegExp(`\\b${escapedName}\\s*=\\s*(["'])(.*?)\\1`, 'i'));
+  return match?.[2];
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 function classNames(attributes: string): string[] {

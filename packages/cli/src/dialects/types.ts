@@ -2,8 +2,9 @@ import type {
   LinkResolutionSummary,
   ResolvedDocumentLink
 } from '../link-resolvers/types.js';
+import type { ZdocComponentInventory } from '../zdoc/types.js';
 
-export const DIALECT_NAMES = ['gfm', 'docusaurus', 'milvus-authoring'] as const;
+export const DIALECT_NAMES = ['gfm', 'zdoc-authoring', 'milvus-authoring'] as const;
 
 export type DialectName = typeof DIALECT_NAMES[number];
 
@@ -16,7 +17,11 @@ export type SourceLocation = {
 export type DialectDiagnosticCode =
   | 'dialect-suggestion'
   | 'unsupported-mdx-component'
-  | 'unsupported-docusaurus-admonition'
+  | 'unsupported-zdoc-admonition'
+  | 'zdoc-procedures-unpaired'
+  | 'zdoc-procedures-nested'
+  | 'zdoc-admonition-unsupported'
+  | 'zdoc-component-unsupported'
   | 'missing-milvus-variable'
   | 'missing-milvus-fragment'
   | 'milvus-fragment-cycle'
@@ -51,4 +56,7 @@ export type DialectResult = {
   dependencies: DialectDependency[];
   resolvedLinks: ResolvedDocumentLink[];
   linkResolution: LinkResolutionSummary;
+  zdoc?: {
+    inventory: ZdocComponentInventory;
+  };
 };

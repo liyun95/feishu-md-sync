@@ -5,6 +5,7 @@ import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../rec
 import type { PublishBlockPatchPlan } from './block-patch-plan.js';
 import type { ScopedPatchPlan } from './scoped-patch-plan.js';
 import type { WhiteboardPlan } from '../whiteboards/whiteboard-plan.js';
+import type { ZdocRoundTripReport } from '../zdoc/types.js';
 
 export type PublishStrategy = 'no-op' | 'block-patch' | 'blocked' | 'section-replace' | 'document-replace' | 'create-document';
 
@@ -37,6 +38,7 @@ export type PublishPlan = {
   requiredRemoteWhiteboardOverwrites?: string[];
   risks: string[];
   warnings: string[];
+  zdocRoundTrip?: ZdocRoundTripReport;
 };
 
 export function buildPublishPlan(input: {
@@ -58,6 +60,7 @@ export function buildPublishPlan(input: {
   blockPatch?: PublishBlockPatchPlan;
   scopedPatch?: ScopedPatchPlan;
   whiteboards?: WhiteboardPlan;
+  zdocRoundTrip?: ZdocRoundTripReport;
 }): PublishPlan {
   const localSourceHash = hashText(input.localSource);
   const publishDraftHash = hashText(input.publishDraft);
@@ -78,7 +81,8 @@ export function buildPublishPlan(input: {
       resolvedToPublicSite: 0,
       unresolved: 0
     },
-    linkResolutionFingerprint: input.linkResolutionFingerprint ?? hashText('[]')
+    linkResolutionFingerprint: input.linkResolutionFingerprint ?? hashText('[]'),
+    ...(input.zdocRoundTrip ? { zdocRoundTrip: input.zdocRoundTrip } : {})
   };
   if (dialectFields.dialectBlockers.length > 0) {
     return {
@@ -97,6 +101,25 @@ export function buildPublishPlan(input: {
         ...dialectFields.dialectBlockers.map(({ message }) => message),
         'dialect preprocessing is blocked; no remote operation was planned'
       ],
+      warnings: input.transformWarnings
+    };
+  }
+  if (input.zdocRoundTrip && !input.zdocRoundTrip.safeToPublish) {
+    return {
+      target: input.target,
+      profile: input.profile,
+      ...dialectFields,
+      strategy: 'blocked',
+      safeToWrite: false,
+      remoteChanged: false,
+      localSourceHash,
+      publishDraftHash,
+      remoteSnapshotHash,
+      requiresCollaborationRiskConfirmation: false,
+      requiresUntrackedRemoteConfirmation: false,
+      risks: input.zdocRoundTrip.items
+        .filter((item) => item.severity === 'blocker')
+        .map((item) => item.message),
       warnings: input.transformWarnings
     };
   }
@@ -129,6 +152,27 @@ export function buildPublishPlan(input: {
   if (remoteChanged) risks.push('remote changed since last publish receipt');
 
   if (input.forceDocumentReplace) {
+    const protectedSupademo = input.zdocRoundTrip?.items.some((item) => {
+      return item.code === 'supademo-adopt' || item.code === 'supademo-protected';
+    }) ?? false;
+    if (protectedSupademo) {
+      risks.push('document replacement cannot preserve protected Supademo block identity');
+      return {
+        target: input.target,
+        profile: input.profile,
+        ...dialectFields,
+        strategy: 'blocked',
+        safeToWrite: false,
+        remoteChanged,
+        localSourceHash,
+        publishDraftHash,
+        remoteSnapshotHash,
+        requiresCollaborationRiskConfirmation: false,
+        requiresUntrackedRemoteConfirmation: false,
+        risks,
+        warnings: input.transformWarnings
+      };
+    }
     risks.push('document replace can affect comments, anchors, block identity, and collaboration context');
     return {
       target: input.target,

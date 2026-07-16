@@ -10,12 +10,14 @@ import {
   readLocalBaseSnapshot,
   readPublishReceipt,
   receiptDialect,
+  protectedResourceEntries,
   whiteboardEntries,
   writePublishBaseSnapshot,
   writeLocalBaseSnapshot,
   writePublishReceipt,
   type PublishReceiptV3,
-  type PublishReceiptV4
+  type PublishReceiptV4,
+  type PublishReceiptV5
 } from '../src/receipts/publish-receipt.js';
 
 describe('publish receipt', () => {
@@ -113,7 +115,7 @@ describe('publish receipt', () => {
       target: { kind: 'wiki', token: 'wiki_token' },
       resolvedDocumentId: 'doc_token',
       profile: 'none',
-      dialect: 'docusaurus',
+      dialect: 'zdoc-authoring',
       dialectDraftHash: 'dialect',
       dialectDependencies: [],
       linkResolutionFingerprint: 'links',
@@ -130,6 +132,43 @@ describe('publish receipt', () => {
     await writePublishReceipt({ cwd: dir, receipt });
     await expect(readPublishReceipt({ cwd: dir, target: receipt.target })).resolves.toEqual(receipt);
     await expect(readPublishBaseSnapshot({ cwd: dir, snapshot })).resolves.toContain('Resolved [link]');
+  });
+
+  it('writes and reads version 5 protected resource mappings', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-receipt-v5-'));
+    const receipt: PublishReceiptV5 = {
+      version: 5,
+      target: { kind: 'docx', token: 'doc_token' },
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      dialectDraftHash: 'dialect',
+      dialectDependencies: [],
+      linkResolutionFingerprint: 'links',
+      resolvedLinks: [],
+      localSourceHash: 'source',
+      publishDraftHash: 'publish',
+      publishBaseSnapshot: { path: 'publish.md', hash: 'publish' },
+      remoteSnapshotHash: 'remote',
+      localBaseSnapshot: { path: 'local.md', hash: 'local' },
+      whiteboards: [],
+      protectedResources: [{
+        kind: 'supademo',
+        componentId: 'demo',
+        blockId: 'isv1',
+        remoteShape: 'add-ons:supademo',
+        sectionPath: ['Demo'],
+        ordinal: 0,
+        previousFingerprint: 'before',
+        nextFingerprint: 'after'
+      }],
+      updatedAt: '2026-07-16T00:00:00.000Z'
+    };
+
+    await writePublishReceipt({ cwd: dir, receipt });
+
+    await expect(readPublishReceipt({ cwd: dir, target: receipt.target })).resolves.toEqual(receipt);
+    expect(protectedResourceEntries(receipt)).toEqual(receipt.protectedResources);
   });
 
   it('treats legacy receipts as gfm and keeps V3 Whiteboards readable', () => {

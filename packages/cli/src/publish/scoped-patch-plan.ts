@@ -22,6 +22,12 @@ import {
   type CalloutPlanBlocker
 } from './callout-plan.js';
 import { diffCorrespondingTable, findCorrespondingRemoteTable, tableIdentity, type TableDiff } from './table-diff.js';
+import { canonicalizeMarkdownSemantics } from '../semantic/markdown-equivalence.js';
+import {
+  planProceduresChanges,
+  type ProceduresOperation,
+  type ProceduresPlanBlocker
+} from '../zdoc/procedures-plan.js';
 
 export type ScopedTextUpdateOperation = {
   kind: 'update';
@@ -59,7 +65,8 @@ export type ScopedPatchOperation =
   | ScopedTextDeleteOperation
   | TableReplaceOperation
   | CalloutOperation
-  | CodeBlockOperation;
+  | CodeBlockOperation
+  | ProceduresOperation;
 
 export type ScopedPatchBlocker = {
   code:
@@ -67,7 +74,8 @@ export type ScopedPatchBlocker = {
     | 'unsupported-local-change'
     | 'remote-scope-conflict'
     | CalloutPlanBlocker['code']
-    | CodePlanBlocker['code'];
+    | CodePlanBlocker['code']
+    | ProceduresPlanBlocker['code'];
   locator?: SemanticLocator;
   message: string;
 };
@@ -94,6 +102,7 @@ export function planScopedPatch(input: {
   remoteBase?: SemanticDocument;
   remoteCurrent: SemanticDocument;
   tracked: boolean;
+  supportsBlockMove?: boolean;
 }): ScopedPatchPlan {
   const blockers: ScopedPatchBlocker[] = [];
   const warnings: string[] = [];
@@ -144,14 +153,22 @@ export function planScopedPatch(input: {
   const textPlanning = planTextScopes({ ...input, localChanged, remoteChanged, blockers, warnings });
   const calloutPlanning = planCalloutChanges(input);
   const codePlanning = planCodeBlockChanges(input);
+  const proceduresPlanning = planProceduresChanges({
+    parentBlockId: input.parentBlockId,
+    local: input.localCurrent,
+    remote: input.remoteCurrent,
+    supportsBlockMove: input.supportsBlockMove
+  });
   blockers.push(...calloutPlanning.blockers);
   blockers.push(...codePlanning.blockers);
+  blockers.push(...proceduresPlanning.blockers);
   warnings.push(...calloutPlanning.warnings);
   warnings.push(...codePlanning.warnings);
   const operations: ScopedPatchOperation[] = [
     ...textPlanning.operations,
     ...calloutPlanning.operations,
-    ...codePlanning.operations
+    ...codePlanning.operations,
+    ...proceduresPlanning.operations
   ];
   if (textPlanning.fallbackReason) {
     blockers.push({
@@ -239,7 +256,8 @@ export function planScopedPatch(input: {
     warnings: uniqueWarnings,
     requiresCollaborationRiskConfirmation: calloutPlanning.requiresCollaborationRiskConfirmation ||
       codePlanning.requiresCollaborationRiskConfirmation || operations.some((operation) => {
-      return operation.kind === 'update' || operation.kind === 'delete' || operation.kind === 'table-replace';
+      return operation.kind === 'update' || operation.kind === 'delete' || operation.kind === 'table-replace' ||
+        operation.kind === 'authoring-token-move' || operation.kind === 'authoring-token-delete';
     }),
     scopeSummary: {
       localChanged: locatorsForKeys(input.localCurrent, localChanged),
@@ -385,7 +403,8 @@ type PlanningEntry = { node: SemanticNode; block: FeishuBlock };
 
 function planningEntries(document: SemanticDocument): PlanningEntry[] {
   return document.nodes.flatMap((node): PlanningEntry[] => {
-    if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout') return [];
+    if (node.kind === 'opaque' || node.kind === 'asset' || node.kind === 'callout' ||
+      node.kind === 'authoring-token' || node.kind === 'protected-resource') return [];
     if (node.kind === 'code') {
       return [{
         node,
@@ -470,9 +489,11 @@ function visibleText(markdown: string): string {
 }
 
 function textRepresentationsEquivalent(local: string, remote: string): boolean {
-  if (visibleText(local) === visibleText(remote)) return true;
-  const localCode = fencedCode(local);
-  const remoteCode = fencedCode(remote);
+  const canonicalLocal = canonicalizeMarkdownSemantics(local);
+  const canonicalRemote = canonicalizeMarkdownSemantics(remote);
+  if (visibleText(canonicalLocal) === visibleText(canonicalRemote)) return true;
+  const localCode = fencedCode(canonicalLocal);
+  const remoteCode = fencedCode(canonicalRemote);
   if (!localCode || !remoteCode || localCode.body !== remoteCode.body) return false;
   return !localCode.language || !remoteCode.language || localCode.language === remoteCode.language;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planScopedPatch } from '../src/publish/scoped-patch-plan.js';
+import { localSemanticDocument } from '../src/semantic/local-document.js';
 import type {
   SemanticAssetNode,
   SemanticCell,
@@ -201,7 +202,90 @@ describe('scoped patch plan', () => {
       message: expect.stringContaining('unsupported indented fenced Code block')
     }));
   });
+
+  it('does not update text for an NBSP-only representation difference', () => {
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localCurrent: document(text('Provider\u00a0name', 0)),
+      remoteCurrent: document(text('Provider name', 0, 'p1')),
+      tracked: false
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
+  });
+
+  it('plans Procedures token creation without ordinary text operations', () => {
+    const localCurrent = localSemanticDocument(
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.'
+    );
+    const remoteCurrent = remoteize(localSemanticDocument(
+      'Intro.\n\n1. Step.\n\nAfter.'
+    ));
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localCurrent,
+      remoteCurrent,
+      tracked: false
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({ kind: 'authoring-token-create', token: '<Procedures>' }),
+      expect.objectContaining({ kind: 'authoring-token-create', token: '</Procedures>' })
+    ]);
+  });
+
+  it('plans a Procedures boundary move without text updates', () => {
+    const localCurrent = localSemanticDocument(
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.'
+    );
+    const remoteCurrent = remoteize(localSemanticDocument(
+      '<Procedures>\n\nIntro.\n\n1. Step.\n\n</Procedures>\n\nAfter.'
+    ));
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localCurrent,
+      remoteCurrent,
+      tracked: false
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({ kind: 'authoring-token-move', token: '<Procedures>' })
+    ]);
+  });
+
+  it('blocks a Procedures move when the adapter cannot move blocks', () => {
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localCurrent: localSemanticDocument(
+        'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>'
+      ),
+      remoteCurrent: remoteize(localSemanticDocument(
+        '<Procedures>\n\nIntro.\n\n1. Step.\n\n</Procedures>'
+      )),
+      tracked: false,
+      supportsBlockMove: false
+    });
+
+    expect(plan.operations).toEqual([]);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'procedures-move-unsupported'
+    }));
+  });
 });
+
+function remoteize(document: SemanticDocument): SemanticDocument {
+  return {
+    nodes: document.nodes.map((node, index) => ({
+      ...node,
+      remoteBlockId: `block-${index}`
+    }))
+  };
+}
 
 function document(...nodes: SemanticDocument['nodes']): SemanticDocument {
   return { nodes };

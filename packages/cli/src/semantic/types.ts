@@ -28,8 +28,27 @@ export type SemanticCell = {
 
 export type SemanticLocator = {
   sectionPath: string[];
-  kind: 'text' | 'code' | 'table' | 'asset' | 'callout' | 'opaque';
+  kind: 'text' | 'code' | 'table' | 'asset' | 'callout' | 'opaque' | 'authoring-token' | 'protected-resource';
   ordinal: number;
+};
+
+export type SemanticAuthoringToken = {
+  kind: 'authoring-token';
+  locator: SemanticLocator;
+  component: 'Procedures';
+  token: 'open' | 'close';
+  markdown: '<Procedures>' | '</Procedures>';
+  remoteBlockId?: string;
+};
+
+export type SemanticProtectedResource = {
+  kind: 'protected-resource';
+  locator: SemanticLocator;
+  resourceKind: 'supademo';
+  componentId?: string;
+  remoteBlockId?: string;
+  remoteToken?: string;
+  remoteShape?: string;
 };
 
 export type SemanticCodeBlock = {
@@ -59,6 +78,7 @@ export type SemanticCallout = {
   kind: 'callout';
   locator: SemanticLocator;
   calloutType?: CalloutType;
+  titleManaged?: true;
   title?: {
     markdown: string;
     remoteBlockId?: string;
@@ -115,7 +135,8 @@ export type SemanticAssetNode = {
   unsupported?: string[];
 };
 
-export type SemanticNode = SemanticTextBlock | SemanticCodeBlock | SemanticTable | SemanticAssetNode | SemanticCallout | SemanticOpaqueNode;
+export type SemanticNode = SemanticTextBlock | SemanticCodeBlock | SemanticTable | SemanticAssetNode |
+  SemanticCallout | SemanticOpaqueNode | SemanticAuthoringToken | SemanticProtectedResource;
 
 export type SemanticDocument = {
   nodes: SemanticNode[];

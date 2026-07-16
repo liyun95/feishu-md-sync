@@ -15,10 +15,13 @@ export function renderCalloutXml(input: {
   const presentation = type === 'note'
     ? { emoji: '📘', background: 'light-orange', border: 'orange', title: input.config.noteTitle }
     : { emoji: '❗', background: 'light-red', border: 'red', title: input.config.warningTitle };
+  const title = input.callout.titleManaged && input.callout.title
+    ? input.callout.title.markdown
+    : presentation.title;
   const blocks = input.callout.children.flatMap((child) => markdownToFeishuBlocks(child.markdown));
   const body = renderBlocks(blocks);
   return `<callout emoji="${presentation.emoji}" background-color="${presentation.background}" border-color="${presentation.border}">` +
-    `<p>${escapeXml(presentation.title)}</p>${body}</callout>`;
+    `<p>${escapeXml(title)}</p>${body}</callout>`;
 }
 
 function renderBlocks(blocks: FeishuBlock[]): string {

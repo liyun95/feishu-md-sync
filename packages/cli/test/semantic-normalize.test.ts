@@ -48,4 +48,20 @@ describe('semantic normalization', () => {
       caption: 'Example'
     });
   });
+
+  it('strips execution identity from protected authoring nodes', () => {
+    expect(stripExecutionMetadata({
+      kind: 'protected-resource',
+      resourceKind: 'supademo',
+      componentId: 'demo-id',
+      remoteBlockId: 'isv1',
+      remoteToken: 'token1',
+      remoteShape: 'isv'
+    })).toEqual({
+      kind: 'protected-resource',
+      resourceKind: 'supademo',
+      componentId: 'demo-id',
+      remoteShape: 'isv'
+    });
+  });
 });

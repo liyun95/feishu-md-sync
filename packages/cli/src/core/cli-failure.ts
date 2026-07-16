@@ -18,6 +18,13 @@ export type CliFailureDetails = {
   retryable: boolean;
   missingScopes?: string[];
   consoleUrl?: string;
+  partialWrite?: {
+    completedOperations: unknown[];
+    failedOperation: unknown;
+    pendingOperations: unknown[];
+    receiptWritten: false;
+    document?: { documentId: string; url?: string };
+  };
 };
 
 export class CliFailure extends Error {
@@ -65,6 +72,21 @@ export function confirmationRequired(input: {
 export function normalizeCliFailure(error: unknown): CliFailure {
   if (error instanceof CliFailure) return error;
 
+  const partialWrite = partialWriteDetails(error);
+  if (partialWrite) {
+    const recoveryTarget = partialWrite.document?.url ?? partialWrite.document?.documentId;
+    return new CliFailure({
+      type: 'verification',
+      subtype: 'partial_write',
+      message: error instanceof Error ? error.message : String(error),
+      hint: recoveryTarget
+        ? `inspect the partially written document at ${recoveryTarget}, then rerun a dry-run before retrying`
+        : 'inspect the partially written document state, then rerun a dry-run before retrying',
+      retryable: false,
+      partialWrite
+    }, { cause: error instanceof Error ? error : undefined });
+  }
+
   const message = error instanceof Error ? error.message : String(error);
   const cause = error instanceof Error ? error : undefined;
   if (/readback|verification failed|hash mismatch/i.test(message)) {
@@ -95,6 +117,34 @@ export function normalizeCliFailure(error: unknown): CliFailure {
     hint: 'rerun with the same inputs after inspecting the dry-run and local configuration',
     retryable: false
   }, { cause });
+}
+
+function partialWriteDetails(error: unknown): CliFailureDetails['partialWrite'] | undefined {
+  if (!error || typeof error !== 'object' || (error as { name?: unknown }).name !== 'PartialWriteError') {
+    return undefined;
+  }
+  const record = error as {
+    completedOperations?: unknown;
+    failedOperation?: unknown;
+    pendingOperations?: unknown;
+    receiptWritten?: unknown;
+    document?: unknown;
+  };
+  if (!Array.isArray(record.completedOperations) || !record.failedOperation ||
+    !Array.isArray(record.pendingOperations) || record.receiptWritten !== false) {
+    return undefined;
+  }
+  const document = record.document && typeof record.document === 'object' &&
+    typeof (record.document as { documentId?: unknown }).documentId === 'string'
+    ? record.document as { documentId: string; url?: string }
+    : undefined;
+  return {
+    completedOperations: record.completedOperations,
+    failedOperation: record.failedOperation,
+    pendingOperations: record.pendingOperations,
+    receiptWritten: false,
+    ...(document ? { document } : {})
+  };
 }
 
 function exitCodeForType(type: CliFailureType): number {

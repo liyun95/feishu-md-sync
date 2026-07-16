@@ -53,7 +53,7 @@ export function registerCoreCommands(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
-    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
+    .option('--dialect <dialect>', 'source dialect: gfm | zdoc-authoring | milvus-authoring')
     .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
     .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
@@ -115,7 +115,7 @@ export function registerCoreCommands(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'Feishu/Lark docx or wiki URL/token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
-    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
+    .option('--dialect <dialect>', 'source dialect: gfm | zdoc-authoring | milvus-authoring')
     .option('--sync-whiteboards', 'include same-name local SVG Whiteboard state')
     .option('--format <format>', 'output format: pretty | json', parseOutputFormat, 'pretty')
     .action(async (markdownFile: string, opts: StatusCommandOptions) => {
@@ -153,7 +153,7 @@ export function registerCoreCommands(program: Command): void {
     .option('--remote <file>', 'local remote snapshot Markdown file')
     .option('--base <file>', 'explicit merge base Markdown file')
     .option('--profile <profile>', 'local authoring profile: milvus | zilliz | none')
-    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
+    .option('--dialect <dialect>', 'source dialect: gfm | zdoc-authoring | milvus-authoring')
     .option('--check', 'check whether merge would conflict without writing')
     .option('--dry-run', 'show merge metadata without writing')
     .option('--abort', 'restore the local file from the previous merge state')

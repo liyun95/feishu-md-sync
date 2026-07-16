@@ -66,7 +66,7 @@ export function resolveDialectConfig(
 
 export function parseDialectName(value: string, label: string): DialectName {
   if ((DIALECT_NAMES as readonly string[]).includes(value)) return value as DialectName;
-  throw new Error(`Invalid ${label} ${value}. Expected gfm, docusaurus, or milvus-authoring.`);
+  throw new Error(`Invalid ${label} ${value}. Expected gfm, zdoc-authoring, or milvus-authoring.`);
 }
 
 export function resolveCalloutConfig(config: SyncConfig): CalloutConfig {

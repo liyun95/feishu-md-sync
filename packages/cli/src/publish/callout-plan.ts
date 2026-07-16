@@ -1,4 +1,5 @@
 import { semanticHash, normalizeWhitespace } from '../semantic/normalize.js';
+import { calloutTypeForEmojiId } from '../callouts/callout-presentation.js';
 import type {
   SemanticCallout,
   SemanticCalloutChild,
@@ -20,6 +21,14 @@ export type CalloutChildUpdateOperation = {
   locator: SemanticLocator;
   calloutBlockId: string;
   childOrdinal: number;
+  remoteBlockId: string;
+  desiredMarkdown: string;
+};
+
+export type CalloutTitleUpdateOperation = {
+  kind: 'callout-title-update';
+  locator: SemanticLocator;
+  calloutBlockId: string;
   remoteBlockId: string;
   desiredMarkdown: string;
 };
@@ -50,6 +59,7 @@ export type CalloutDeleteOperation = {
 
 export type CalloutOperation =
   | CalloutCreateOperation
+  | CalloutTitleUpdateOperation
   | CalloutChildUpdateOperation
   | CalloutChildCreateOperation
   | CalloutChildDeleteOperation
@@ -104,7 +114,9 @@ export function planCalloutChanges(input: {
         operations.push(createOperation(input.parentBlockId, input.localCurrent, input.remoteCurrent, local));
         continue;
       }
-      if (!sameCalloutType(local, remote) || !adjacencyMatches(input.localCurrent, input.remoteCurrent, local, remote)) {
+      if (!sameCalloutType(local, remote) ||
+        !managedTitleMatches(local, remote) ||
+        !adjacencyMatches(input.localCurrent, input.remoteCurrent, local, remote)) {
         blockers.push({
           code: 'callout-correspondence-ambiguous',
           locator: local.locator,
@@ -194,6 +206,19 @@ export function planCalloutChanges(input: {
         blockers.push(unsupportedBlocker(remoteCurrent));
         continue;
       }
+      planManagedTitleChanges(
+        localBase,
+        localCurrent,
+        remoteBase,
+        remoteCurrent,
+        operations,
+        blockers
+      );
+      if (blockers.some((blocker) =>
+        blocker.code === 'remote-callout-conflict' &&
+        blocker.locator &&
+        locatorKey(blocker.locator) === locatorKey(localCurrent.locator)
+      )) continue;
       planThreeWayChildren(localBase, localCurrent, remoteBase, remoteCurrent, operations, blockers);
     }
   }
@@ -223,12 +248,53 @@ export function planCalloutChanges(input: {
 export function calloutContentHash(callout: SemanticCallout): string {
   return semanticHash({
     calloutType: callout.calloutType,
+    managedTitle: callout.titleManaged ? callout.title?.markdown : undefined,
     children: callout.children.map((child) => ({
       blockType: child.blockType,
       markdown: child.markdown
     })),
     unsupported: callout.unsupported
   });
+}
+
+function planManagedTitleChanges(
+  localBase: SemanticCallout,
+  localCurrent: SemanticCallout,
+  remoteBase: SemanticCallout,
+  remoteCurrent: SemanticCallout,
+  operations: CalloutOperation[],
+  blockers: CalloutPlanBlocker[]
+): void {
+  if (!localCurrent.titleManaged) return;
+  const desiredTitle = localCurrent.title?.markdown;
+  const localBaseTitle = localBase.titleManaged ? localBase.title?.markdown : undefined;
+  if (desiredTitle === undefined || desiredTitle === localBaseTitle) return;
+  const remoteBaseTitle = remoteBase.title?.markdown;
+  const remoteCurrentTitle = remoteCurrent.title?.markdown;
+  const remoteChanged = normalizeWhitespace(remoteBaseTitle ?? '') !==
+    normalizeWhitespace(remoteCurrentTitle ?? '');
+  if (remoteChanged && normalizeWhitespace(remoteCurrentTitle ?? '') !== normalizeWhitespace(desiredTitle)) {
+    blockers.push(conflictBlocker(localCurrent.locator, 'Callout title changed locally and remotely'));
+    return;
+  }
+  if (normalizeWhitespace(remoteCurrentTitle ?? '') === normalizeWhitespace(desiredTitle)) return;
+  if (!remoteCurrent.remoteBlockId || !remoteCurrent.title?.remoteBlockId) {
+    blockers.push(correspondenceBlocker(localCurrent.locator, 'remote Callout title block ID is missing'));
+    return;
+  }
+  operations.push({
+    kind: 'callout-title-update',
+    locator: localCurrent.locator,
+    calloutBlockId: remoteCurrent.remoteBlockId,
+    remoteBlockId: remoteCurrent.title.remoteBlockId,
+    desiredMarkdown: desiredTitle
+  });
+}
+
+function managedTitleMatches(local: SemanticCallout, remote: SemanticCallout): boolean {
+  if (!local.titleManaged) return true;
+  return normalizeWhitespace(local.title?.markdown ?? '') ===
+    normalizeWhitespace(remote.title?.markdown ?? '');
 }
 
 function planThreeWayChildren(
@@ -529,7 +595,10 @@ function commonSuffix(remote: SemanticCalloutChild[], desired: SemanticCalloutCh
 }
 
 function sameCalloutType(local: SemanticCallout, remote: SemanticCallout): boolean {
-  return Boolean(local.calloutType && remote.calloutType && local.calloutType === remote.calloutType);
+  const remoteType = remote.calloutType ?? (local.titleManaged
+    ? calloutTypeForEmojiId(remote.shell?.emojiId)
+    : undefined);
+  return Boolean(local.calloutType && remoteType && local.calloutType === remoteType);
 }
 
 function callouts(document: SemanticDocument | undefined): SemanticCallout[] {

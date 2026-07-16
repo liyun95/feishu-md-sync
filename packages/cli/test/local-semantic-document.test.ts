@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { localSemanticDocument } from '../src/semantic/local-document.js';
+import type { ZdocComponentInventory } from '../src/zdoc/types.js';
+import { stripExecutionMetadata } from '../src/semantic/normalize.js';
 
 describe('local semantic document', () => {
   it('assigns heading paths and table ordinals while preserving text nodes', () => {
@@ -146,5 +148,64 @@ First warning.
     expect(document.nodes).toEqual([
       expect.objectContaining({ kind: 'code', content: '<table><tr><td>x</td></tr></table>' })
     ]);
+  });
+
+  it('keeps ordinary text locators stable when Procedures tokens are present', () => {
+    const without = localSemanticDocument('Intro.\n\n1. First.\n\nAfter.');
+    const withTokens = localSemanticDocument(
+      'Intro.\n\n<Procedures>\n\n1. First.\n\n</Procedures>\n\nAfter.'
+    );
+
+    expect(withTokens.nodes.filter((node) => node.kind === 'text').map((node) => node.locator))
+      .toEqual(without.nodes.filter((node) => node.kind === 'text').map((node) => node.locator));
+    expect(withTokens.nodes.filter((node) => node.kind === 'authoring-token')).toEqual([
+      expect.objectContaining({ component: 'Procedures', token: 'open', markdown: '<Procedures>' }),
+      expect.objectContaining({ component: 'Procedures', token: 'close', markdown: '</Procedures>' })
+    ]);
+  });
+
+  it('pairs Zdoc Supademo placeholders with inventory entries', () => {
+    const inventory: ZdocComponentInventory = {
+      components: [{
+        kind: 'supademo',
+        componentId: 'demo-id',
+        status: 'preserved',
+        sourceLine: 3,
+        sectionPath: ['Demo']
+      }],
+      ignoredMetadata: []
+    };
+    const document = localSemanticDocument(
+      '# Demo\n\n<readonly-block type="isv"></readonly-block>\n',
+      undefined,
+      inventory
+    );
+
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'protected-resource',
+      resourceKind: 'supademo',
+      componentId: 'demo-id',
+      locator: { sectionPath: ['Demo'], kind: 'protected-resource', ordinal: 0 }
+    }));
+  });
+
+  it('keeps an unmatched ISV placeholder opaque', () => {
+    expect(localSemanticDocument(
+      '<readonly-block type="isv"></readonly-block>'
+    ).nodes).toContainEqual(expect.objectContaining({
+      kind: 'opaque',
+      description: 'unmatched local ISV placeholder'
+    }));
+  });
+
+  it('parses short and canonical table separators into the same semantic table', () => {
+    const short = localSemanticDocument('| A | B |\n|-|-|\n| x | y |').nodes[0];
+    const canonical = localSemanticDocument(
+      '| A | B |\n| --- | --- |\n| x | y |'
+    ).nodes[0];
+
+    expect(short?.kind).toBe('table');
+    expect(canonical?.kind).toBe('table');
+    expect(stripExecutionMetadata(short)).toEqual(stripExecutionMetadata(canonical));
   });
 });

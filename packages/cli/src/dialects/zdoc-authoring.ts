@@ -20,8 +20,9 @@ import {
   lineAndColumnAt,
   protectedCodeRanges
 } from './source-lines.js';
+import { inventoryAndTransformZdoc } from '../zdoc/component-inventory.js';
 
-export async function preprocessDocusaurus(input: {
+export async function preprocessZdocAuthoring(input: {
   sourcePath: string;
   markdown: string;
   config: DialectWorkspaceConfig;
@@ -34,16 +35,29 @@ export async function preprocessDocusaurus(input: {
   const resolvedLinks: ResolvedDocumentLink[] = [];
   const linkResolution = emptyLinkSummary();
 
-  const unsupported = firstUnsupportedConstruct({
+  const zdoc = inventoryAndTransformZdoc({
     sourcePath: input.sourcePath,
     markdown: frontmatter.body,
     lineOffset: bodyStartLineOffset
   });
+  if (frontmatter.raw) {
+    zdoc.inventory.ignoredMetadata.unshift({
+      kind: 'frontmatter',
+      sourceLine: 1
+    });
+  }
+
+  const unsupported = firstUnsupportedConstruct({
+    sourcePath: input.sourcePath,
+    markdown: zdoc.markdown,
+    lineOffset: bodyStartLineOffset
+  });
   if (unsupported) blockers.push(unsupported);
+  if (!unsupported) blockers.push(...zdoc.blockers);
 
   const admonitions = convertAdmonitions({
     sourcePath: input.sourcePath,
-    markdown: frontmatter.body,
+    markdown: zdoc.markdown,
     lineOffset: bodyStartLineOffset
   });
   if (admonitions.blocker && blockers.length === 0) blockers.push(admonitions.blocker);
@@ -139,14 +153,15 @@ export async function preprocessDocusaurus(input: {
   markdown = applyUrlReplacements(markdown, replacements);
 
   return {
-    dialect: 'docusaurus',
+    dialect: 'zdoc-authoring',
     markdown,
     metadata: frontmatter.data,
     warnings,
     blockers: blockers.slice(0, 1),
     dependencies: [],
     resolvedLinks,
-    linkResolution
+    linkResolution,
+    zdoc: { inventory: zdoc.inventory }
   };
 }
 
@@ -165,21 +180,24 @@ function firstUnsupportedConstruct(input: {
   const patterns: Array<{ pattern: RegExp; label: (match: RegExpMatchArray) => string }> = [
     {
       pattern: /^ {0,3}(?:import|export)\b.*$/gm,
-      label: () => 'Docusaurus import/export statements are not supported.'
+      label: () => 'Zdoc import/export statements are not supported.'
     },
     {
       pattern: /<\/?([A-Z][A-Za-z0-9.]*)\b[^>]*>/g,
-      label: (match) => `Unsupported Docusaurus component <${match[1]}>.`
+      label: (match) => `Unsupported Zdoc component <${match[1]}>.`
     },
     {
       pattern: /\{[A-Za-z_$][^}\n]*\}/g,
-      label: () => 'Executable Docusaurus expressions are not supported.'
+      label: () => 'Executable Zdoc expressions are not supported.'
     }
   ];
   for (const { pattern, label } of patterns) {
     for (const match of input.markdown.matchAll(pattern)) {
       const offset = match.index ?? 0;
       if (isProtectedOffset(offset, ranges)) continue;
+      if (match[1] === 'Procedures' || match[1] === 'Admonition' || match[1] === 'Supademo') {
+        continue;
+      }
       const position = lineAndColumnAt(input.markdown, offset);
       return {
         code: 'unsupported-mdx-component',
@@ -233,11 +251,11 @@ function convertAdmonitions(input: {
       return {
         markdown: input.markdown,
         blocker: {
-          code: 'unsupported-docusaurus-admonition',
+          code: 'unsupported-zdoc-admonition',
           severity: 'blocker',
           message: suffix
-            ? `Custom Docusaurus admonition titles are not supported: :::${type}${opening[2]}`
-            : `Unsupported Docusaurus admonition type: ${type}`,
+            ? `Custom Zdoc admonition titles are not supported: :::${type}${opening[2]}`
+            : `Unsupported Zdoc admonition type: ${type}`,
           location
         }
       };
@@ -254,9 +272,9 @@ function convertAdmonitions(input: {
         return {
           markdown: input.markdown,
           blocker: {
-            code: 'unsupported-docusaurus-admonition',
+            code: 'unsupported-zdoc-admonition',
             severity: 'blocker',
-            message: 'Nested Docusaurus admonitions are not supported.',
+            message: 'Nested Zdoc admonitions are not supported.',
             location: { file: input.sourcePath, line: candidate + 1 + input.lineOffset, column: 1 }
           }
         };
@@ -267,9 +285,9 @@ function convertAdmonitions(input: {
       return {
         markdown: input.markdown,
         blocker: {
-          code: 'unsupported-docusaurus-admonition',
+          code: 'unsupported-zdoc-admonition',
           severity: 'blocker',
-          message: `Docusaurus admonition :::${type} has no closing :::.`,
+          message: `Zdoc admonition :::${type} has no closing :::.`,
           location
         }
       };
@@ -321,7 +339,7 @@ function relativeLinkBlocker(input: {
   return {
     code: 'relative-link-unresolved',
     severity: 'blocker',
-    message: `Cannot resolve Docusaurus document link: ${input.linkUrl}`,
+    message: `Cannot resolve Zdoc document link: ${input.linkUrl}`,
     location: {
       file: input.sourcePath,
       line: input.line,

@@ -16,6 +16,7 @@ import type {
 } from '../link-resolvers/types.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import { applyPublishTransformForProfile } from './profile-transform.js';
+import type { ZdocComponentInventory } from '../zdoc/types.js';
 
 export type PublishContext = {
   localSource: string;
@@ -31,6 +32,9 @@ export type PublishContext = {
   linkResolution: LinkResolutionSummary;
   linkResolutionFingerprint: string;
   transformWarnings: string[];
+  zdoc?: {
+    inventory: ZdocComponentInventory;
+  };
 };
 
 export async function buildPublishContext(input: {
@@ -80,7 +84,8 @@ export async function buildPublishContext(input: {
       slug: link.slug,
       resolvedUrl: link.resolvedUrl
     })))),
-    transformWarnings: transform.warnings
+    transformWarnings: transform.warnings,
+    ...(dialectResult.zdoc ? { zdoc: dialectResult.zdoc } : {})
   };
 }
 

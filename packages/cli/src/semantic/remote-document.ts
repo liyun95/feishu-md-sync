@@ -1,22 +1,22 @@
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
 import { codeLanguageForId, resolveCodeLanguage } from '../code-blocks/code-language.js';
 import type { RemoteCodeMetadata } from '../adapters/feishu-adapter.js';
-import { calloutTypeForTitle } from '../callouts/callout-presentation.js';
+import {
+  calloutTypeForEmojiId,
+  calloutTypeForTitle
+} from '../callouts/callout-presentation.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { findPageBlock, renderableDirectChildBlocks } from '../publish/block-state.js';
-import { normalizeRowKey, semanticHash } from './normalize.js';
+import { semanticHash } from './normalize.js';
+import { semanticTableFromFeishuBlock } from './feishu-table.js';
 import type {
-  SemanticCell,
-  SemanticCellBlock,
   SemanticCallout,
   SemanticCodeBlock,
   SemanticDocument,
-  SemanticInline,
   SemanticLocator,
-  SemanticMarks,
   SemanticNode,
-  SemanticTable
+  SemanticProtectedResource
 } from './types.js';
 
 const TEXT_KEY_BY_TYPE: Record<number, string> = {
@@ -57,6 +57,17 @@ export function remoteSemanticDocument(
     if (isSupportedTextBlock(block)) {
       const markdown = feishuBlocksToMarkdown([block]).trim();
       if (!markdown) continue;
+      if (markdown === '<Procedures>' || markdown === '</Procedures>') {
+        nodes.push({
+          kind: 'authoring-token',
+          locator: nextLocator(headingPath, 'authoring-token', ordinals),
+          component: 'Procedures',
+          token: markdown === '<Procedures>' ? 'open' : 'close',
+          markdown,
+          remoteBlockId: block.block_id
+        });
+        continue;
+      }
       if (block.block_type >= 3 && block.block_type <= 8) {
         const level = block.block_type - 2;
         const title = markdown.replace(/^#{1,6}\s+/, '').trim();
@@ -74,7 +85,7 @@ export function remoteSemanticDocument(
     }
 
     if (block.block_type === 31) {
-      nodes.push(remoteTable(block, nextLocator(headingPath, 'table', ordinals)));
+      nodes.push(semanticTableFromFeishuBlock(block, nextLocator(headingPath, 'table', ordinals)));
       continue;
     }
 
@@ -85,6 +96,15 @@ export function remoteSemanticDocument(
 
     if (block.block_type === 27 || block.block_type === 43) {
       nodes.push(remoteAsset(block, nextLocator(headingPath, 'asset', ordinals)));
+      continue;
+    }
+
+    const protectedResource = remoteSupademo(block);
+    if (protectedResource) {
+      nodes.push({
+        ...protectedResource,
+        locator: nextLocator(headingPath, 'protected-resource', ordinals)
+      });
       continue;
     }
 
@@ -151,7 +171,9 @@ function remoteCallout(
   const children = Array.isArray(block.children) ? block.children.filter(isFeishuBlock) : [];
   const titleBlock = children[0];
   const titleMarkdown = titleBlock ? feishuBlocksToMarkdown([titleBlock], config).trim() : '';
-  const calloutType = calloutTypeForTitle(titleMarkdown, config);
+  const shell = asRecord(block.callout);
+  const emojiId = typeof shell?.emoji_id === 'string' ? shell.emoji_id : undefined;
+  const calloutType = calloutTypeForTitle(titleMarkdown, config) ?? calloutTypeForEmojiId(emojiId);
   if (!calloutType) addUnsupported(unsupported, 'remote Callout title is unrecognized');
   if (!titleBlock || titleBlock.block_type !== 2) {
     addUnsupported(unsupported, 'remote Callout presentation title must be a text block');
@@ -179,7 +201,6 @@ function remoteCallout(
     };
   });
 
-  const shell = asRecord(block.callout);
   return {
     kind: 'callout',
     locator,
@@ -188,7 +209,7 @@ function remoteCallout(
     children: body,
     remoteBlockId: block.block_id,
     shell: {
-      emojiId: typeof shell?.emoji_id === 'string' ? shell.emoji_id : undefined,
+      emojiId,
       backgroundColor: optionalNumber(shell?.background_color),
       borderColor: optionalNumber(shell?.border_color),
       textColor: optionalNumber(shell?.text_color)
@@ -211,125 +232,29 @@ function remoteAsset(block: FeishuBlock, locator: SemanticLocator): SemanticNode
   };
 }
 
-function remoteTable(block: FeishuBlock, locator: SemanticLocator): SemanticTable {
-  const unsupported: string[] = [];
-  const table = asRecord(block.table);
-  const property = asRecord(table?.property);
-  const rows = numberValue(property?.row_size);
-  const columns = numberValue(property?.column_size);
-  const cells = Array.isArray(table?.cells) ? table.cells.filter(isFeishuBlock) : [];
+const SUPADEMO_COMPONENT_TYPE_ID = 'blk_682093ba9580c002363b9dc3';
 
-  if (rows === 0 || columns === 0) addUnsupported(unsupported, 'table has no rows or columns');
-  if (cells.length !== rows * columns) addUnsupported(unsupported, 'inconsistent table cell count');
-  const mergeInfo = property?.merge_info;
-  if (Array.isArray(mergeInfo) && mergeInfo.some(isMergedCellInfo)) {
-    addUnsupported(unsupported, 'merged cells are unsupported');
+function remoteSupademo(
+  block: FeishuBlock
+): Omit<SemanticProtectedResource, 'locator'> | undefined {
+  if (block.block_type !== 40) return undefined;
+  const addOns = asRecord(block.add_ons);
+  if (addOns?.component_type_id !== SUPADEMO_COMPONENT_TYPE_ID) return undefined;
+  if (typeof addOns.record !== 'string') return undefined;
+  let record: Record<string, unknown> | undefined;
+  try {
+    record = asRecord(JSON.parse(addOns.record));
+  } catch {
+    return undefined;
   }
-
-  const parsedCells = Array.from({ length: rows * columns }, (_, index) => {
-    return remoteCell(cells[index], unsupported);
-  });
-  const headers = parsedCells.slice(0, columns);
-  const dataRows = Array.from({ length: Math.max(0, rows - 1) }, (_, rowIndex) => {
-    const rowCells = parsedCells.slice((rowIndex + 1) * columns, (rowIndex + 2) * columns);
-    return {
-      key: normalizeRowKey(rowCells[0] ?? { blocks: [] }),
-      cells: rowCells
-    };
-  });
-
-  const counts = new Map<string, number>();
-  for (const row of dataRows) {
-    if (!row.key) addUnsupported(unsupported, 'empty row key');
-    counts.set(row.key, (counts.get(row.key) ?? 0) + 1);
-  }
-  for (const [key, count] of counts) {
-    if (key && count > 1) addUnsupported(unsupported, `duplicate row key: ${key}`);
-  }
-
+  if (typeof record?.id !== 'string' || !record.id) return undefined;
   return {
-    kind: 'table',
-    locator,
-    headers,
-    rows: dataRows,
+    kind: 'protected-resource',
+    resourceKind: 'supademo',
+    componentId: record.id,
     remoteBlockId: block.block_id,
-    unsupported
+    remoteShape: `add-ons:${SUPADEMO_COMPONENT_TYPE_ID}`
   };
-}
-
-function remoteCell(cell: FeishuBlock | undefined, unsupported: string[]): SemanticCell {
-  if (!cell) return { blocks: [] };
-  const children = cell.block_type === 32 && Array.isArray(cell.children)
-    ? cell.children.filter(isFeishuBlock)
-    : [cell];
-  const blocks: SemanticCellBlock[] = [];
-  let listItems: SemanticInline[][] = [];
-  let listOrdered: boolean | undefined;
-
-  const flushList = (): void => {
-    if (listOrdered === undefined) return;
-    blocks.push({ kind: 'list', ordered: listOrdered, items: listItems });
-    listItems = [];
-    listOrdered = undefined;
-  };
-
-  for (const child of children) {
-    if (child.block_type === 2) {
-      flushList();
-      blocks.push({ kind: 'paragraph', inlines: inlinesForBlock(child, unsupported) });
-      continue;
-    }
-    if (child.block_type === 12 || child.block_type === 13) {
-      const ordered = child.block_type === 13;
-      if (listOrdered !== undefined && listOrdered !== ordered) flushList();
-      listOrdered = ordered;
-      listItems.push(inlinesForBlock(child, unsupported));
-      if (Array.isArray(child.children) && child.children.length > 0) {
-        addUnsupported(unsupported, 'nested lists are unsupported');
-      }
-      continue;
-    }
-    flushList();
-    addUnsupported(unsupported, `block_type ${child.block_type} in cell`);
-  }
-  flushList();
-  return { blocks };
-}
-
-function inlinesForBlock(block: FeishuBlock, unsupported: string[]): SemanticInline[] {
-  const key = TEXT_KEY_BY_TYPE[block.block_type];
-  const value = key ? asRecord(block[key]) : undefined;
-  const elements = Array.isArray(value?.elements) ? value.elements.filter(isTextElement) : [];
-  return elements.flatMap((element) => inlineForElement(element, unsupported));
-}
-
-function inlineForElement(element: TextElement, unsupported: string[]): SemanticInline[] {
-  const run = element.text_run;
-  if (!run) {
-    addUnsupported(unsupported, 'Feishu citation or non-text element in cell');
-    return [];
-  }
-  const style = run.text_element_style ?? {};
-  if (style.strikethrough || style.underline || style.background_color) {
-    addUnsupported(unsupported, 'unsupported styling');
-  }
-  const marks: SemanticMarks = {};
-  if (style.bold) marks.bold = true;
-  if (style.italic) marks.italic = true;
-  if (style.inline_code) marks.code = true;
-  if (style.link?.url) {
-    if (/^https?:\/\//i.test(style.link.url)) marks.link = style.link.url;
-    else addUnsupported(unsupported, 'relative links are unsupported');
-  }
-
-  return run.content.split('\n').flatMap((value, index, values) => {
-    const items: SemanticInline[] = [];
-    if (value) items.push(Object.keys(marks).length > 0
-      ? { kind: 'text', value, marks: { ...marks } }
-      : { kind: 'text', value });
-    if (index < values.length - 1) items.push({ kind: 'break' });
-    return items;
-  });
 }
 
 function isSupportedTextBlock(block: FeishuBlock): boolean {
@@ -388,13 +313,6 @@ function numberValue(value: unknown): number {
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function isMergedCellInfo(value: unknown): boolean {
-  if (value === null || value === undefined) return false;
-  const info = asRecord(value);
-  if (!info) return true;
-  return info.row_span !== 1 || info.col_span !== 1;
 }
 
 function isFeishuBlock(value: unknown): value is FeishuBlock {

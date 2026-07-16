@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import type { FeishuBlock } from '../src/feishu/types.js';
 import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
 
@@ -81,6 +82,24 @@ describe('remote semantic document', () => {
     expect(document.nodes).toEqual([
       expect.objectContaining({ kind: 'text', markdown: 'Visible paragraph.' })
     ]);
+  });
+
+  it('classifies exact Procedures paragraphs as authoring tokens', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['intro', 'open', 'step', 'close', 'after'] },
+      text('intro', 'Intro.'),
+      text('open', '<Procedures>'),
+      text('step', 'Step.'),
+      text('close', '</Procedures>'),
+      text('after', 'After.')
+    ], 'doc_token');
+
+    expect(document.nodes.filter((node) => node.kind === 'authoring-token')).toEqual([
+      expect.objectContaining({ token: 'open', remoteBlockId: 'open' }),
+      expect.objectContaining({ token: 'close', remoteBlockId: 'close' })
+    ]);
+    expect(document.nodes.filter((node) => node.kind === 'text').map((node) => node.locator.ordinal))
+      .toEqual([0, 1, 2]);
   });
 
   it('blocks tables whose merge metadata spans multiple cells', () => {
@@ -179,6 +198,7 @@ describe('remote semantic document', () => {
 
   it('leaves unrecognized remote Callout types unresolved and reports unsupported children', () => {
     const blocks = calloutBlocks('Custom title');
+    blocks[1].callout = { emoji_id: 'custom_emoji' };
     blocks.push({ block_id: 'quote1', block_type: 15, quote: { elements: [] } });
     (blocks[1].children as string[]).push('quote1');
     const document = remoteSemanticDocument(blocks, 'doc_token');
@@ -254,6 +274,36 @@ describe('remote semantic document', () => {
       resolvedLanguage: 'python',
       caption: 'Example'
     });
+  });
+
+  it('recognizes fixture-backed Supademo add-on blocks as protected resources', async () => {
+    const fixture = JSON.parse(await readFile(new URL(
+      './fixtures/zdoc/model-providers/isv-blocks.json',
+      import.meta.url
+    ), 'utf8')) as FeishuBlock[];
+    const document = remoteSemanticDocument([
+      {
+        block_id: 'doc_token',
+        block_type: 1,
+        children: fixture.map((block) => block.block_id).filter(Boolean) as string[]
+      },
+      ...fixture
+    ], 'doc_token');
+
+    expect(document.nodes).toEqual([
+      expect.objectContaining({
+        kind: 'protected-resource',
+        resourceKind: 'supademo',
+        componentId: 'cmj9f3j6u0johf6zpk5kdyx3u',
+        remoteBlockId: 'XViWdTKb4ouwFJxEeepcSNQInLf'
+      }),
+      expect.objectContaining({
+        kind: 'protected-resource',
+        resourceKind: 'supademo',
+        componentId: 'cmjcjqyk3017cw10i8dbm2ret',
+        remoteBlockId: 'RYSAdAA9XojPNBxd0fqcZt42nEg'
+      })
+    ]);
   });
 });
 

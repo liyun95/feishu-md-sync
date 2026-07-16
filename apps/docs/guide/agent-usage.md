@@ -44,17 +44,19 @@ It never chooses `document-replace`, enables `--sync-whiteboards`, or appends a 
 
 Pull writes an independent snapshot by default. Merge begins with `merge --check`, and a conflict stops before publish.
 
-For a Docusaurus source, use one consistent dialect across status, diff, and publish:
+For a canonical Zdoc source whose Feishu document is read by a downstream publisher, use one consistent authoring dialect across status, diff, and publish:
 
 ```bash
-feishu-md-sync status article.md --target "$TARGET" --dialect docusaurus --profile none --format json
-feishu-md-sync diff article.md --target "$TARGET" --dialect docusaurus --profile none --format json
-feishu-md-sync publish article.md --target "$TARGET" --dialect docusaurus --profile none --format json
+feishu-md-sync status article.md --target "$TARGET" --dialect zdoc-authoring --profile zilliz --format json
+feishu-md-sync diff article.md --target "$TARGET" --dialect zdoc-authoring --profile zilliz --format json
+feishu-md-sync publish article.md --target "$TARGET" --dialect zdoc-authoring --profile zilliz --format json
 ```
 
-Agents should branch on `dialectBlockers`, `dialectDiagnostics`, and `linkResolution`. A dialect blocker means the source must be fixed; confirmation flags cannot bypass it. `linkResolution` identifies Feishu mappings, cache use, public-site fallbacks, and unresolved links without requiring the Agent to parse warning text.
+Agents should first determine whether Feishu is a presentation target, an authoring archive, or a bidirectional collaboration source. For Zdoc authoring archives, use the canonical source rather than a hidden publish view and inspect `zdocRoundTrip`; `safeToPublish: false` stops the write. Verify Procedures boundaries, Supademo block identity, and native Admonition Callouts during readback.
 
-Do not run automatic merge for `docusaurus` or `milvus-authoring`. Pull a separate review snapshot and reconcile the canonical source manually.
+Agents should also branch on `dialectBlockers`, `dialectDiagnostics`, and `linkResolution`. A dialect blocker means the source must be fixed; confirmation flags cannot bypass it. `linkResolution` identifies Feishu mappings, cache use, public-site fallbacks, and unresolved links without requiring the Agent to parse warning text.
+
+Do not run automatic merge for `zdoc-authoring` or `milvus-authoring`. Pull a separate review snapshot and reconcile the canonical source manually.
 
 ## Routing With Official Lark Skills
 

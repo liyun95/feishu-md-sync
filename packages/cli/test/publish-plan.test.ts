@@ -290,6 +290,61 @@ describe('publish plan', () => {
     expect(plan.strategy).toBe('block-patch');
     expect(plan.requiresUntrackedRemoteConfirmation).toBe(true);
   });
+
+  it('blocks publishing when the Zdoc round-trip report is unsafe', () => {
+    const zdocRoundTrip = {
+      safeToPublish: false,
+      items: [{
+        code: 'supademo-missing' as const,
+        severity: 'blocker' as const,
+        component: 'Supademo',
+        message: 'no ISV correspondence'
+      }]
+    };
+    const plan = buildPublishPlan({
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      localSource: '<Supademo id="demo" />',
+      publishDraft: '<readonly-block type="isv"></readonly-block>',
+      remoteMarkdown: '<readonly-block type="isv"></readonly-block>',
+      receipt: undefined,
+      transformWarnings: [],
+      zdocRoundTrip
+    });
+
+    expect(plan.strategy).toBe('blocked');
+    expect(plan.safeToWrite).toBe(false);
+    expect(plan.zdocRoundTrip).toEqual(zdocRoundTrip);
+    expect(plan.risks).toContain('no ISV correspondence');
+  });
+
+  it('blocks document replacement when a protected Supademo exists', () => {
+    const plan = buildPublishPlan({
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      localSource: '<Supademo id="demo" />',
+      publishDraft: '<readonly-block type="isv"></readonly-block>',
+      remoteMarkdown: '<readonly-block type="isv"></readonly-block>',
+      receipt: undefined,
+      transformWarnings: [],
+      forceDocumentReplace: true,
+      zdocRoundTrip: {
+        safeToPublish: true,
+        items: [{
+          code: 'supademo-adopt',
+          severity: 'info',
+          component: 'Supademo',
+          message: 'adopt existing ISV block',
+          remoteBlockId: 'isv1'
+        }]
+      }
+    });
+
+    expect(plan.strategy).toBe('blocked');
+    expect(plan.risks).toContain(
+      'document replacement cannot preserve protected Supademo block identity'
+    );
+  });
 });
 
 function trackedReceipt() {

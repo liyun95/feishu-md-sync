@@ -123,12 +123,12 @@ describe('sync config', () => {
     );
   });
 
-  it('loads a Docusaurus dialect and read-only Base resolver', async () => {
+  it('loads a Zdoc authoring dialect and read-only Base resolver', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-config-dialect-'));
     await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
-      defaultDialect: 'docusaurus',
+      defaultDialect: 'zdoc-authoring',
       dialects: {
-        docusaurus: {
+        'zdoc-authoring': {
           publicSiteBaseUrl: 'https://docs.zilliz.com/docs',
           linkResolver: {
             type: 'lark-base',
@@ -145,9 +145,9 @@ describe('sync config', () => {
 
     const config = await loadSyncConfig({ cwd: dir });
 
-    expect(resolveDialect({ cliDialect: undefined, config })).toBe('docusaurus');
+    expect(resolveDialect({ cliDialect: undefined, config })).toBe('zdoc-authoring');
     expect(resolveDialect({ cliDialect: 'gfm', config })).toBe('gfm');
-    expect(resolveDialectConfig(config, 'docusaurus')).toMatchObject({
+    expect(resolveDialectConfig(config, 'zdoc-authoring')).toMatchObject({
       publicSiteBaseUrl: 'https://docs.zilliz.com/docs',
       linkResolver: { type: 'lark-base', keyField: 'Slug' }
     });
@@ -157,14 +157,19 @@ describe('sync config', () => {
     expect(() => resolveDialect({
       cliDialect: 'mdx',
       config: { profiles: {}, dialects: {} }
-    })).toThrow('Invalid --dialect mdx. Expected gfm, docusaurus, or milvus-authoring.');
+    })).toThrow('Invalid --dialect mdx. Expected gfm, zdoc-authoring, or milvus-authoring.');
+
+    expect(() => resolveDialect({
+      cliDialect: 'docusaurus',
+      config: { profiles: {}, dialects: {} }
+    })).toThrow('Invalid --dialect docusaurus. Expected gfm, zdoc-authoring, or milvus-authoring.');
   });
 
   it('rejects resolver keys that imply write behavior', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-config-dialect-write-'));
     await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
       dialects: {
-        docusaurus: {
+        'zdoc-authoring': {
           linkResolver: {
             type: 'lark-base',
             baseUrl: 'https://example.feishu.cn/base/base_token',
@@ -179,7 +184,7 @@ describe('sync config', () => {
     }), 'utf8');
 
     await expect(loadSyncConfig({ cwd: dir })).rejects.toThrow(
-      'dialects.docusaurus.linkResolver.writeBack is not supported.'
+      'dialects.zdoc-authoring.linkResolver.writeBack is not supported.'
     );
   });
 });

@@ -177,6 +177,63 @@ describe('Callout publish planning', () => {
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: 'callout-correspondence-ambiguous' }));
   });
 
+  it('requires an exact managed title when adopting an untracked Callout', () => {
+    const matching = planCalloutChanges({
+      parentBlockId: 'page',
+      localCurrent: documentWithNeighbors(note(['Body'], { managedTitle: 'Billing' })),
+      remoteCurrent: documentWithNeighbors(note(['Body'], { remote: true, title: 'Billing' })),
+      tracked: false
+    });
+    const mismatched = planCalloutChanges({
+      parentBlockId: 'page',
+      localCurrent: documentWithNeighbors(note(['Body'], { managedTitle: 'Billing' })),
+      remoteCurrent: documentWithNeighbors(note(['Body'], { remote: true, title: 'Notes' })),
+      tracked: false
+    });
+
+    expect(matching.blockers).toEqual([]);
+    expect(matching.operations).toEqual([]);
+    expect(matching.requiresUntrackedRemoteConfirmation).toBe(true);
+    expect(mismatched.blockers).toContainEqual(expect.objectContaining({
+      code: 'callout-correspondence-ambiguous'
+    }));
+  });
+
+  it('plans a tracked managed-title update', () => {
+    const plan = planCalloutChanges({
+      parentBlockId: 'page',
+      localBase: document(note(['Body'], { managedTitle: 'Billing' })),
+      localCurrent: document(note(['Body'], { managedTitle: 'Costs' })),
+      remoteBase: document(note(['Body'], { remote: true, title: 'Billing' })),
+      remoteCurrent: document(note(['Body'], { remote: true, title: 'Billing' })),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([expect.objectContaining({
+      kind: 'callout-title-update',
+      calloutBlockId: 'callout',
+      remoteBlockId: 'title',
+      desiredMarkdown: 'Costs'
+    })]);
+  });
+
+  it('blocks conflicting local and remote managed-title changes', () => {
+    const plan = planCalloutChanges({
+      parentBlockId: 'page',
+      localBase: document(note(['Body'], { managedTitle: 'Billing' })),
+      localCurrent: document(note(['Body'], { managedTitle: 'Costs' })),
+      remoteBase: document(note(['Body'], { remote: true, title: 'Billing' })),
+      remoteCurrent: document(note(['Body'], { remote: true, title: 'Remote billing' })),
+      tracked: true
+    });
+
+    expect(plan.operations).toEqual([]);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'remote-callout-conflict'
+    }));
+  });
+
   it('blocks changed unsupported Callouts but preserves unchanged ones', () => {
     const base = note(['Body']);
     const changed = note(['Body changed']);
@@ -208,7 +265,14 @@ describe('Callout publish planning', () => {
 
 function note(
   bodies: string[],
-  options: { remote?: boolean; type?: CalloutType; ordinal?: number; remoteId?: string } = {}
+  options: {
+    remote?: boolean;
+    type?: CalloutType;
+    ordinal?: number;
+    remoteId?: string;
+    managedTitle?: string;
+    title?: string;
+  } = {}
 ): SemanticCallout {
   const type = options.type ?? 'note';
   const remoteId = options.remoteId ?? 'callout';
@@ -217,9 +281,12 @@ function note(
     kind: 'callout',
     locator: { sectionPath: ['Build index'], kind: 'callout', ordinal: options.ordinal ?? 0 },
     calloutType: type,
-    title: options.remote ? {
-      markdown: type === 'note' ? 'Notes' : 'Warning',
-      remoteBlockId: options.remoteId ? `${remoteId}-title` : 'title'
+    titleManaged: options.managedTitle ? true : undefined,
+    title: options.remote || options.managedTitle ? {
+      markdown: options.title ?? options.managedTitle ?? (type === 'note' ? 'Notes' : 'Warning'),
+      ...(options.remote ? {
+        remoteBlockId: options.remoteId ? `${remoteId}-title` : 'title'
+      } : {})
     } : undefined,
     children: bodies.map((markdown, ordinal) => ({
       ordinal,

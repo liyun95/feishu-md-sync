@@ -83,22 +83,48 @@ export type PublishReceiptV4 = {
   updatedAt: string;
 };
 
-export type PublishReceipt = PublishReceiptV1 | PublishReceiptV2 | PublishReceiptV3 | PublishReceiptV4;
+export type ProtectedResourceReceiptEntry = {
+  kind: 'supademo';
+  componentId: string;
+  blockId: string;
+  remoteShape: string;
+  remoteToken?: string;
+  sectionPath: string[];
+  ordinal: number;
+  previousFingerprint?: string;
+  nextFingerprint?: string;
+};
+
+export type PublishReceiptV5 = Omit<PublishReceiptV4, 'version'> & {
+  version: 5;
+  protectedResources: ProtectedResourceReceiptEntry[];
+};
+
+export type PublishReceipt = PublishReceiptV1 | PublishReceiptV2 | PublishReceiptV3 | PublishReceiptV4 | PublishReceiptV5;
 
 export function whiteboardEntries(receipt: PublishReceipt | undefined): WhiteboardReceiptEntry[] {
-  return receipt?.version === 3 || receipt?.version === 4 ? receipt.whiteboards : [];
+  return receipt?.version === 3 || receipt?.version === 4 || receipt?.version === 5
+    ? receipt.whiteboards
+    : [];
+}
+
+export function protectedResourceEntries(
+  receipt: PublishReceipt | undefined
+): ProtectedResourceReceiptEntry[] {
+  return receipt?.version === 5 ? receipt.protectedResources : [];
 }
 
 export function receiptDialect(receipt: PublishReceipt): DialectName {
-  return receipt.version === 4 ? receipt.dialect : 'gfm';
+  return receipt.version === 4 || receipt.version === 5 ? receipt.dialect : 'gfm';
 }
 
 export function hasRemoteSemanticSnapshot(
   receipt: PublishReceipt | undefined
-): receipt is PublishReceiptV2 | PublishReceiptV3 | (PublishReceiptV4 & { remoteSemanticSnapshot: SnapshotReference }) {
+): receipt is PublishReceiptV2 | PublishReceiptV3 |
+  ((PublishReceiptV4 | PublishReceiptV5) & { remoteSemanticSnapshot: SnapshotReference }) {
   return Boolean(
     receipt &&
-    (receipt.version === 2 || receipt.version === 3 || receipt.version === 4) &&
+    (receipt.version === 2 || receipt.version === 3 || receipt.version === 4 || receipt.version === 5) &&
     receipt.remoteSemanticSnapshot
   );
 }

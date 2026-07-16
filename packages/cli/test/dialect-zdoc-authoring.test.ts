@@ -4,11 +4,11 @@ import { preprocessDialect } from '../src/dialects/preprocess.js';
 import type { DocumentLinkResolver } from '../src/link-resolvers/types.js';
 
 const fixturePath = new URL(
-  './fixtures/dialects/docusaurus/hugging-face.md',
+  './fixtures/dialects/zdoc-authoring/hugging-face.md',
   import.meta.url
 );
 
-describe('docusaurus dialect', () => {
+describe('zdoc-authoring dialect', () => {
   it('removes frontmatter and explicit anchors while preserving assets', async () => {
     const result = await preprocessFixture({ resolver: undefined });
 
@@ -35,16 +35,25 @@ describe('docusaurus dialect', () => {
     );
   });
 
-  it('blocks custom titles, Tabs, imports, and unknown admonitions', async () => {
-    for (const markdown of [
-      ':::note[Custom]\nBody\n:::\n',
-      '<Tabs>\n<TabItem value="python">Body</TabItem>\n</Tabs>\n',
-      "import Tabs from '@theme/Tabs';\n",
-      ':::tip\nBody\n:::\n'
-    ]) {
+  it('blocks custom directive titles, Tabs, and unknown directives', async () => {
+    for (const [markdown, code] of [
+      [':::note[Custom]\nBody\n:::\n', 'unsupported-zdoc-admonition'],
+      ['<Tabs>\n<TabItem value="python">Body</TabItem>\n</Tabs>\n', 'unsupported-mdx-component'],
+      [':::tip\nBody\n:::\n', 'unsupported-zdoc-admonition']
+    ] as const) {
       const result = await preprocessText(markdown);
       expect(result.blockers).toHaveLength(1);
+      expect(result.blockers[0]?.code).toBe(code);
     }
+  });
+
+  it('removes Zdoc import statements before unsupported-component checks', async () => {
+    const result = await preprocessText(
+      "import Procedures from '@site/src/components/Procedures';\n\n# Article\n"
+    );
+
+    expect(result.markdown).toBe('\n# Article\n');
+    expect(result.blockers).toEqual([]);
   });
 
   it('uses a resolver and removes a source heading fragment from a Feishu link', async () => {
@@ -78,7 +87,7 @@ async function preprocessText(
     cwd: '/workspace',
     sourcePath: '/workspace/article.md',
     markdown,
-    dialect: 'docusaurus',
+    dialect: 'zdoc-authoring',
     config: { publicSiteBaseUrl: 'https://docs.zilliz.com/docs' },
     linkResolver: resolver
   });

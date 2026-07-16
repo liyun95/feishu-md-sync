@@ -39,6 +39,18 @@ First paragraph with **bold**, *italic*, \`code\`, and [docs](https://milvus.io)
     )).toMatchObject({ calloutType: 'warning', unsupported: [] });
   });
 
+  it('parses a Zdoc-managed Callout title', () => {
+    expect(parseHtmlCallout(
+      '<div class="alert note" data-fms-callout-title="Billing">\n\nBody.\n\n</div>',
+      locator()
+    )).toMatchObject({
+      calloutType: 'note',
+      titleManaged: true,
+      title: { markdown: 'Billing' },
+      unsupported: []
+    });
+  });
+
   it.each([
     ['fenced code blocks are unsupported', '```python\nprint(1)\n```'],
     ['tables are unsupported', '| A | B |\n|---|---|\n| 1 | 2 |'],

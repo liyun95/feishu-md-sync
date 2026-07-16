@@ -24,7 +24,7 @@ describe('publish context', () => {
       cwd,
       sourcePath,
       localSource: '---\nslug: /demo\n---\n\nMilvus links to [Next](./next).\n',
-      dialect: 'docusaurus' as const,
+      dialect: 'zdoc-authoring' as const,
       dialectConfig: {
         publicSiteBaseUrl: 'https://docs.example.com/docs',
         linkResolver: {
@@ -59,7 +59,7 @@ describe('publish context', () => {
       cwd,
       file: tabsFile,
       target: { kind: 'docx', token: 'doc' },
-      dialect: 'docusaurus',
+      dialect: 'zdoc-authoring',
       dialectConfig: {},
       profile: 'none',
       write: false,
