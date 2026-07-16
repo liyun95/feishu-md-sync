@@ -32,8 +32,8 @@ The selected `lark-cli` identity must have access to the target document, Drive 
 Install the Skill from the same release tag as the CLI:
 
 ```bash
-npm install --global feishu-md-sync@0.3.0
-npx skills add 'liyun95/feishu-md-sync#v0.3.0' --skill feishu-md-sync --global --yes
+npm install --global feishu-md-sync@0.4.0
+npx skills add 'liyun95/feishu-md-sync#v0.4.0' --skill feishu-md-sync --global --yes
 ```
 
 Then ask an Agent:

@@ -21,7 +21,12 @@ assert(typeof frontmatter.description === 'string' && frontmatter.description.le
 assert(frontmatter.description.startsWith('Use when '), 'Skill description must start with "Use when"');
 assert(!skill.includes('TODO'), 'Skill contains a TODO placeholder');
 assert(!skill.includes('md2feishu'), 'Skill must not reference the retired md2feishu CLI');
-assert(skill.includes('>=0.3.0 <0.4.0'), 'Skill must declare the v0.3 compatibility range');
+assert(skill.includes('>=0.4.0 <0.5.0'), 'Skill must declare the v0.4 compatibility range');
+assert(skill.includes('dialectBlockers'), 'Skill must branch on dialect blockers');
+assert(skill.includes('dialectDiagnostics'), 'Skill must branch on dialect diagnostics');
+assert(skill.includes('linkResolution'), 'Skill must inspect link resolution');
+assert(skill.includes('dialect-suggestion'), 'Skill must not silently switch suggested dialects');
+assert(skill.includes('public-site fallback'), 'Skill must pause before public-site fallback writes');
 assert(skill.includes('returned `document.url` or `document.documentId`'), 'Skill must verify creates against the returned document target');
 assert(skill.includes('final Whiteboard-aware status'), 'Skill must preserve --sync-whiteboards during final verification');
 assert(!agentUsage.includes('symlinked development copy'), 'Agent usage must not describe a copied local Skill as symlinked');
@@ -47,6 +52,7 @@ const publishHelp = runCli(['publish', '--help']);
 assertHelpOptions('publish', publishHelp, [
   '--target',
   '--profile',
+  '--dialect',
   '--write',
   '--create',
   '--strategy',
@@ -59,16 +65,16 @@ assertHelpOptions('publish', publishHelp, [
 ]);
 
 const statusHelp = runCli(['status', '--help']);
-assertHelpOptions('status', statusHelp, ['--target', '--profile', '--sync-whiteboards', '--format']);
+assertHelpOptions('status', statusHelp, ['--target', '--profile', '--dialect', '--sync-whiteboards', '--format']);
 
 const diffHelp = runCli(['diff', '--help']);
-assertHelpOptions('diff', diffHelp, ['--target', '--profile', '--sync-whiteboards', '--format']);
+assertHelpOptions('diff', diffHelp, ['--target', '--profile', '--dialect', '--sync-whiteboards', '--format']);
 
 const pullHelp = runCli(['pull', '--help']);
 assertHelpOptions('pull', pullHelp, ['--target', '--output', '--profile', '--overwrite', '--format']);
 
 const mergeHelp = runCli(['merge', '--help']);
-assertHelpOptions('merge', mergeHelp, ['--target', '--profile', '--check', '--abort', '--format']);
+assertHelpOptions('merge', mergeHelp, ['--target', '--profile', '--dialect', '--check', '--abort', '--format']);
 
 const doctorAuthHelp = runCli(['doctor', 'auth', '--help']);
 assertHelpOptions('doctor auth', doctorAuthHelp, ['--format']);
@@ -76,12 +82,12 @@ assertHelpOptions('doctor auth', doctorAuthHelp, ['--format']);
 const major = Number(versionMatch[1]);
 const minor = Number(versionMatch[2]);
 const prerelease = versionMatch[4];
-const stableCompatible = major === 0 && minor === 3 && prerelease === undefined;
-const eligibleDevelopmentVersion = major === 0 && (minor < 3 || (minor === 3 && prerelease !== undefined));
+const stableCompatible = major === 0 && minor === 4 && prerelease === undefined;
+const eligibleDevelopmentVersion = major === 0 && (minor < 4 || (minor === 4 && prerelease !== undefined));
 if (!stableCompatible) {
   assert(
     allowDevelopmentVersion && eligibleDevelopmentVersion,
-    `CLI ${version} is outside the Skill range >=0.3.0 <0.4.0; update the Skill compatibility range before validating a later release line`
+    `CLI ${version} is outside the Skill range >=0.4.0 <0.5.0; update the Skill compatibility range before validating a later release line`
   );
   process.stdout.write(`Agent Skill valid for development CLI ${version}; required command contract is present.\n`);
 } else {
