@@ -9,13 +9,23 @@ Dialect describes source syntax; profile describes product-content transformatio
 | Source | Dialect | Profile |
 | --- | --- | --- |
 | Ordinary Markdown | `gfm` | `none` |
-| Zilliz Cloud Docusaurus source | `docusaurus` | `none` |
+| Canonical Zdoc source | `zdoc-authoring` | `zilliz` |
 | Milvus canonical source | `milvus-authoring` | `none` |
 | Milvus source published with Zilliz wording | `milvus-authoring` | `zilliz` |
 
-`gfm` is the default dialect. Docusaurus supports frontmatter removal, explicit heading-anchor removal, plain `:::note` and `:::warning` conversion, and relative document-link resolution. Milvus authoring supports ancestor `Variables.json` files, frontmatter overrides, recursive <code>&#123;&#123;fragments/...&#125;&#125;</code>, and <code>&#123;&#123;var.path&#125;&#125;</code> expansion. Code fences and indented code keep template-looking text literal.
+`gfm` is the default dialect. Zdoc authoring uses the canonical source, removes frontmatter/imports/heading anchors, converts supported Admonitions to native Callouts, preserves Procedures tokens, and maps Supademo components to protected existing ISV blocks. Milvus authoring supports ancestor `Variables.json` files, frontmatter overrides, recursive <code>&#123;&#123;fragments/...&#125;&#125;</code>, and <code>&#123;&#123;var.path&#125;&#125;</code> expansion.
 
-Unknown MDX components, imports, expressions, custom Docusaurus admonitions, missing Milvus variables or fragments, fragment cycles, and unknown Milvus directives fail closed. The entire publish is blocked; supported text, table, Code, Callout, image, or Whiteboard scopes are not partially written around the blocker.
+Unknown body components, invalid Procedures pairs, unsupported Admonitions, missing Supademo correspondence, missing Milvus variables or fragments, fragment cycles, and unknown Milvus directives fail closed.
+
+| Zdoc construct | Feishu representation | Round-trip policy |
+| --- | --- | --- |
+| Frontmatter/imports/heading anchors | Omitted | Informational `metadata-ignored`; no reconstruction promise |
+| `Admonition` | Native Callout | Type, title, and body are managed |
+| `Procedures` | Literal paragraph tokens | Exact canonical boundary is planned and verified |
+| `Supademo` | Existing add-on/ISV block | Adopt and protect identity; creation is not supported |
+| Unknown body component | None | Blocking `component-unsupported` report item |
+
+`zdocRoundTrip` is the machine-readable preflight and readback report. Its item codes separate safe transforms from blockers; automation should use `safeToPublish` and structured codes rather than message text.
 
 ## Supported Blocks
 
@@ -136,7 +146,7 @@ The CLI does not create SVGs, render SVG to PNG, or upload PNG bytes. Ordinary i
 - PNG rendering and upload are outside the Whiteboard sync feature.
 - Paragraph wrapping may not round-trip byte-for-byte.
 - The merge algorithm is deterministic and line-based, not semantic Markdown merge.
-- `pull` does not reconstruct Docusaurus frontmatter, anchors, Milvus variables, or fragments.
-- Automatic merge is blocked for `docusaurus` and `milvus-authoring` sources.
+- `pull` does not reconstruct Zdoc frontmatter/imports/anchors, or Milvus variables and fragments.
+- Automatic merge is blocked for `zdoc-authoring` and `milvus-authoring` sources.
 - Direct SVG references do not initialize editable Whiteboards; Whiteboard sync still uses the PNG/SVG sibling convention and `--sync-whiteboards`.
 - Complex nested-list canonicalization remains outside the scoped publish feature.

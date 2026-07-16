@@ -75,21 +75,21 @@ Dialect and profile solve different problems. A dialect describes the syntax in 
 | Source | Dialect | Profile |
 | --- | --- | --- |
 | Ordinary Markdown | `gfm` | `none` |
-| Zilliz Cloud Docusaurus source | `docusaurus` | `none` |
+| Canonical Zdoc source | `zdoc-authoring` | `zilliz` |
 | Milvus canonical source | `milvus-authoring` | `none` |
 | Milvus source published with Zilliz wording | `milvus-authoring` | `zilliz` |
 
 `gfm` and profile `none` are the defaults. Select another source dialect with `--dialect` or `defaultDialect` in `feishu-md-sync.config.json`:
 
 ```bash
-feishu-md-sync status article.md --target "$TARGET" --dialect docusaurus --profile none
-feishu-md-sync diff article.md --target "$TARGET" --dialect docusaurus --profile none
-feishu-md-sync publish article.md --target "$TARGET" --dialect docusaurus --profile none
+feishu-md-sync status article.md --target "$TARGET" --dialect zdoc-authoring --profile zilliz
+feishu-md-sync diff article.md --target "$TARGET" --dialect zdoc-authoring --profile zilliz
+feishu-md-sync publish article.md --target "$TARGET" --dialect zdoc-authoring --profile zilliz
 ```
 
-Docusaurus preprocessing removes frontmatter and explicit heading anchors, converts standard `:::note` and `:::warning` admonitions, and can resolve relative document links through a configured read-only Feishu Base. Milvus authoring preprocessing expands `Variables.json` values and recursive `fragments/` references. Unsupported MDX components, custom admonitions, missing variables, fragment cycles, and unknown Milvus directives block the complete publish before any remote write.
+Zdoc authoring preprocessing removes non-reconstructable metadata, converts supported Admonitions to native Callouts, preserves Procedures boundaries, and adopts existing Supademo ISV blocks without rewriting them. `zdocRoundTrip.safeToPublish` blocks unknown components or unsafe resource correspondence. Milvus authoring preprocessing expands `Variables.json` values and recursive `fragments/` references.
 
-`pull` remains a separate Feishu-safe snapshot. Automatic merge is available only for `gfm`; Docusaurus and Milvus authoring sources must be reconciled manually because Feishu cannot reconstruct their source-only syntax.
+`pull` remains a separate Feishu-safe snapshot. Automatic merge is available only for `gfm`; Zdoc and Milvus authoring sources must be reconciled manually because Feishu cannot reconstruct all source-only syntax.
 
 Preview creating a new document under a Drive folder or Wiki parent:
 

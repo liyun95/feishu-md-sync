@@ -59,7 +59,9 @@ describe('CLI help surface', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--dialect <dialect>');
-    expect(result.stdout).toContain('gfm | docusaurus | milvus-authoring');
+    expect(result.stdout.replace(/\s+/g, ' ')).toContain(
+      'gfm | zdoc-authoring | milvus-authoring'
+    );
   });
 
   it('does not add source dialects to pull', async () => {

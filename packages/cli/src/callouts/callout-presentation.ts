@@ -11,6 +11,13 @@ export function calloutTypeForTitle(title: string, config: CalloutConfig): Callo
   return undefined;
 }
 
+export function calloutTypeForEmojiId(emojiId: string | undefined): CalloutType | undefined {
+  if (!emojiId) return undefined;
+  if (emojiId === '📘' || emojiId === 'blue_book') return 'note';
+  if (emojiId === '❗' || emojiId === 'heavy_exclamation_mark') return 'warning';
+  return undefined;
+}
+
 function normalizeTitle(value: string): string {
   return normalizeWhitespace(value).toLocaleLowerCase('en-US');
 }

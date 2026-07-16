@@ -16,7 +16,7 @@ describe('runMerge', () => {
       cwd,
       filePath: file,
       target: { kind: 'docx', token: 'doc' },
-      dialect: 'docusaurus',
+      dialect: 'zdoc-authoring',
       profile: 'none',
       mode: 'check',
       adapter: {

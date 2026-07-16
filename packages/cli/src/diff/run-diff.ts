@@ -26,6 +26,7 @@ import { summarizeCodeBlockChanges, type CodeBlockChangeSummary } from '../code-
 import type { CodeBlockConfig } from '../code-blocks/code-language.js';
 import type { DialectDiagnostic, DialectName } from '../dialects/types.js';
 import type { DialectWorkspaceConfig, LinkResolutionSummary } from '../link-resolvers/types.js';
+import type { ZdocRoundTripReport } from '../zdoc/types.js';
 
 export type RunDiffResult = {
   mode: 'read-only';
@@ -55,6 +56,7 @@ export type RunDiffResult = {
     warnings: string[];
   };
   status: PublishStatusResult;
+  zdocRoundTrip?: ZdocRoundTripReport;
 };
 
 export async function runDiff(input: {
@@ -80,7 +82,9 @@ export async function runDiff(input: {
     blockers: [],
     warnings: []
   };
+  let zdocRoundTrip: ZdocRoundTripReport | undefined;
   if (context.publishContext.dialectBlockers.length === 0 && (input.syncWhiteboards ||
+    context.dialect === 'zdoc-authoring' ||
     context.localSource.includes('<table') ||
     /(^|\n) {0,3}(?:`{3,}|~{3,})/.test(context.localSource) ||
     /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
@@ -102,11 +106,13 @@ export async function runDiff(input: {
         codeBlocks: input.codeBlocks
       });
       const patch = analysis.plan.scopedPatch;
+      zdocRoundTrip = analysis.plan.zdocRoundTrip;
       const whiteboardPlan = analysis.plan.whiteboards;
       const whiteboards = whiteboardPlan?.assets ?? [];
       status = {
         ...statusWithWhiteboards(status, whiteboards),
-        whiteboardBlockers: whiteboardPlan?.blockers ?? []
+        whiteboardBlockers: whiteboardPlan?.blockers ?? [],
+        ...(zdocRoundTrip ? { zdocRoundTrip } : {})
       };
       if (patch) status = { ...status, scopeSummary: patch.scopeSummary };
       scoped = {
@@ -146,7 +152,10 @@ export async function runDiff(input: {
     scoped.tables.length > 0 || scoped.whiteboards.some((asset) => asset.state !== 'clean') || scoped.blockers.length > 0;
   const hasDiff = context.remoteCanonical !== context.publishDraftCanonical ||
     hasScopedDiff ||
-    context.publishContext.dialectBlockers.length > 0;
+    context.publishContext.dialectBlockers.length > 0 ||
+    Boolean(zdocRoundTrip && (!zdocRoundTrip.safeToPublish || zdocRoundTrip.items.some((item) =>
+      item.code === 'procedures-create' || item.code === 'procedures-move'
+    )));
   return {
     mode: 'read-only',
     target: input.target,
@@ -165,7 +174,8 @@ export async function runDiff(input: {
     hasDiff,
     diff: hasDiff ? unifiedDiff('remote-current', 'publish-draft', context.remoteCanonical, context.publishDraftCanonical) : '',
     scoped,
-    status
+    status,
+    ...(zdocRoundTrip ? { zdocRoundTrip } : {})
   };
 }
 
@@ -186,6 +196,9 @@ export function diffSummaryLines(result: RunDiffResult): string[] {
   }
   for (const warning of result.dialectWarnings) {
     lines.push(`warning[${warning.code}]: ${warning.message}${diagnosticLocation(warning)}`);
+  }
+  for (const item of result.zdocRoundTrip?.items ?? []) {
+    lines.push(`zdoc[${item.severity}][${item.code}]: ${item.message}`);
   }
 
   if (!result.hasDiff) {

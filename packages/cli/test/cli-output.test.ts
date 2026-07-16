@@ -119,7 +119,7 @@ describe('CLI pretty output', () => {
       mode: 'dry-run',
       plan: {
         strategy: 'blocked',
-        dialect: 'docusaurus',
+        dialect: 'zdoc-authoring',
         linkResolution: {
           resolvedToFeishu: 3,
           resolvedToPublicSite: 1,
@@ -127,7 +127,7 @@ describe('CLI pretty output', () => {
         },
         dialectBlockers: [{
           code: 'unsupported-mdx-component',
-          message: 'Unsupported Docusaurus component <Tabs>.',
+          message: 'Unsupported Zdoc component <Tabs>.',
           location: { file: 'article.md', line: 42 }
         }],
         dialectWarnings: [{
@@ -138,9 +138,45 @@ describe('CLI pretty output', () => {
       }
     }, 'pretty');
 
-    expect(lines).toContain('dialect: docusaurus');
+    expect(lines).toContain('dialect: zdoc-authoring');
     expect(lines).toContain('links: 3 Feishu, 1 public fallback, 0 unresolved');
-    expect(lines).toContain('blocker[unsupported-mdx-component]: Unsupported Docusaurus component <Tabs>. at article.md:42');
+    expect(lines).toContain('blocker[unsupported-mdx-component]: Unsupported Zdoc component <Tabs>. at article.md:42');
     expect(lines).toContain('warning[link-resolver-stale-cache]: Using cached Feishu Base mappings.');
+  });
+
+  it('prints structured Zdoc round-trip items', () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((value?: unknown) => {
+      lines.push(String(value));
+    });
+
+    printFormatted({
+      mode: 'dry-run',
+      plan: {
+        strategy: 'blocked',
+        warnings: [],
+        zdocRoundTrip: {
+          safeToPublish: false,
+          items: [{
+            code: 'procedures-move',
+            severity: 'info',
+            component: 'Procedures',
+            message: 'move <Procedures> to the canonical boundary'
+          }, {
+            code: 'supademo-ambiguous',
+            severity: 'blocker',
+            component: 'Supademo',
+            message: 'no unique ISV correspondence'
+          }]
+        }
+      }
+    }, 'pretty');
+
+    expect(lines).toContain(
+      'zdoc[info][procedures-move]: move <Procedures> to the canonical boundary'
+    );
+    expect(lines).toContain(
+      'zdoc[blocker][supademo-ambiguous]: no unique ISV correspondence'
+    );
   });
 });

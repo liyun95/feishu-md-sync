@@ -55,6 +55,7 @@ function prettyLines(value: unknown): string[] | undefined {
     }
     appendCalloutSummaryLines(lines, record.callouts);
     appendCodeSummaryLines(lines, record.codeBlocks);
+    appendZdocRoundTripLines(lines, record.zdocRoundTrip);
     for (const value of Array.isArray(record.calloutBlockers) ? record.calloutBlockers : []) {
       const blocker = asRecord(value);
       if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.message)}`);
@@ -83,6 +84,7 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
   ];
   appendDialectDiagnostics(lines, plan.dialectBlockers, 'blocker');
   appendDialectDiagnostics(lines, plan.dialectWarnings, 'warning');
+  appendZdocRoundTripLines(lines, plan.zdocRoundTrip);
   const scoped = asRecord(plan.scopedPatch);
   const operations = Array.isArray(scoped?.operations) ? scoped.operations : [];
   for (const value of operations) {
@@ -139,6 +141,17 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     lines.push(`requires: --confirm-remote-whiteboard-overwrite ${String(assetKey)}`);
   }
   return lines;
+}
+
+function appendZdocRoundTripLines(lines: string[], value: unknown): void {
+  const report = asRecord(value);
+  for (const itemValue of Array.isArray(report?.items) ? report.items : []) {
+    const item = asRecord(itemValue);
+    if (!item) continue;
+    lines.push(
+      `zdoc[${String(item.severity)}][${String(item.code)}]: ${String(item.message)}`
+    );
+  }
 }
 
 function appendDialectDiagnostics(

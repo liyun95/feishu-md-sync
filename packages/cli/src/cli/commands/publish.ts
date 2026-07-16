@@ -36,7 +36,7 @@ export function registerPublishCommand(program: Command): void {
     .argument('<markdown-file>', 'local Markdown file')
     .requiredOption('--target <url-or-token>', 'existing Feishu/Lark docx URL or token')
     .option('--profile <profile>', 'publish profile: zilliz | milvus | none')
-    .option('--dialect <dialect>', 'source dialect: gfm | docusaurus | milvus-authoring')
+    .option('--dialect <dialect>', 'source dialect: gfm | zdoc-authoring | milvus-authoring')
     .option('--write', 'write to Feishu/Lark; omitted means dry-run')
     .option('--create', 'create a new document under a folder or wiki target')
     .option('--strategy <strategy>', 'write strategy: auto | block-patch | document-replace', 'auto')

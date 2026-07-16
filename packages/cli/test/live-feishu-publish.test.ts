@@ -112,7 +112,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     const targetIdentity = parseFeishuTarget(target);
     const cwd = new URL('..', import.meta.url).pathname;
     const adapter = new LarkCliAdapter();
-    const documentId = await adapter.resolveDocumentId({ target: targetIdentity });
+    const documentId = await retryRateLimited(() => {
+      return adapter.resolveDocumentId({ target: targetIdentity });
+    });
     const dir = await mkdtemp(join(tmpdir(), 'fms-live-callout-'));
     const file = join(dir, 'doc.md');
     const pulled = join(dir, 'pulled.md');
@@ -147,7 +149,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       assertCliSuccess(adopt, 'adopt Callout baseline');
       expect(adopt.stdout).toContain('"strategy": "no-op"');
 
-      const adopted = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      const adopted = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      }));
       const note = adopted.find((callout) => callout.title === 'Notes');
       const warning = adopted.find((callout) => callout.title === 'Warning');
       expect(note).toMatchObject({ body: ['Note first.', 'Note second.'] });
@@ -165,7 +169,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
         '--confirm-collaboration-risk', '--format', 'json'
       ]);
       assertCliSuccess(bodyUpdate, 'publish Callout body update');
-      const afterBodyUpdate = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      const afterBodyUpdate = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      }));
       expect(afterBodyUpdate.find((callout) => callout.title === 'Notes')).toMatchObject({
         blockId: note.blockId,
         title: 'Notes',
@@ -188,7 +194,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
         '--confirm-collaboration-risk', '--format', 'json'
       ]);
       assertCliSuccess(disjoint, 'publish disjoint Callout edits');
-      const afterDisjoint = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      const afterDisjoint = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      }));
       expect(afterDisjoint.find((callout) => callout.title === 'Notes')).toMatchObject({
         blockId: note.blockId,
         emoji: note.emoji,
@@ -257,7 +265,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       ]);
       assertCliSuccess(deletion, 'delete tracked Callout');
       expect(deletion.stdout).toContain('"kind": "callout-delete"');
-      const afterDeletion = findCallouts(await adapter.fetchDocBlocks({ doc: documentId }));
+      const afterDeletion = findCallouts(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      }));
       expect(afterDeletion.some((callout) => callout.blockId === note.blockId)).toBe(false);
       expect(afterDeletion).toHaveLength(1);
       expect(afterDeletion[0]).toMatchObject({
@@ -286,7 +296,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     const targetIdentity = parseFeishuTarget(target);
     const cwd = new URL('..', import.meta.url).pathname;
     const adapter = new LarkCliAdapter();
-    const documentId = await adapter.resolveDocumentId({ target: targetIdentity });
+    const documentId = await retryRateLimited(() => {
+      return adapter.resolveDocumentId({ target: targetIdentity });
+    });
     const dir = await mkdtemp(join(tmpdir(), 'fms-live-code-'));
     const file = join(dir, 'doc.md');
 
@@ -416,7 +428,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     const targetIdentity = parseFeishuTarget(target);
     const cwd = new URL('..', import.meta.url).pathname;
     const adapter = new LarkCliAdapter();
-    const documentId = await adapter.resolveDocumentId({ target: targetIdentity });
+    const documentId = await retryRateLimited(() => {
+      return adapter.resolveDocumentId({ target: targetIdentity });
+    });
     const dir = await mkdtemp(join(tmpdir(), 'fms-live-whiteboard-'));
     const file = join(dir, 'doc.md');
     const png = join(dir, 'architecture.png');
@@ -453,7 +467,9 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
       assertCliSuccess(create, 'create Whiteboard from image');
       expect(create.stdout).toContain('"kind": "whiteboard-create"');
 
-      const createdWhiteboard = findWhiteboard(await adapter.fetchDocBlocks({ doc: documentId }));
+      const createdWhiteboard = findWhiteboard(await retryRateLimited(() => {
+        return adapter.fetchDocBlocks({ doc: documentId });
+      }));
       const createdReceipt = await readWhiteboardReceipt({ cwd, target: targetIdentity });
       expect(createdReceipt.whiteboards).toContainEqual(expect.objectContaining({
         assetKey,
@@ -704,8 +720,10 @@ async function findCodeBlocks(adapter: LarkCliAdapter, documentId: string): Prom
   language?: string;
   caption?: string;
 }>> {
-  const blocks = await adapter.fetchDocBlocks({ doc: documentId });
-  const metadata = new Map((await adapter.fetchDocCodeMetadata({ doc: documentId })).map((code) => [code.blockId, code]));
+  const blocks = await retryRateLimited(() => adapter.fetchDocBlocks({ doc: documentId }));
+  const metadata = new Map((await retryRateLimited(() => {
+    return adapter.fetchDocCodeMetadata({ doc: documentId });
+  })).map((code) => [code.blockId, code]));
   return blocks.blocks.flatMap((block) => {
     if (block.block_type !== 14 || !block.block_id) return [];
     const code = block.code;

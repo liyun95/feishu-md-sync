@@ -187,6 +187,46 @@ describe('runStatus', () => {
     expect(result.publishDraftCanonicalHash).toBe(result.remoteCanonicalHash);
   });
 
+  it('treats Feishu short table separators as matching canonical Markdown', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-table-separator-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(file, '| A | B |\n| --- | --- |\n| x | y |', 'utf8');
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter: statusAdapter('| A | B |\n|-|-|\n| x | y |')
+    });
+
+    expect(result.contentMatchesRemote).toBe(true);
+  });
+
+  it('exposes the Zdoc round-trip report', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-zdoc-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(
+      file,
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      adapter: proceduresReadAdapter()
+    });
+
+    expect(result.zdocRoundTrip).toMatchObject({ safeToPublish: true });
+    expect(result.zdocRoundTrip?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'procedures-create' })
+    ]));
+  });
+
   it('reports an unsupported Code language as a scoped blocker instead of failing status', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-status-code-blocker-'));
     const file = join(dir, 'doc.md');
@@ -429,6 +469,26 @@ function statusAdapter(markdown: string): FeishuAdapter & { blockFetches: number
       return { blocks: [] };
     },
     replaceDocument: async () => {},
+    createDocument: async () => ({ documentId: 'created' })
+  };
+}
+
+function proceduresReadAdapter(): FeishuAdapter {
+  return {
+    fetchDocMarkdown: async () => ({ markdown: 'Intro.\n\n1. Step.\n\nAfter.' }),
+    fetchDocBlocks: async () => ({ blocks: [
+      { block_id: 'doc_token', block_type: 1, children: ['intro', 'step', 'after'] },
+      statusTextBlock('intro', 'Intro.'),
+      {
+        block_id: 'step',
+        block_type: 13,
+        ordered: { elements: [{ text_run: { content: 'Step.', text_element_style: {} } }] }
+      },
+      statusTextBlock('after', 'After.')
+    ] }),
+    replaceDocument: async () => {},
+    insertBlocksAfter: async () => {},
+    deleteBlocks: async () => {},
     createDocument: async () => ({ documentId: 'created' })
   };
 }

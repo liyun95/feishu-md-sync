@@ -1,5 +1,5 @@
 ---
-title: Hugging Face
+title: 'Hugging Face'
 slug: /hugging-face
 ---
 

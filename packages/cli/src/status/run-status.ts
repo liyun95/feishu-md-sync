@@ -29,6 +29,8 @@ import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
 import { summarizeCodeBlockChanges, type CodeBlockChangeSummary } from '../code-blocks/code-summary.js';
 import { DEFAULT_CODE_BLOCK_CONFIG, type CodeBlockConfig } from '../code-blocks/code-language.js';
 import { canonicalizeFencedCodeLanguages } from '../code-blocks/code-markdown.js';
+import { canonicalizeMarkdownSemantics } from '../semantic/markdown-equivalence.js';
+import type { ZdocRoundTripReport } from '../zdoc/types.js';
 
 export type PublishStatusState = 'untracked' | 'clean' | 'local-changed' | 'remote-changed' | 'diverged';
 
@@ -80,6 +82,7 @@ export type PublishStatusResult = {
     action: PublishStatusRecommendationAction;
     reason: string;
   };
+  zdocRoundTrip?: ZdocRoundTripReport;
 };
 
 export type PublishStatusContext = {
@@ -142,6 +145,7 @@ export async function runStatus(input: {
       : withWhiteboards.recommendation;
     return {
       ...withWhiteboards,
+      ...(analysis.plan.zdocRoundTrip ? { zdocRoundTrip: analysis.plan.zdocRoundTrip } : {}),
       whiteboardBlockers: analysis.plan.whiteboards?.blockers ?? [],
       callouts: summarizeCalloutChanges({
         operations: analysis.plan.scopedPatch?.operations ?? [],
@@ -212,8 +216,12 @@ export async function loadPublishStatusContext(input: {
     typeHints
   });
   const remote = { ...remoteRaw, markdown: normalized.markdown };
-  const publishDraftCanonical = canonicalMarkdown(canonicalizeCodeLanguagesForComparison(publishContext.publishDraft, codeBlocks));
-  const remoteCanonical = canonicalMarkdown(canonicalizeCodeLanguagesForComparison(remote.markdown, codeBlocks));
+  const publishDraftCanonical = canonicalMarkdown(canonicalizeMarkdownSemantics(
+    canonicalizeCodeLanguagesForComparison(publishContext.publishDraft, codeBlocks)
+  ));
+  const remoteCanonical = canonicalMarkdown(canonicalizeMarkdownSemantics(
+    canonicalizeCodeLanguagesForComparison(remote.markdown, codeBlocks)
+  ));
 
   return {
     cwd: input.cwd,
@@ -325,7 +333,8 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
 }
 
 function shouldAnalyzeScopes(context: PublishStatusContext): boolean {
-  return context.localSource.includes('<table') ||
+  return context.dialect === 'zdoc-authoring' ||
+    context.localSource.includes('<table') ||
     /(^|\n) {0,3}(?:`{3,}|~{3,})/.test(context.localSource) ||
     /<div\s+class=["'][^"']*\balert\b[^"']*\b(?:note|warning)\b/i.test(context.localSource) ||
     hasRemoteSemanticSnapshot(context.receipt);

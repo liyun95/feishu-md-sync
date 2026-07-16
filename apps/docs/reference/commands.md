@@ -52,7 +52,7 @@ Options:
 
 - `--target <url-or-token>` - existing docx URL/token, Wiki node URL/token, or Drive folder token.
 - `--profile <profile>` - `zilliz`, `milvus`, or `none`.
-- `--dialect <dialect>` - `gfm`, `docusaurus`, or `milvus-authoring`.
+- `--dialect <dialect>` - `gfm`, `zdoc-authoring`, or `milvus-authoring`.
 - `--write` - write to Feishu. Omitted means dry-run.
 - `--create` - create a new document under a Drive folder or Wiki parent target.
 - `--strategy <strategy>` - `auto`, `block-patch`, or `document-replace`. Defaults to `auto`.
@@ -136,10 +136,12 @@ Use `--profile milvus` mainly when pulling or merging Feishu content back into M
 Omit `--dialect` to use `defaultDialect` from workspace configuration, then `gfm` as the final fallback. Dialect preprocessing runs before profile transformation.
 
 - `gfm` preserves ordinary Markdown and warns when source-only syntax looks like another dialect.
-- `docusaurus` removes frontmatter and explicit heading anchors, converts standard note/warning admonitions, and resolves supported relative document links.
+- `zdoc-authoring` inventories Zdoc components, preserves Procedures boundaries, converts supported Admonitions, and protects adopted Supademo ISV blocks.
 - `milvus-authoring` expands `Variables.json`, frontmatter overrides, and recursive `fragments/` references before publishing.
 
 Unsupported source constructs produce `dialectBlockers` and block the complete plan, including create and document-replace strategies.
+
+For `zdoc-authoring`, status, diff, and publish plans also expose `zdocRoundTrip`. Unknown components, invalid Procedures boundaries, or missing, ambiguous, changed, or locally removed tracked Supademo resources set `safeToPublish: false` and block writes.
 
 ## `pull`
 
@@ -176,7 +178,7 @@ Options:
 
 - `--target <url-or-token>` - existing docx or Wiki node URL/token.
 - `--profile <profile>` - `zilliz`, `milvus`, or `none`.
-- `--dialect <dialect>` - `gfm`, `docusaurus`, or `milvus-authoring`.
+- `--dialect <dialect>` - `gfm`, `zdoc-authoring`, or `milvus-authoring`.
 - `--sync-whiteboards` - include per-asset Whiteboard state using local SVG and receipt baselines.
 - `--format <format>` - `pretty` or `json`.
 
@@ -198,7 +200,7 @@ Options:
 
 - `--target <url-or-token>` - existing docx or Wiki node URL/token.
 - `--profile <profile>` - `zilliz`, `milvus`, or `none`.
-- `--dialect <dialect>` - `gfm`, `docusaurus`, or `milvus-authoring`.
+- `--dialect <dialect>` - `gfm`, `zdoc-authoring`, or `milvus-authoring`.
 - `--sync-whiteboards` - include per-asset Whiteboard state and planned action.
 - `--format <format>` - `pretty` or `json`.
 
@@ -234,7 +236,7 @@ Options:
 - `--remote <file>` - use an existing remote snapshot Markdown file.
 - `--base <file>` - explicit three-way merge base.
 - `--profile <profile>` - local authoring profile: `milvus`, `zilliz`, or `none`.
-- `--dialect <dialect>` - `gfm`, `docusaurus`, or `milvus-authoring`.
+- `--dialect <dialect>` - `gfm`, `zdoc-authoring`, or `milvus-authoring`.
 - `--check` - report whether merge would be clean, merged, or conflicted without writing.
 - `--dry-run` - print merge metadata without writing.
 - `--abort` - restore the local file from the previous merge state.
@@ -253,7 +255,7 @@ remote content
 
 Remote Callouts are canonicalized before the line merge. As with `pull`, target-based merge fails closed when an untracked custom presentation title cannot be recognized from workspace configuration.
 
-Automatic merge is supported only for `gfm`. With `docusaurus` or `milvus-authoring`, `merge` returns `state: blocked` before fetching remote content or modifying the local source. `merge --abort` remains available regardless of the configured dialect.
+Automatic merge is supported only for `gfm`. With `zdoc-authoring` or `milvus-authoring`, `merge` returns `state: blocked` before fetching remote content or modifying the local source. `merge --abort` remains available regardless of the configured dialect.
 
 ## `doctor auth`
 

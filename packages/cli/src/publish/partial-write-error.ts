@@ -10,7 +10,14 @@ export type PublishWriteOperationSummary = {
     | 'code-reconcile-update'
     | 'code-reconcile-move'
     | 'code-reconcile-delete'
-    | 'code-readback';
+    | 'code-readback'
+    | 'authoring-token-readback'
+    | 'callout-readback'
+    | 'scoped-readback'
+    | 'document-create'
+    | 'created-document-planning'
+    | 'created-document-readback'
+    | 'receipt-write';
   locator?: SemanticLocator;
   assetKey?: string;
 };
@@ -20,11 +27,13 @@ export class PartialWriteError extends Error {
   readonly failedOperation: PublishWriteOperationSummary;
   readonly pendingOperations: PublishWriteOperationSummary[];
   readonly receiptWritten = false;
+  readonly document?: { documentId: string; url?: string };
 
   constructor(input: {
     completedOperations: PublishWriteOperationSummary[];
     failedOperation: PublishWriteOperationSummary;
     pendingOperations?: PublishWriteOperationSummary[];
+    document?: { documentId: string; url?: string };
     cause: unknown;
   }) {
     const causeMessage = input.cause instanceof Error ? input.cause.message : String(input.cause);
@@ -33,5 +42,6 @@ export class PartialWriteError extends Error {
     this.completedOperations = input.completedOperations;
     this.failedOperation = input.failedOperation;
     this.pendingOperations = input.pendingOperations ?? [];
+    this.document = input.document;
   }
 }

@@ -14,6 +14,18 @@ Use `feishu-md-sync` as the execution engine. This Skill supplies routing, seque
 - Use `$lark-shared` for login, user/bot identity, missing scopes, app configuration, and permission repair.
 - Keep diagram authoring and SVG generation outside this Skill. Synchronize an existing PNG/SVG pair only when the user explicitly requests Whiteboard sync.
 
+## Discover The Destination Role
+
+Before selecting a source or command, determine the Feishu destination role:
+
+- A presentation target is read-only output; channel transforms may omit source-only metadata.
+- An authoring archive will be read again by a downstream publishing workflow; required authoring tokens and resource identity must survive.
+- A bidirectional collaboration source may contain valid remote edits; use receipt-aware status, pull, and manual reconciliation rather than assuming local overwrite authority.
+
+When the canonical Zdoc source is published to a Feishu authoring archive, use `--dialect zdoc-authoring` with that canonical source. Do not create or maintain a hidden publish view as a second source of truth.
+
+Inspect `zdocRoundTrip` in status, diff, and publish dry-run output. Stop when `safeToPublish` is false, a Procedures boundary is invalid, or a Supademo resource is missing, ambiguous, changed, or locally removed after adoption. A proposed Supademo adoption records and protects the existing ISV block; it does not recreate or replace it. A Procedures move requires review of the affected block ID and collaboration-risk confirmation.
+
 ## Resolve The CLI
 
 Treat the executable as one path, never as a shell fragment.
@@ -57,7 +69,7 @@ Then invoke `$lark-shared` when available. Preserve the reported subtype, hint, 
 
 ## Resolve The Source Dialect
 
-When the user explicitly supplies `gfm`, `docusaurus`, or `milvus-authoring`, use that dialect. Otherwise, run the first status without `--dialect`, read `result.dialect`, and then reuse that selected dialect explicitly for diff, publish, merge, and final status. This preserves the workspace default or the CLI's `gfm` fallback without agent-side guessing.
+When the user explicitly supplies `gfm`, `zdoc-authoring`, or `milvus-authoring`, use that dialect. Otherwise, run the first status without `--dialect`, read `result.dialect`, and then reuse that selected dialect explicitly for diff, publish, merge, and final status. This preserves the workspace default or the CLI's `gfm` fallback without agent-side guessing.
 
 When `dialectDiagnostics` contains `dialect-suggestion`, explain the suggested dialect and ask the user before selecting it. Never infer and silently switch dialects from file contents, repository names, or warning text.
 
@@ -141,7 +153,7 @@ Do not replace canonical local Markdown by default. Use `--overwrite` only for a
 
 ## Merge Remote Changes
 
-Automatic merge is available only for `gfm`. Docusaurus and Milvus authoring sources contain source-only syntax that Feishu cannot reconstruct; for those dialects, pull an independent snapshot and reconcile the source manually.
+Automatic merge is available only for `gfm`. Zdoc and Milvus authoring sources contain source-only syntax that Feishu cannot reconstruct completely; for `zdoc-authoring` and `milvus-authoring`, pull an independent snapshot and reconcile the canonical source manually.
 
 Check before writing the local file:
 
@@ -187,3 +199,5 @@ After every remote write, run:
 ```
 
 Use the returned document target after `--create`, and preserve `--sync-whiteboards` after a Whiteboard write. Report success only when the write passed readback verification and the final status matches the intended synchronized state. Explain any residual state, warnings, or unrelated remote changes. When rendered document structure changed, ask the user to inspect the Feishu document visually.
+
+For `zdoc-authoring`, readback verification must also confirm the canonical Procedures boundaries, the recorded Supademo block IDs and shapes, and native Admonition Callout titles. Manual block surgery outside the CLI leaves the remote untracked until an explicit CLI adoption writes a receipt.

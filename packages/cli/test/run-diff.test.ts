@@ -82,6 +82,49 @@ describe('runDiff', () => {
     expect(result.diff).toBe('');
   });
 
+  it('exposes Procedures changes through the Zdoc round-trip report', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-zdoc-'));
+    const file = join(dir, 'doc.md');
+    await writeFile(
+      file,
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: 'Intro.\n\n1. Step.\n\nAfter.' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['intro', 'step', 'after'] },
+        textBlock('intro', 'Intro.'),
+        {
+          block_id: 'step',
+          block_type: 13,
+          ordered: { elements: [{ text_run: { content: 'Step.', text_element_style: {} } }] }
+        },
+        textBlock('after', 'After.')
+      ] }),
+      replaceDocument: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      adapter
+    });
+
+    expect(result.zdocRoundTrip?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'procedures-create' })
+    ]));
+    expect(diffSummaryLines(result)).toContain(
+      'zdoc[info][procedures-create]: create <Procedures> at the canonical boundary'
+    );
+  });
+
   it('still returns a diff when status is diverged', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-diff-'));
     const file = join(dir, 'doc.md');

@@ -1,5 +1,5 @@
 import type { DialectWorkspaceConfig, DocumentLinkResolver } from '../link-resolvers/types.js';
-import { preprocessDocusaurus } from './docusaurus.js';
+import { preprocessZdocAuthoring } from './zdoc-authoring.js';
 import { preprocessGfm } from './gfm.js';
 import { preprocessMilvusAuthoring } from './milvus-authoring.js';
 import type { DialectName, DialectResult } from './types.js';
@@ -15,8 +15,8 @@ export async function preprocessDialect(input: {
   if (input.dialect === 'gfm') {
     return preprocessGfm({ sourcePath: input.sourcePath, markdown: input.markdown });
   }
-  if (input.dialect === 'docusaurus') {
-    return preprocessDocusaurus({
+  if (input.dialect === 'zdoc-authoring') {
+    return preprocessZdocAuthoring({
       sourcePath: input.sourcePath,
       markdown: input.markdown,
       config: input.config,

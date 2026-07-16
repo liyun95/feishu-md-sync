@@ -1,0 +1,20 @@
+[
+  {
+    "block_id": "XViWdTKb4ouwFJxEeepcSNQInLf",
+    "block_type": 40,
+    "parent_id": "doc_token",
+    "add_ons": {
+      "component_type_id": "blk_682093ba9580c002363b9dc3",
+      "record": "{\"id\":\"cmj9f3j6u0johf6zpk5kdyx3u\",\"isShowcase\":false}"
+    }
+  },
+  {
+    "block_id": "RYSAdAA9XojPNBxd0fqcZt42nEg",
+    "block_type": 40,
+    "parent_id": "doc_token",
+    "add_ons": {
+      "component_type_id": "blk_682093ba9580c002363b9dc3",
+      "record": "{\"id\":\"cmjcjqyk3017cw10i8dbm2ret\",\"isShowcase\":true}"
+    }
+  }
+]

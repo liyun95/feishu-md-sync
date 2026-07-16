@@ -27,6 +27,15 @@ assert(skill.includes('dialectDiagnostics'), 'Skill must branch on dialect diagn
 assert(skill.includes('linkResolution'), 'Skill must inspect link resolution');
 assert(skill.includes('dialect-suggestion'), 'Skill must not silently switch suggested dialects');
 assert(skill.includes('public-site fallback'), 'Skill must pause before public-site fallback writes');
+assert(skill.includes('zdoc-authoring'), 'Skill must route canonical Zdoc sources through zdoc-authoring');
+const removedZdocDialect = ['docu', 'saurus'].join('');
+assert(!skill.includes(removedZdocDialect), 'Skill must not reference the removed legacy Zdoc dialect');
+assert(skill.includes('canonical Zdoc source'), 'Skill must require the canonical source instead of a hidden publish view');
+assert(skill.includes('destination role'), 'Skill must discover whether Feishu is a presentation target or authoring archive');
+assert(skill.includes('zdocRoundTrip'), 'Skill must inspect the structured Zdoc round-trip report');
+assert(skill.includes('Procedures'), 'Skill must verify Procedures boundaries');
+assert(skill.includes('Supademo'), 'Skill must verify protected Supademo resources');
+assert(skill.includes('readback'), 'Skill must require Zdoc readback verification');
 assert(skill.includes('returned `document.url` or `document.documentId`'), 'Skill must verify creates against the returned document target');
 assert(skill.includes('final Whiteboard-aware status'), 'Skill must preserve --sync-whiteboards during final verification');
 assert(!agentUsage.includes('symlinked development copy'), 'Agent usage must not describe a copied local Skill as symlinked');

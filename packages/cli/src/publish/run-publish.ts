@@ -12,6 +12,7 @@ import type {
 import { renderCalloutXml } from '../callouts/callout-xml.js';
 import { applyTrackedCalloutTypes, calloutTypeHints } from '../callouts/callout-baseline.js';
 import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
+import { calloutTypeForEmojiId } from '../callouts/callout-presentation.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { canonicalMarkdown } from '../core/markdown-canonical.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
@@ -24,12 +25,14 @@ import {
   readLocalBaseSnapshot,
   readPublishBaseSnapshot,
   readPublishReceipt,
+  protectedResourceEntries,
   whiteboardEntries,
   writeLocalBaseSnapshot,
   writePublishBaseSnapshot,
   writePublishReceipt,
   type PublishReceipt,
   type PublishReceiptTarget,
+  type ProtectedResourceReceiptEntry,
   type WhiteboardReceiptEntry
 } from '../receipts/publish-receipt.js';
 import { readRemoteSemanticSnapshot, writeRemoteSemanticSnapshot } from '../receipts/semantic-snapshot.js';
@@ -61,6 +64,10 @@ import { planScopedPatch, type ScopedPatchOperation, type ScopedPatchPlan } from
 import { diffCorrespondingTable, findCorrespondingRemoteTable } from './table-diff.js';
 import { renderTableXml } from './table-xml.js';
 import { resolvePublishTitle } from './title.js';
+import type { ZdocComponentInventory } from '../zdoc/types.js';
+import { buildZdocRoundTripReport } from '../zdoc/round-trip-report.js';
+import { planProtectedResources } from '../zdoc/protected-resource-plan.js';
+import { planProceduresChanges } from '../zdoc/procedures-plan.js';
 
 export type RunPublishResult = {
   mode: 'dry-run' | 'write';
@@ -86,6 +93,7 @@ export type PublishAnalysis = {
   remoteCurrent?: SemanticDocument;
   whiteboardPlan?: WhiteboardPlan;
   whiteboardAssets?: LocalWhiteboardAsset[];
+  protectedResources?: ReturnType<typeof planProtectedResources>;
 };
 
 export async function runPublish(input: {
@@ -198,7 +206,9 @@ export async function runPublish(input: {
       remoteMarkdown: analysis.remote.markdown,
       remoteRevision: analysis.remote.revision,
       remoteSemantic: analysis.remoteCurrent,
-      whiteboards: whiteboardEntries(analysis.receipt)
+      whiteboards: whiteboardEntries(analysis.receipt),
+      protectedResources: analysis.protectedResources?.entries ??
+        protectedResourceEntries(analysis.receipt)
     };
     await recordPublishReceiptV4(receiptInput);
     return { mode: 'write', plan };
@@ -243,6 +253,21 @@ export async function runPublish(input: {
       await fetchRemoteSemantic(input.adapter, analysis.resolvedDocumentId, callouts),
       analysis.remoteCurrent
     );
+    let protectedResources = analysis.protectedResources?.entries ??
+      protectedResourceEntries(analysis.receipt);
+    if (analysis.protectedResources) {
+      const verified = planProtectedResources({
+        local: analysis.localCurrent,
+        remote: afterSemantic,
+        receiptEntries: analysis.protectedResources.entries
+      });
+      if (verified.blockers.length > 0) {
+        throw new Error(
+          `Protected Supademo readback failed: ${verified.blockers.map(({ message }) => message).join('; ')}`
+        );
+      }
+      protectedResources = verified.entries;
+    }
     const afterCanonical = canonicalizeRemoteCalloutMarkdown({
       markdown: afterMarkdownRaw.markdown,
       config: callouts,
@@ -261,7 +286,8 @@ export async function runPublish(input: {
       remoteSemantic: afterSemantic,
       whiteboards: input.syncWhiteboards
         ? whiteboardResult.entries
-        : whiteboardEntries(analysis.receipt)
+        : whiteboardEntries(analysis.receipt),
+      protectedResources
     };
     await recordPublishReceiptV4(receiptInput);
     return { mode: 'write', plan };
@@ -457,19 +483,40 @@ export async function analyzeExistingPublish(input: {
   const page = findPageBlock(remoteBlocks.blocks, resolvedDocumentId);
   const remoteCodeMetadata = await fetchRemoteCodeMetadata(input.adapter, resolvedDocumentId, remoteBlocks.blocks);
   const remoteBaseHint = await trackedRemoteSemanticBaseline({ cwd: input.cwd, receipt });
-  const remoteCurrent = applyTrackedCalloutTypes(
+  const remoteCurrentRaw = applyTrackedCalloutTypes(
     remoteSemanticDocument(remoteBlocks.blocks, resolvedDocumentId, callouts, remoteCodeMetadata),
     remoteBaseHint
   );
+  const codeBlocks = input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG;
+  const localDraftDocument = localSemanticDocument(
+    transform.markdown,
+    codeBlocks,
+    publishContext.zdoc?.inventory
+  );
+  const remoteCurrent = applyManagedCalloutMetadata(remoteCurrentRaw, localDraftDocument);
+  const localCalloutHints = localDraftDocument.nodes
+    .filter((node) => node.kind === 'callout')
+    .map((node) => node.titleManaged ? node.calloutType : undefined);
+  const remoteCalloutHints = calloutTypeHints(remoteCurrent);
   const normalized = canonicalizeRemoteCalloutMarkdown({
     markdown: remoteRaw.markdown,
     config: callouts,
-    typeHints: calloutTypeHints(remoteCurrent)
+    typeHints: remoteCalloutHints.map((hint, index) => hint ?? localCalloutHints[index])
   });
   const remote = { ...remoteRaw, markdown: normalized.markdown };
   const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
-  const codeBlocks = input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG;
-  const localCurrent = localSemanticDocument(blockPatchDraft, codeBlocks);
+  const localCurrent = localSemanticDocument(
+    blockPatchDraft,
+    codeBlocks,
+    publishContext.zdoc?.inventory
+  );
+  const protectedResources = publishContext.zdoc
+    ? planProtectedResources({
+        local: localCurrent,
+        remote: remoteCurrent,
+        receiptEntries: protectedResourceEntries(receipt)
+      })
+    : undefined;
   const baseline = await loadSemanticBaselines({
     cwd: input.cwd,
     receipt,
@@ -477,7 +524,8 @@ export async function analyzeExistingPublish(input: {
     currentLocalSource: localSource,
     currentRemoteMarkdown: remote.markdown,
     currentRemoteSemantic: remoteCurrent,
-    codeBlocks
+    codeBlocks,
+    zdoc: publishContext.zdoc?.inventory
   });
   const scopedPatch = baseline.blocker
     ? blockedScopedPatch(baseline.blocker)
@@ -487,8 +535,12 @@ export async function analyzeExistingPublish(input: {
       localCurrent,
       remoteBase: baseline.remoteBase,
       remoteCurrent,
-      tracked: Boolean(receipt)
+      tracked: Boolean(receipt),
+      supportsBlockMove: Boolean(input.adapter.moveBlocksAfter)
     });
+  const zdocRoundTrip = publishContext.zdoc
+    ? buildZdocReport(publishContext.zdoc.inventory, scopedPatch, protectedResources)
+    : undefined;
   const whiteboardAnalysis: { plan?: WhiteboardPlan; assets?: LocalWhiteboardAsset[] } = input.syncWhiteboards
     ? await analyzeWhiteboards({
       file: input.file,
@@ -510,7 +562,8 @@ export async function analyzeExistingPublish(input: {
     receipt,
     transformWarnings: [...transform.warnings, ...normalized.warnings],
     scopedPatch,
-    whiteboards: whiteboardAnalysis.plan
+    whiteboards: whiteboardAnalysis.plan,
+    zdocRoundTrip
   });
   return {
     plan,
@@ -524,7 +577,8 @@ export async function analyzeExistingPublish(input: {
     localCurrent,
     remoteCurrent,
     whiteboardPlan: whiteboardAnalysis.plan,
-    whiteboardAssets: whiteboardAnalysis.assets
+    whiteboardAssets: whiteboardAnalysis.assets,
+    protectedResources
   };
 }
 
@@ -617,11 +671,19 @@ async function createPublish(input: {
   write: boolean;
   adapter: FeishuAdapter;
   publishContext: PublishContext;
+  callouts?: CalloutConfig;
+  codeBlocks?: CodeBlockConfig;
 }): Promise<RunPublishResult> {
   const title = resolvePublishTitle({
     sourcePath: input.file,
     markdown: input.publishContext.publishDraft
   }).title;
+  const createProcedures = input.publishContext.zdoc
+    ? planCreateProcedures({
+        publishContext: input.publishContext,
+        codeBlocks: input.codeBlocks
+      })
+    : undefined;
   const plan = buildPublishPlan({
     target: input.target,
     profile: input.profile,
@@ -631,9 +693,21 @@ async function createPublish(input: {
     remoteMarkdown: '',
     receipt: undefined,
     transformWarnings: input.publishContext.transformWarnings,
-    createDocument: true
+    createDocument: true,
+    zdocRoundTrip: input.publishContext.zdoc
+      ? buildZdocRoundTripReport({
+          inventory: input.publishContext.zdoc.inventory,
+          procedures: createProcedures ?? { operations: [], blockers: [] }
+        })
+      : undefined
   });
   if (!input.write) return { mode: 'dry-run', plan };
+  if (plan.zdocRoundTrip?.safeToPublish === false) {
+    throw new Error(`Scoped publish is blocked: ${plan.risks.join('; ')}`);
+  }
+  if (input.publishContext.zdoc && !input.adapter.fetchDocBlocks) {
+    throw new Error('Zdoc document creation requires Docx block reads for round-trip verification.');
+  }
 
   const created = await input.adapter.createDocument({
     title,
@@ -641,22 +715,141 @@ async function createPublish(input: {
     parentToken: input.target.token
   });
   const createdTarget = { kind: 'docx' as const, token: created.documentId };
-  const after = await input.adapter.fetchDocMarkdown({ doc: created.documentId });
-  if (input.adapter.fetchDocBlocks) {
-    const semantic = await fetchRemoteSemantic(input.adapter, created.documentId);
-    await recordPublishReceiptV4({
-      cwd: input.cwd,
-      target: createdTarget,
-      resolvedDocumentId: created.documentId,
-      profile: input.profile,
-      publishContext: input.publishContext,
-      publishDraft: input.publishContext.publishDraft,
-      remoteMarkdown: after.markdown,
-      remoteRevision: after.revision ?? created.revision,
-      remoteSemantic: semantic,
-      whiteboards: []
-    });
+  const createdDocument = {
+    documentId: created.documentId,
+    ...(created.url ? { url: created.url } : {})
+  };
+  if (input.publishContext.zdoc) {
+    let initial: PublishAnalysis;
+    let operations: ScopedPatchOperation[];
+    try {
+      initial = await analyzeExistingPublish({
+        cwd: input.cwd,
+        file: input.file,
+        target: createdTarget,
+        profile: input.profile,
+        dialect: input.publishContext.dialect,
+        strategy: 'auto',
+        adapter: input.adapter,
+        publishContext: input.publishContext,
+        callouts: input.callouts,
+        codeBlocks: input.codeBlocks
+      });
+      if (initial.plan.zdocRoundTrip?.safeToPublish === false ||
+        !initial.plan.scopedPatch?.safeToWrite) {
+        throw new Error(`Created Zdoc failed round-trip planning: ${initial.plan.risks.join('; ')}`);
+      }
+      operations = initial.plan.scopedPatch.operations;
+      const unsupportedOperations = operations.filter((operation) => {
+        return operation.kind !== 'callout-create' && operation.kind !== 'authoring-token-create';
+      });
+      if (unsupportedOperations.length > 0) {
+        throw new Error(
+          `Created Zdoc requires unsupported post-create mutations: ${JSON.stringify(unsupportedOperations)}`
+        );
+      }
+    } catch (error) {
+      throw new PartialWriteError({
+        completedOperations: [{ kind: 'document-create' }],
+        failedOperation: { kind: 'created-document-planning' },
+        document: createdDocument,
+        cause: error
+      });
+    }
+    let completedOperations: PublishWriteOperationSummary[] = [];
+    if (operations.length > 0) {
+      try {
+        completedOperations = await applyScopedOperations({
+          adapter: input.adapter,
+          doc: created.documentId,
+          operations,
+          callouts: input.callouts ?? DEFAULT_CALLOUT_CONFIG
+        });
+      } catch (error) {
+        if (error instanceof PartialWriteError) {
+          throw new PartialWriteError({
+            completedOperations: [
+              { kind: 'document-create' },
+              ...error.completedOperations
+            ],
+            failedOperation: error.failedOperation,
+            pendingOperations: error.pendingOperations,
+            document: createdDocument,
+            cause: error
+          });
+        }
+        throw new PartialWriteError({
+          completedOperations: [{ kind: 'document-create' }],
+          failedOperation: operations[0]
+            ? summarizeScopedOperation(operations[0])
+            : { kind: 'created-document-planning' },
+          pendingOperations: operations.slice(1).map(summarizeScopedOperation),
+          document: createdDocument,
+          cause: error
+        });
+      }
+    }
+    let verified: PublishAnalysis;
+    try {
+      verified = await analyzeExistingPublish({
+        cwd: input.cwd,
+        file: input.file,
+        target: createdTarget,
+        profile: input.profile,
+        dialect: input.publishContext.dialect,
+        strategy: 'auto',
+        adapter: input.adapter,
+        publishContext: input.publishContext,
+        callouts: input.callouts,
+        codeBlocks: input.codeBlocks
+      });
+      if (verified.plan.zdocRoundTrip?.safeToPublish !== true ||
+        !verified.plan.scopedPatch?.safeToWrite ||
+        verified.plan.scopedPatch.operations.length > 0 ||
+        !verified.remoteCurrent) {
+        throw new Error('Created Zdoc failed final round-trip verification.');
+      }
+    } catch (error) {
+      throw new PartialWriteError({
+        completedOperations: [
+          { kind: 'document-create' },
+          ...completedOperations
+        ],
+        failedOperation: { kind: 'created-document-readback' },
+        document: createdDocument,
+        cause: error
+      });
+    }
+    try {
+      await recordPublishReceiptV4({
+        cwd: input.cwd,
+        target: createdTarget,
+        resolvedDocumentId: created.documentId,
+        profile: input.profile,
+        publishContext: input.publishContext,
+        publishDraft: input.publishContext.publishDraft,
+        remoteMarkdown: verified.remote.markdown,
+        remoteRevision: verified.remote.revision ?? created.revision,
+        remoteSemantic: verified.remoteCurrent,
+        whiteboards: [],
+        protectedResources: verified.protectedResources?.entries
+      });
+    } catch (error) {
+      throw new PartialWriteError({
+        completedOperations: [
+          { kind: 'document-create' },
+          ...completedOperations
+        ],
+        failedOperation: { kind: 'receipt-write' },
+        document: createdDocument,
+        cause: error
+      });
+    }
   } else {
+    const after = await input.adapter.fetchDocMarkdown({ doc: created.documentId });
+    const semantic = input.adapter.fetchDocBlocks
+      ? await fetchRemoteSemantic(input.adapter, created.documentId)
+      : undefined;
     await recordPublishReceiptV4({
       cwd: input.cwd,
       target: createdTarget,
@@ -666,6 +859,7 @@ async function createPublish(input: {
       publishDraft: input.publishContext.publishDraft,
       remoteMarkdown: after.markdown,
       remoteRevision: after.revision ?? created.revision,
+      ...(semantic ? { remoteSemantic: semantic } : {}),
       whiteboards: []
     });
   }
@@ -676,6 +870,30 @@ async function createPublish(input: {
   };
 }
 
+function planCreateProcedures(input: {
+  publishContext: PublishContext;
+  codeBlocks?: CodeBlockConfig;
+}) {
+  const inventory = input.publishContext.zdoc?.inventory;
+  if (!inventory) return { operations: [], blockers: [] };
+  const local = localSemanticDocument(
+    input.publishContext.publishDraft,
+    input.codeBlocks,
+    inventory
+  );
+  const remote: SemanticDocument = {
+    nodes: local.nodes.flatMap((node, index) => {
+      if (node.kind === 'authoring-token' || node.kind === 'protected-resource') return [];
+      return [{ ...node, remoteBlockId: `create-preflight-${index}` }];
+    })
+  };
+  return planProceduresChanges({
+    parentBlockId: 'create-preflight-document',
+    local,
+    remote
+  });
+}
+
 async function loadSemanticBaselines(input: {
   cwd: string;
   receipt: PublishReceipt | undefined;
@@ -684,10 +902,11 @@ async function loadSemanticBaselines(input: {
   currentRemoteMarkdown: string;
   currentRemoteSemantic: SemanticDocument;
   codeBlocks: CodeBlockConfig;
+  zdoc?: ZdocComponentInventory;
 }): Promise<{ localBase?: SemanticDocument; remoteBase?: SemanticDocument; blocker?: string }> {
   if (!input.receipt) return {};
 
-  if (input.receipt.version === 4) {
+  if (input.receipt.version === 4 || input.receipt.version === 5) {
     const publishBase = await readPublishBaseSnapshot({
       cwd: input.cwd,
       snapshot: input.receipt.publishBaseSnapshot
@@ -695,15 +914,17 @@ async function loadSemanticBaselines(input: {
     if (!publishBase) return { blocker: 'publish draft baseline unavailable' };
     const localBase = localSemanticDocument(
       markdownBodyForBlockPatch(publishBase, input.currentRemoteMarkdown),
-      input.codeBlocks
+      input.codeBlocks,
+      input.zdoc
     );
-    const remoteBase = input.receipt.remoteSemanticSnapshot
+    const remoteBaseRaw = input.receipt.remoteSemanticSnapshot
       ? await readRemoteSemanticSnapshot({
           cwd: input.cwd,
           snapshot: input.receipt.remoteSemanticSnapshot
         })
       : undefined;
-    if (!remoteBase) return { blocker: 'remote semantic baseline unavailable' };
+    if (!remoteBaseRaw) return { blocker: 'remote semantic baseline unavailable' };
+    const remoteBase = applyManagedCalloutMetadata(remoteBaseRaw, localBase);
     return { localBase, remoteBase };
   }
 
@@ -718,14 +939,16 @@ async function loadSemanticBaselines(input: {
   const localBaseDraft = applyPublishTransformForProfile(localBaseSource, input.profile).markdown;
   const localBase = localSemanticDocument(
     markdownBodyForBlockPatch(localBaseDraft, input.currentRemoteMarkdown),
-    input.codeBlocks
+    input.codeBlocks,
+    input.zdoc
   );
   if (input.receipt.version === 2 || input.receipt.version === 3) {
-    const remoteBase = await readRemoteSemanticSnapshot({
+    const remoteBaseRaw = await readRemoteSemanticSnapshot({
       cwd: input.cwd,
       snapshot: input.receipt.remoteSemanticSnapshot
     });
-    if (!remoteBase) return { blocker: 'remote semantic baseline unavailable' };
+    if (!remoteBaseRaw) return { blocker: 'remote semantic baseline unavailable' };
+    const remoteBase = applyManagedCalloutMetadata(remoteBaseRaw, localBase);
     return { localBase, remoteBase };
   }
 
@@ -763,6 +986,30 @@ function blockedScopedPatch(message: string): ScopedPatchPlan {
   };
 }
 
+function buildZdocReport(
+  inventory: ZdocComponentInventory,
+  scopedPatch: ScopedPatchPlan,
+  protectedResources?: ReturnType<typeof planProtectedResources>
+) {
+  return buildZdocRoundTripReport({
+    inventory,
+    procedures: {
+      operations: scopedPatch.operations.filter((operation) =>
+        operation.kind === 'authoring-token-create' ||
+        operation.kind === 'authoring-token-move' ||
+        operation.kind === 'authoring-token-delete'
+      ),
+      blockers: scopedPatch.blockers.flatMap((blocker) => {
+        if (blocker.code !== 'procedures-anchor-missing' &&
+          blocker.code !== 'procedures-boundary-ambiguous' &&
+          blocker.code !== 'procedures-move-unsupported') return [];
+        return [{ code: blocker.code, message: blocker.message }];
+      })
+    },
+    protectedResources
+  });
+}
+
 export function partitionScopedOperations(operations: ScopedPatchOperation[]): {
   updates: ScopedPatchOperation[];
   creates: ScopedPatchOperation[];
@@ -778,15 +1025,17 @@ export function partitionScopedOperations(operations: ScopedPatchOperation[]): {
     deletes: [] as ScopedPatchOperation[]
   };
   for (const operation of operations) {
-    if (operation.kind === 'update' || operation.kind === 'callout-child-update' || operation.kind === 'code-update') {
+    if (operation.kind === 'update' || operation.kind === 'callout-title-update' ||
+      operation.kind === 'callout-child-update' || operation.kind === 'code-update') {
       result.updates.push(operation);
     } else if (operation.kind === 'create' || operation.kind === 'callout-create' ||
-      operation.kind === 'callout-child-create' || operation.kind === 'code-create') {
+      operation.kind === 'callout-child-create' || operation.kind === 'code-create' ||
+      operation.kind === 'authoring-token-create') {
       result.creates.push(operation);
     } else if (operation.kind === 'code-section-reconcile') {
       result.moves.push({ ...operation, phase: 'place' });
       result.deletes.push({ ...operation, phase: 'delete' });
-    } else if (operation.kind === 'code-move') {
+    } else if (operation.kind === 'code-move' || operation.kind === 'authoring-token-move') {
       result.moves.push(operation);
     } else if (operation.kind === 'table-replace') result.tables.push(operation);
     else result.deletes.push(operation);
@@ -809,7 +1058,7 @@ async function applyScopedOperations(input: {
   for (let index = 0; index < input.operations.length; index += 1) {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
-    let codeMutationCompleted = false;
+    let mutationCompleted = false;
     try {
       if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
         operation.kind === 'code-move' || operation.kind === 'code-delete' ||
@@ -819,7 +1068,6 @@ async function applyScopedOperations(input: {
           doc: input.doc,
           operation: operation as CodeBlockOperation
         });
-        codeMutationCompleted = true;
       } else if (operation.kind === 'update') {
         await input.adapter.replaceBlock({
           doc: input.doc,
@@ -857,6 +1105,13 @@ async function applyScopedOperations(input: {
           content: operation.desiredMarkdown,
           format: 'markdown'
         });
+      } else if (operation.kind === 'callout-title-update') {
+        await input.adapter.replaceBlock({
+          doc: input.doc,
+          blockId: operation.remoteBlockId,
+          content: operation.desiredMarkdown,
+          format: 'markdown'
+        });
       } else if (operation.kind === 'callout-child-create') {
         await input.adapter.insertBlocksAfter({
           doc: input.doc,
@@ -866,10 +1121,32 @@ async function applyScopedOperations(input: {
         });
       } else if (operation.kind === 'callout-child-delete' || operation.kind === 'callout-delete') {
         await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
+      } else if (operation.kind === 'authoring-token-create') {
+        await input.adapter.insertBlocksAfter({
+          doc: input.doc,
+          blockId: operation.insertAfterBlockId,
+          content: renderAuthoringTokenXml(operation.token),
+          format: 'xml'
+        });
+      } else if (operation.kind === 'authoring-token-move') {
+        if (!input.adapter.moveBlocksAfter) {
+          throw new Error('Configured Feishu adapter does not support Procedures token movement.');
+        }
+        await input.adapter.moveBlocksAfter({
+          doc: input.doc,
+          blockId: operation.insertAfterBlockId,
+          sourceBlockIds: [operation.remoteBlockId]
+        });
+      } else if (operation.kind === 'authoring-token-delete') {
+        await input.adapter.deleteBlocks({
+          doc: input.doc,
+          blockIds: [operation.remoteBlockId]
+        });
       } else {
         const unsupported: never = operation;
         throw new Error(`Unsupported scoped operation: ${String(unsupported)}`);
       }
+      mutationCompleted = true;
       if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
         operation.kind === 'code-move' || operation.kind === 'code-delete' ||
         operation.kind === 'code-section-reconcile') {
@@ -889,13 +1166,14 @@ async function applyScopedOperations(input: {
             ...input.operations.slice(index + 1).map(summarizeScopedOperation),
             ...(input.pendingAfter ?? [])
           ],
+          document: error.document,
           cause: error
         });
       }
-      if (codeMutationCompleted) {
+      if (mutationCompleted) {
         throw new PartialWriteError({
           completedOperations: [...completed, summary],
-          failedOperation: { kind: 'code-readback', locator: operation.locator },
+          failedOperation: readbackFailureSummary(operation),
           pendingOperations: [
             ...input.operations.slice(index + 1).map(summarizeScopedOperation),
             ...(input.pendingAfter ?? [])
@@ -916,6 +1194,24 @@ async function applyScopedOperations(input: {
     }
   }
   return completed;
+}
+
+function readbackFailureSummary(operation: ScopedPatchOperation): PublishWriteOperationSummary {
+  if (operation.kind === 'authoring-token-create' || operation.kind === 'authoring-token-move' ||
+    operation.kind === 'authoring-token-delete') {
+    return { kind: 'authoring-token-readback', locator: operation.locator };
+  }
+  if (operation.kind === 'callout-create' || operation.kind === 'callout-title-update' ||
+    operation.kind === 'callout-child-update' || operation.kind === 'callout-child-create' ||
+    operation.kind === 'callout-child-delete' || operation.kind === 'callout-delete') {
+    return { kind: 'callout-readback', locator: operation.locator };
+  }
+  if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
+    operation.kind === 'code-move' || operation.kind === 'code-delete' ||
+    operation.kind === 'code-section-reconcile') {
+    return { kind: 'code-readback', locator: operation.locator };
+  }
+  return { kind: 'scoped-readback', locator: operation.locator };
 }
 
 async function applyCodeOperation(input: {
@@ -1466,11 +1762,14 @@ function verifyOperation(
   callouts: CalloutConfig
 ): void {
   if (operation.kind === 'delete' || operation.kind === 'callout-child-delete' ||
-    operation.kind === 'callout-delete' || operation.kind === 'code-delete') {
+    operation.kind === 'callout-delete' || operation.kind === 'code-delete' ||
+    operation.kind === 'authoring-token-delete') {
     const remaining = new Set(blocks.flatMap((block) => block.block_id ? [block.block_id] : []));
     const deletedIds = operation.kind === 'code-delete'
       ? (operation.remoteBlockId ? [operation.remoteBlockId] : [])
-      : operation.blockIds;
+      : operation.kind === 'authoring-token-delete'
+        ? [operation.remoteBlockId]
+        : operation.blockIds;
     if (deletedIds.some((blockId) => remaining.has(blockId))) {
       throw new Error('scoped readback verification failed: deleted block still exists');
     }
@@ -1490,6 +1789,11 @@ function verifyOperation(
 
   if (operation.kind.startsWith('callout-')) {
     verifyCalloutOperation(operation as CalloutOperation, remote, callouts);
+    return;
+  }
+
+  if (operation.kind === 'authoring-token-create' || operation.kind === 'authoring-token-move') {
+    verifyAuthoringTokenOperation(operation, remote);
     return;
   }
 
@@ -1633,6 +1937,13 @@ function codePlacementMatches(
   return Boolean(anchor && document.nodes.indexOf(anchor) + 1 === codeIndex);
 }
 
+function renderAuthoringTokenXml(token: '<Procedures>' | '</Procedures>'): string {
+  return `<p>${token
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')}</p>`;
+}
+
 function verifyCalloutOperation(
   operation: CalloutOperation,
   remote: SemanticDocument,
@@ -1646,8 +1957,15 @@ function verifyCalloutOperation(
     throw new Error('Callout readback verification failed: Callout is missing');
   }
   if (operation.kind === 'callout-create') {
-    const expectedTitle = operation.desiredCallout.calloutType === 'note' ? callouts.noteTitle : callouts.warningTitle;
-    if (match.calloutType !== operation.desiredCallout.calloutType || match.title?.markdown !== expectedTitle) {
+    const expectedTitle = operation.desiredCallout.titleManaged && operation.desiredCallout.title
+      ? operation.desiredCallout.title.markdown
+      : operation.desiredCallout.calloutType === 'note'
+        ? callouts.noteTitle
+        : callouts.warningTitle;
+    const readbackType = match.calloutType ?? (operation.desiredCallout.titleManaged
+      ? calloutTypeForEmojiId(match.shell?.emojiId)
+      : undefined);
+    if (readbackType !== operation.desiredCallout.calloutType || match.title?.markdown !== expectedTitle) {
       throw new Error('Callout readback verification failed: type or presentation title differs');
     }
     if (!calloutChildrenMatch(match.children, operation.desiredCallout.children)) {
@@ -1657,6 +1975,12 @@ function verifyCalloutOperation(
   }
   if (match.remoteBlockId !== operation.calloutBlockId) {
     throw new Error('Callout readback verification failed: container identity changed');
+  }
+  if (operation.kind === 'callout-title-update') {
+    if (canonicalMarkdown(match.title?.markdown ?? '') !== canonicalMarkdown(operation.desiredMarkdown)) {
+      throw new Error('Callout readback verification failed: managed title differs');
+    }
+    return;
   }
   if (operation.kind === 'callout-child-update') {
     const child = match.children[operation.childOrdinal];
@@ -1671,6 +1995,27 @@ function verifyCalloutOperation(
   );
   if (!calloutChildrenMatch(created, operation.desiredChildren)) {
     throw new Error('Callout readback verification failed: created children differ');
+  }
+}
+
+function verifyAuthoringTokenOperation(
+  operation: Extract<ScopedPatchOperation, {
+    kind: 'authoring-token-create' | 'authoring-token-move';
+  }>,
+  remote: SemanticDocument
+): void {
+  const anchorIndex = remote.nodes.findIndex((node) => {
+    return node.remoteBlockId === operation.insertAfterBlockId;
+  });
+  if (anchorIndex < 0) {
+    throw new Error('Procedures token readback verification failed: anchor is missing');
+  }
+  const token = remote.nodes[anchorIndex + 1];
+  if (token?.kind !== 'authoring-token' || token.markdown !== operation.token) {
+    throw new Error('Procedures token readback verification failed: boundary differs');
+  }
+  if (operation.kind === 'authoring-token-move' && token.remoteBlockId !== operation.remoteBlockId) {
+    throw new Error('Procedures token readback verification failed: moved block identity changed');
   }
 }
 
@@ -1725,6 +2070,7 @@ async function recordPublishReceiptV4(input: {
   remoteRevision?: string;
   remoteSemantic?: SemanticDocument;
   whiteboards: WhiteboardReceiptEntry[];
+  protectedResources?: ProtectedResourceReceiptEntry[];
 }): Promise<void> {
   const localBaseSnapshot = await writeLocalBaseSnapshot({
     cwd: input.cwd,
@@ -1740,32 +2086,65 @@ async function recordPublishReceiptV4(input: {
     ? await writeRemoteSemanticSnapshot({
         cwd: input.cwd,
         target: input.target,
-        document: input.remoteSemantic
+        document: applyManagedCalloutMetadata(
+          input.remoteSemantic,
+          localSemanticDocument(
+            input.publishDraft,
+            DEFAULT_CODE_BLOCK_CONFIG,
+            input.publishContext.zdoc?.inventory
+          )
+        )
       })
     : undefined;
+  const common = {
+    target: input.target,
+    resolvedDocumentId: input.resolvedDocumentId,
+    profile: input.profile,
+    dialect: input.publishContext.dialect,
+    dialectDraftHash: input.publishContext.dialectDraftHash,
+    dialectDependencies: input.publishContext.dialectDependencies,
+    linkResolutionFingerprint: input.publishContext.linkResolutionFingerprint,
+    resolvedLinks: input.publishContext.resolvedLinks,
+    localSourceHash: hashText(input.publishContext.localSource),
+    publishDraftHash: hashText(input.publishDraft),
+    publishBaseSnapshot,
+    remoteSnapshotHash: hashText(input.remoteMarkdown),
+    remoteRevision: input.remoteRevision,
+    localBaseSnapshot,
+    remoteSemanticSnapshot,
+    whiteboards: input.whiteboards,
+    updatedAt: new Date().toISOString()
+  };
   await writePublishReceipt({
     cwd: input.cwd,
-    receipt: {
-      version: 4,
-      target: input.target,
-      resolvedDocumentId: input.resolvedDocumentId,
-      profile: input.profile,
-      dialect: input.publishContext.dialect,
-      dialectDraftHash: input.publishContext.dialectDraftHash,
-      dialectDependencies: input.publishContext.dialectDependencies,
-      linkResolutionFingerprint: input.publishContext.linkResolutionFingerprint,
-      resolvedLinks: input.publishContext.resolvedLinks,
-      localSourceHash: hashText(input.publishContext.localSource),
-      publishDraftHash: hashText(input.publishDraft),
-      publishBaseSnapshot,
-      remoteSnapshotHash: hashText(input.remoteMarkdown),
-      remoteRevision: input.remoteRevision,
-      localBaseSnapshot,
-      remoteSemanticSnapshot,
-      whiteboards: input.whiteboards,
-      updatedAt: new Date().toISOString()
-    }
+    receipt: input.protectedResources && input.protectedResources.length > 0
+      ? { version: 5, ...common, protectedResources: input.protectedResources }
+      : { version: 4, ...common }
   });
+}
+
+function applyManagedCalloutMetadata(
+  remote: SemanticDocument,
+  local: SemanticDocument
+): SemanticDocument {
+  const localCallouts = local.nodes.filter((node) => node.kind === 'callout');
+  let calloutIndex = 0;
+  return {
+    nodes: remote.nodes.map((node) => {
+      if (node.kind !== 'callout') return node;
+      const localCallout = localCallouts[calloutIndex];
+      calloutIndex += 1;
+      if (!localCallout?.titleManaged || !localCallout.calloutType) return node;
+      return {
+        ...node,
+        calloutType: localCallout.calloutType,
+        titleManaged: true as const,
+        unsupported: node.unsupported.filter((message) =>
+          message !== 'remote Callout title is unrecognized'
+        )
+      };
+    })
+  };
 }
 
 function markdownBodyForBlockPatch(publishDraft: string, remoteMarkdown: string): string {

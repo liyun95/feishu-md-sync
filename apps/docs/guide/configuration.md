@@ -72,9 +72,10 @@ Use `defaultDialect` when a workspace consistently publishes one authoring forma
 
 ```json
 {
-  "defaultDialect": "docusaurus",
+  "defaultDialect": "zdoc-authoring",
+  "defaultProfile": "zilliz",
   "dialects": {
-    "docusaurus": {
+    "zdoc-authoring": {
       "publicSiteBaseUrl": "https://docs.zilliz.com/docs",
       "linkResolver": {
         "type": "lark-base",
@@ -102,7 +103,7 @@ Mappings are cached for one hour under:
 .sync/feishu-md-sync/link-resolvers/
 ```
 
-When refresh fails, an existing cache is used with a `link-resolver-stale-cache` warning. Without a usable mapping, Docusaurus and Milvus authoring use `publicSiteBaseUrl` when configured; otherwise the relative link blocks publish. A source heading fragment is preserved for a public website fallback, but a Feishu cross-document link targets the document root and reports that the fragment was removed.
+When refresh fails, an existing cache is used with a `link-resolver-stale-cache` warning. Without a usable mapping, Zdoc and Milvus authoring use `publicSiteBaseUrl` when configured; otherwise the relative link blocks publish. A source heading fragment is preserved for a public website fallback, but a Feishu cross-document link targets the document root and reports that the fragment was removed.
 
 Dialect selection precedence is:
 

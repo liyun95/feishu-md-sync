@@ -13,7 +13,7 @@ const targetUrl = process.env.FEISHU_MD_SYNC_DOGFOOD_TARGET;
 const baseUrl = process.env.FEISHU_MD_SYNC_TEST_BASE;
 
 describe.skipIf(!sourcePath || !targetUrl || !baseUrl)(
-  'live Docusaurus release dogfood',
+  'live Zdoc authoring release dogfood',
   () => {
     it('preprocesses the formal source and agrees across read-only commands', async () => {
       const cwd = process.cwd();
@@ -37,7 +37,7 @@ describe.skipIf(!sourcePath || !targetUrl || !baseUrl)(
         cwd,
         sourcePath: sourcePath!,
         localSource,
-        dialect: 'docusaurus',
+        dialect: 'zdoc-authoring',
         dialectConfig,
         profile: 'none',
         adapter
@@ -60,7 +60,7 @@ describe.skipIf(!sourcePath || !targetUrl || !baseUrl)(
         cwd,
         sourcePath: sourcePath!,
         target,
-        dialect: 'docusaurus' as const,
+        dialect: 'zdoc-authoring' as const,
         dialectConfig,
         profile: 'none' as const,
         adapter
@@ -71,7 +71,7 @@ describe.skipIf(!sourcePath || !targetUrl || !baseUrl)(
         cwd,
         file: sourcePath!,
         target,
-        dialect: 'docusaurus',
+        dialect: 'zdoc-authoring',
         dialectConfig,
         profile: 'none',
         write: false,
@@ -81,7 +81,7 @@ describe.skipIf(!sourcePath || !targetUrl || !baseUrl)(
         adapter
       });
 
-      expect(status.dialect).toBe('docusaurus');
+      expect(status.dialect).toBe('zdoc-authoring');
       expect(status.dialectBlockers).toEqual([]);
       expect(status.linkResolution.resolvedToFeishu).toBeGreaterThanOrEqual(1);
       expect(diff.dialect).toBe(status.dialect);

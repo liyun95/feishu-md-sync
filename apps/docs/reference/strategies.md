@@ -64,4 +64,6 @@ Use it only after reviewing the dry-run and accepting the collaboration risk.
 
 The target is a Drive folder or Wiki parent and `publish --create` is requested. The CLI creates a new Feishu document under that parent.
 
+For `zdoc-authoring`, the dry-run reports the Callout and Procedures completion required after initial creation. A write then plans and applies only supported post-create mutations, verifies the final document structure, and records the receipt last. If creation succeeds but a later step fails, the command returns a partial-write error with the created document identity instead of presenting the operation as an ordinary failure.
+
 Whiteboard sync is not supported during document creation in the first version. Create the document and its image/Whiteboard slot first, then run a separate publish with `--sync-whiteboards`.

@@ -2,24 +2,42 @@
 
 All notable changes to the published `feishu-md-sync` package are documented here.
 
+## Unreleased
+
+### Added
+
+- Add the `zdoc-authoring` round-trip dialect with Procedures token planning, managed Admonition titles, protected Supademo adoption, semantic canonicalization, and structured `zdocRoundTrip` safety reports.
+- Add receipt V5 for protected Supademo resource identity and readback verification.
+
+### Changed
+
+- Remove the old generic Zdoc dialect name without a compatibility alias.
+- Update the Agent Skill with destination-role discovery and Zdoc authoring-archive verification.
+
+### Fixed
+
+- Verify post-create Callout and Procedures mutations before writing a receipt, and report recoverable partial-write details when creation succeeds but planning, mutation, readback, or receipt persistence fails.
+- Match multiple Procedures pairs by exact semantic boundaries, report token deletion, block ambiguous deletion, and show required token creation during create dry-runs.
+- Block removal of tracked Supademo placeholders so protected ISV mappings cannot be silently dropped from receipt V5.
+
 ## [0.4.0] - 2026-07-15
 
 ### Added
 
-- Add explicit `gfm`, `docusaurus`, and `milvus-authoring` source dialects for deterministic publish preprocessing.
+- Add explicit `gfm`, the former Zdoc source dialect, and `milvus-authoring` for deterministic publish preprocessing.
 - Resolve configured relative document links through a read-only Feishu Base index with one-hour local caching and stale-cache fallback.
 - Store dialect metadata, used link mappings, and the exact prior publish draft in receipt V4.
 
 ### Changed
 
 - Add `--dialect` to status, diff, publish, and merge while keeping `gfm` as the default.
-- Block automatic merge for Docusaurus and Milvus authoring sources because Feishu cannot reconstruct source-only syntax.
+- Block automatic merge for Zdoc and Milvus authoring sources because Feishu cannot reconstruct source-only syntax.
 - Update the version-matched Agent Skill to preserve one selected dialect and handle dialect/link diagnostics before writing.
 
 ### Fixed
 
 - Keep link-resolution fingerprints stable when the same mapping moves between live Base reads and fresh or stale cache reads.
-- Remove escaped Docusaurus heading anchors without leaving a trailing backslash in the publish draft.
+- Remove escaped Zdoc heading anchors without leaving a trailing backslash in the publish draft.
 
 ## [0.3.0] - 2026-07-15
 

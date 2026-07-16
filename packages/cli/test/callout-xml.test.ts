@@ -24,6 +24,15 @@ Use load-time CPU adaptation.
     })).toContain('<callout emoji="❗" background-color="light-red" border-color="red"><p>Warning</p>');
   });
 
+  it('renders a managed Zdoc title instead of the configured presentation title', () => {
+    expect(renderCalloutXml({
+      callout: callout(
+        '<div class="alert note" data-fms-callout-title="Billing">\n\nBody.\n\n</div>'
+      ),
+      config: { noteTitle: 'Notes', warningTitle: 'Warning' }
+    })).toContain('<p>Billing</p><p>Body.</p>');
+  });
+
   it('renders headings, grouped lists, inline styles, links, and escaped text', () => {
     const xml = renderCalloutXml({
       callout: callout(`<div class="alert note">

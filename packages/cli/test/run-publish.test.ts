@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +15,7 @@ import {
 import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
 import { runPublish, textCreatePlacementMatches } from '../src/publish/run-publish.js';
 import { semanticHash } from '../src/semantic/normalize.js';
+import { canonicalizeMarkdownSemantics } from '../src/semantic/markdown-equivalence.js';
 import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
 import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
@@ -230,6 +231,60 @@ Next text.`, 'utf8');
     }));
   });
 
+  it('accepts Feishu emoji aliases when verifying a managed Callout create', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-create-readback-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      '<div class="alert note" data-fms-callout-title="Billing">\n\nManaged body.\n\n</div>',
+      'utf8'
+    );
+    let created = false;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: created
+          ? '<div class="alert note" data-fms-callout-title="Billing">\n\nManaged body.\n\n</div>'
+          : ''
+      }),
+      fetchDocBlocks: async () => ({
+        blocks: created
+          ? [
+              { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+              {
+                block_id: 'callout1',
+                block_type: 19,
+                callout: { emoji_id: 'blue_book', background_color: 2, border_color: 2 },
+                children: ['title1', 'body1']
+              },
+              textBlock('title1', 'Billing'),
+              textBlock('body1', 'Managed body.')
+            ]
+          : [{ block_id: 'doc_token', block_type: 1, children: [] }]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => { created = true; },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(created).toBe(true);
+  });
+
   it('writes a Callout body update without replacing the container', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-callout-write-'));
     const markdownPath = join(dir, 'doc.md');
@@ -252,7 +307,7 @@ Next text.`, 'utf8');
       createDocument: async () => ({ documentId: 'created' })
     };
 
-    await runPublish({
+    const result = await runPublish({
       cwd: dir,
       file: markdownPath,
       target: { kind: 'docx', token: 'doc_token' },
@@ -319,6 +374,54 @@ Next text.`, 'utf8');
       version: 4,
       remoteSnapshotHash: hashText(canonicalCallout(['Local body.']))
     });
+  });
+
+  it('writes and verifies a tracked Zdoc-managed Callout title', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-callout-managed-title-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const managed = (title: string) =>
+      `<div class="alert note" data-fms-callout-title="${title}">\n\nBody.\n\n</div>`;
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, managed('Costs'), 'utf8');
+    await writeTrackedPureCalloutReceipt({
+      cwd: dir,
+      target,
+      base: managed('Billing'),
+      bodies: ['Body.'],
+      title: 'Billing'
+    });
+    let title = 'Billing';
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: `<callout emoji="📘">\n${title}\nBody.\n</callout>`
+      }),
+      fetchDocBlocks: async () => ({ blocks: calloutBlocks('Body.', title) }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        calls.push(`replace:${blockId}:${content}`);
+        if (blockId === 'title1') title = content;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(calls).toEqual(['replace:title1:Costs']);
+    expect(title).toBe('Costs');
   });
 
   it('creates a Callout with configured presentation through XML', async () => {
@@ -830,6 +933,392 @@ Next text.`, 'utf8');
     expect(adapter.calls).toEqual(['insert-after:p1:Second paragraph.']);
   });
 
+  it('creates Procedures tokens without rewriting ordinary text', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-procedures-create-'));
+    const markdownPath = join(dir, 'doc.md');
+    const local = 'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.';
+    await writeFile(markdownPath, local, 'utf8');
+    const order = ['intro', 'step', 'after'];
+    const content = new Map([
+      ['intro', 'Intro.'],
+      ['step', '1. Step.'],
+      ['after', 'After.']
+    ]);
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: order.map((id) => content.get(id)).join('\n\n') }),
+      fetchDocBlocks: async () => ({ blocks: proceduresBlocks(order, content) }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId }) => { calls.push(`replace:${blockId}`); },
+      insertBlocksAfter: async ({ blockId, content: rendered }) => {
+        const token = rendered === '<p>&lt;Procedures&gt;</p>'
+          ? '<Procedures>'
+          : '</Procedures>';
+        const id = token === '<Procedures>' ? 'open' : 'close';
+        content.set(id, token);
+        order.splice(order.indexOf(blockId) + 1, 0, id);
+        calls.push(`insert:${id}:after:${blockId}`);
+      },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(calls).toEqual([
+      'insert:open:after:intro',
+      'insert:close:after:step'
+    ]);
+    expect(order).toEqual(['intro', 'open', 'step', 'close', 'after']);
+    expect(result.plan.zdocRoundTrip).toMatchObject({ safeToPublish: true });
+    expect(result.plan.zdocRoundTrip?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'procedures-create' })
+    ]));
+  });
+
+  it('writes Procedures tokens as escaped XML text instead of Markdown tags', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-procedures-xml-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+    const order = ['intro', 'step', 'after'];
+    const content = new Map([
+      ['intro', 'Intro.'],
+      ['step', '1. Step.'],
+      ['after', 'After.']
+    ]);
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: order.map((id) => content.get(id)).join('\n\n') }),
+      fetchDocBlocks: async () => ({ blocks: proceduresBlocks(order, content) }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async ({ blockId, content: rendered, format }) => {
+        const token = rendered === '<p>&lt;Procedures&gt;</p>'
+          ? '<Procedures>'
+          : rendered === '<p>&lt;/Procedures&gt;</p>'
+            ? '</Procedures>'
+            : undefined;
+        if (format !== 'xml' || !token) return;
+        const id = token === '<Procedures>' ? 'open' : 'close';
+        content.set(id, token);
+        order.splice(order.indexOf(blockId) + 1, 0, id);
+      },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(order).toEqual(['intro', 'open', 'step', 'close', 'after']);
+  });
+
+  it('reports Procedures mutation readback failure as a partial write', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-procedures-readback-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+    const order = ['intro', 'step', 'after'];
+    const content = new Map([
+      ['intro', 'Intro.'],
+      ['step', '1. Step.'],
+      ['after', 'After.']
+    ]);
+    let writes = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: order.map((id) => content.get(id)).join('\n\n') }),
+      fetchDocBlocks: async () => ({ blocks: proceduresBlocks(order, content) }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => { writes += 1; },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({ kind: 'authoring-token-create' })],
+      failedOperation: expect.objectContaining({ kind: 'authoring-token-readback' }),
+      pendingOperations: [expect.objectContaining({ kind: 'authoring-token-create' })],
+      receiptWritten: false
+    });
+    expect(writes).toBe(1);
+  });
+
+  it('moves a Procedures token and preserves its block identity', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-procedures-move-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+    const order = ['open', 'intro', 'step', 'close', 'after'];
+    const content = new Map([
+      ['open', '<Procedures>'],
+      ['intro', 'Intro.'],
+      ['step', '1. Step.'],
+      ['close', '</Procedures>'],
+      ['after', 'After.']
+    ]);
+    const moves: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: order.map((id) => content.get(id)).join('\n\n') }),
+      fetchDocBlocks: async () => ({ blocks: proceduresBlocks(order, content) }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      moveBlocksAfter: async ({ blockId, sourceBlockIds }) => {
+        const source = sourceBlockIds[0]!;
+        order.splice(order.indexOf(source), 1);
+        order.splice(order.indexOf(blockId) + 1, 0, source);
+        moves.push(`${source}:after:${blockId}`);
+      },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(moves).toEqual(['open:after:intro']);
+    expect(order).toEqual(['intro', 'open', 'step', 'close', 'after']);
+  });
+
+  it('adopts a unique Supademo resource without rewriting it and records receipt V5', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-supademo-adopt-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      '# Demo\n\n<Supademo id="demo-id" title="" />\n\nAfter.',
+      'utf8'
+    );
+    let writes = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: '# Demo\n\n<readonly-block type="isv"></readonly-block>\n\nAfter.'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['isv1', 'after'] },
+        {
+          block_id: 'isv1',
+          block_type: 40,
+          add_ons: {
+            component_type_id: 'blk_682093ba9580c002363b9dc3',
+            record: '{"id":"demo-id","isShowcase":false}'
+          }
+        },
+        textBlock('after', 'After.')
+      ] }),
+      replaceDocument: async () => { writes += 1; },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('no-op');
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'supademo-adopt',
+      remoteBlockId: 'isv1'
+    }));
+    expect(writes).toBe(0);
+    await expect(readPublishReceipt({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({
+      version: 5,
+      protectedResources: [expect.objectContaining({
+        componentId: 'demo-id',
+        blockId: 'isv1'
+      })]
+    });
+
+    const rerun = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+    expect(rerun.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'supademo-protected',
+      remoteBlockId: 'isv1'
+    }));
+
+    await writeFile(markdownPath, '# Demo\n\nAfter.', 'utf8');
+    const removal = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+    expect(removal.plan.zdocRoundTrip).toMatchObject({ safeToPublish: false });
+    expect(removal.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'supademo-removed',
+      severity: 'blocker'
+    }));
+    await expect(readPublishReceipt({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({
+      version: 5,
+      protectedResources: [expect.objectContaining({ componentId: 'demo-id' })]
+    });
+  });
+
+  it('plans revision 790 as Procedures creates plus Supademo adoption only', async () => {
+    const remote = await incidentCreateSection('revision-790.md');
+    const local = canonicalIncidentCreateSection(remote);
+    const dir = await mkdtemp(join(tmpdir(), 'fms-revision-790-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, local, 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remote }),
+      fetchDocBlocks: async () => ({ blocks: incidentSectionBlocks(remote) }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.scopedPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'authoring-token-create', token: '<Procedures>' }),
+      expect.objectContaining({ kind: 'authoring-token-create', token: '</Procedures>' })
+    ]);
+    expect(result.plan.zdocRoundTrip).toMatchObject({ safeToPublish: true });
+    expect(result.plan.zdocRoundTrip?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'supademo-adopt' }),
+      expect.objectContaining({ code: 'procedures-create' })
+    ]));
+  });
+
+  it('plans revision 799 as one canonical opening-token move', async () => {
+    const remote = await incidentCreateSection('revision-799.md');
+    const local = canonicalIncidentCreateSection(
+      await incidentCreateSection('revision-790.md')
+    );
+    const dir = await mkdtemp(join(tmpdir(), 'fms-revision-799-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, local, 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remote }),
+      fetchDocBlocks: async () => ({ blocks: incidentSectionBlocks(remote) }),
+      replaceDocument: async () => {},
+      moveBlocksAfter: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.scopedPatch?.operations).toEqual([
+      expect.objectContaining({
+        kind: 'authoring-token-move',
+        token: '<Procedures>'
+      })
+    ]);
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'procedures-move'
+    }));
+  });
+
   it('writes a confirmed block-patch delete', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
@@ -1238,6 +1727,353 @@ Next text.`, 'utf8');
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_created' } })).resolves.toMatchObject({
       target: { kind: 'docx', token: 'doc_created' },
       profile: 'zilliz'
+    });
+  });
+
+  it('reports required Procedures token creation during Zdoc create dry-run', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-create-dry-run-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: '' }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'folder', token: 'folder-token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: true,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.zdocRoundTrip?.items.filter((item) => {
+      return item.code === 'procedures-create';
+    })).toHaveLength(2);
+    expect(result.plan.zdocRoundTrip?.items).not.toContainEqual(expect.objectContaining({
+      code: 'procedures-preserved'
+    }));
+  });
+
+  it('finishes Zdoc Callout and Procedures structures before recording a create receipt', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-create-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, `# Showcase
+
+## Native callout
+
+<Admonition type="info" title="Billing">
+
+Managed body.
+
+</Admonition>
+
+## Procedures
+
+Intro.
+
+<Procedures>
+
+1. Step.
+
+</Procedures>
+
+After.`, 'utf8');
+    const order = ['h1', 'callout-heading', 'procedures-heading', 'intro', 'step', 'after'];
+    const text = new Map([
+      ['h1', '# Showcase'],
+      ['callout-heading', '## Native callout'],
+      ['procedures-heading', '## Procedures'],
+      ['intro', 'Intro.'],
+      ['step', '1. Step.'],
+      ['after', 'After.']
+    ]);
+    let calloutCreated = false;
+    const writes: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: `<title>Showcase</title>\n\n${order.map((id) => id === 'callout'
+          ? '<div class="alert note" data-fms-callout-title="Billing">\n\nManaged body.\n\n</div>'
+          : text.get(id)).filter(Boolean).join('\n\n')}`,
+        revision: '2'
+      }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_created', block_type: 1, children: [...order] },
+          ...order.flatMap((id) => {
+            if (id === 'callout') {
+              return [
+                {
+                  block_id: 'callout',
+                  block_type: 19,
+                  callout: { emoji_id: 'blue_book', background_color: 2, border_color: 2 },
+                  children: ['callout-title', 'callout-body']
+                },
+                textBlock('callout-title', 'Billing'),
+                textBlock('callout-body', 'Managed body.')
+              ];
+            }
+            const rendered = markdownToFeishuBlocks(text.get(id) ?? '')[0];
+            return rendered ? [{ ...rendered, block_id: id }] : [];
+          })
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async ({ blockId, content, format }) => {
+        writes.push(`${format}:${content}`);
+        let id: string | undefined;
+        if (format === 'xml' && content.startsWith('<callout ')) {
+          id = 'callout';
+          calloutCreated = true;
+        } else if (content === '<p>&lt;Procedures&gt;</p>') {
+          id = 'open';
+          text.set(id, '<Procedures>');
+        } else if (content === '<p>&lt;/Procedures&gt;</p>') {
+          id = 'close';
+          text.set(id, '</Procedures>');
+        }
+        if (id) order.splice(order.indexOf(blockId) + 1, 0, id);
+      },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({
+        documentId: 'doc_created',
+        url: 'https://example.feishu.cn/docx/doc_created',
+        revision: '1'
+      })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'folder', token: 'folder-token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: true,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(calloutCreated).toBe(true);
+    expect(order).toEqual([
+      'h1',
+      'callout-heading',
+      'callout',
+      'procedures-heading',
+      'intro',
+      'open',
+      'step',
+      'close',
+      'after'
+    ]);
+    expect(writes).toEqual(expect.arrayContaining([
+      expect.stringContaining('xml:<callout '),
+      'xml:<p>&lt;Procedures&gt;</p>',
+      'xml:<p>&lt;/Procedures&gt;</p>'
+    ]));
+    await expect(readPublishReceipt({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_created' }
+    })).resolves.toMatchObject({ dialect: 'zdoc-authoring' });
+  });
+
+  it('reports the created document when Zdoc post-create planning fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-create-plan-failure-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, '# Showcase', 'utf8');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: '<title>Showcase</title>\n\n# Showcase\n\nUnexpected remote paragraph.',
+        revision: '2'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_created', block_type: 1, children: ['h1', 'unexpected'] },
+        { ...markdownToFeishuBlocks('# Showcase')[0]!, block_id: 'h1' },
+        textBlock('unexpected', 'Unexpected remote paragraph.')
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({
+        documentId: 'doc_created',
+        url: 'https://example.feishu.cn/docx/doc_created',
+        revision: '1'
+      })
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'folder', token: 'folder-token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: true,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      document: {
+        documentId: 'doc_created',
+        url: 'https://example.feishu.cn/docx/doc_created'
+      },
+      completedOperations: [expect.objectContaining({ kind: 'document-create' })],
+      failedOperation: expect.objectContaining({ kind: 'created-document-planning' }),
+      receiptWritten: false
+    });
+    await expect(readPublishReceipt({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_created' }
+    })).resolves.toBeUndefined();
+  });
+
+  it('reports the created document when a Zdoc post-create mutation fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-create-mutation-failure-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      '# Showcase\n\nIntro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+    const order = ['h1', 'intro', 'step', 'after'];
+    const content = new Map([
+      ['h1', '# Showcase'],
+      ['intro', 'Intro.'],
+      ['step', '1. Step.'],
+      ['after', 'After.']
+    ]);
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: `<title>Showcase</title>\n\n${order.map((id) => content.get(id)).join('\n\n')}`,
+        revision: '2'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_created', block_type: 1, children: [...order] },
+        ...order.flatMap((id) => {
+          const rendered = markdownToFeishuBlocks(content.get(id) ?? '')[0];
+          return rendered ? [{ ...rendered, block_id: id }] : [];
+        })
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => { throw new Error('network failed'); },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({
+        documentId: 'doc_created',
+        url: 'https://example.feishu.cn/docx/doc_created',
+        revision: '1'
+      })
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'folder', token: 'folder-token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: true,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      document: { documentId: 'doc_created' },
+      completedOperations: [expect.objectContaining({ kind: 'document-create' })],
+      failedOperation: expect.objectContaining({ kind: 'authoring-token-create' }),
+      pendingOperations: [expect.objectContaining({ kind: 'authoring-token-create' })],
+      receiptWritten: false
+    });
+  });
+
+  it('reports the created document when final Zdoc create readback regresses', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-create-readback-failure-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      '# Showcase\n\nIntro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.',
+      'utf8'
+    );
+    const order = ['h1', 'intro', 'step', 'after'];
+    const content = new Map([
+      ['h1', '# Showcase'],
+      ['intro', 'Intro.'],
+      ['step', '1. Step.'],
+      ['after', 'After.']
+    ]);
+    let markdownFetches = 0;
+    const visibleOrder = () => markdownFetches > 1
+      ? order.filter((id) => id !== 'close')
+      : order;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => {
+        markdownFetches += 1;
+        return {
+          markdown: `<title>Showcase</title>\n\n${visibleOrder().map((id) => content.get(id)).join('\n\n')}`,
+          revision: String(markdownFetches + 1)
+        };
+      },
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_created', block_type: 1, children: [...visibleOrder()] },
+        ...visibleOrder().flatMap((id) => {
+          const rendered = markdownToFeishuBlocks(content.get(id) ?? '')[0];
+          return rendered ? [{ ...rendered, block_id: id }] : [];
+        })
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async ({ blockId, content: rendered }) => {
+        const token = rendered === '<p>&lt;Procedures&gt;</p>'
+          ? '<Procedures>'
+          : '</Procedures>';
+        const id = token === '<Procedures>' ? 'open' : 'close';
+        content.set(id, token);
+        order.splice(order.indexOf(blockId) + 1, 0, id);
+      },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({
+        documentId: 'doc_created',
+        url: 'https://example.feishu.cn/docx/doc_created',
+        revision: '1'
+      })
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'folder', token: 'folder-token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: true,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      document: { documentId: 'doc_created' },
+      completedOperations: [
+        expect.objectContaining({ kind: 'document-create' }),
+        expect.objectContaining({ kind: 'authoring-token-create' }),
+        expect.objectContaining({ kind: 'authoring-token-create' })
+      ],
+      failedOperation: expect.objectContaining({ kind: 'created-document-readback' }),
+      receiptWritten: false
     });
   });
 
@@ -1807,6 +2643,77 @@ function textBlock(blockId: string, text: string): { block_id: string; block_typ
   };
 }
 
+function proceduresBlocks(order: string[], content: Map<string, string>) {
+  return [
+    { block_id: 'doc_token', block_type: 1, children: [...order] },
+    ...order.map((blockId) => blockId === 'step'
+      ? {
+          block_id: blockId,
+          block_type: 13,
+          ordered: {
+            elements: [{ text_run: { content: 'Step.', text_element_style: {} } }]
+          }
+        }
+      : textBlock(blockId, content.get(blockId) ?? ''))
+  ];
+}
+
+async function incidentCreateSection(name: string): Promise<string> {
+  const markdown = await readFile(new URL(
+    `./fixtures/zdoc/model-providers/${name}`,
+    import.meta.url
+  ), 'utf8');
+  const start = markdown.indexOf('## Create an integration in the Zilliz Cloud console');
+  const end = markdown.indexOf('\n## Manage integrations', start);
+  return `${markdown.slice(start, end).trim()}\n`;
+}
+
+function canonicalIncidentCreateSection(revision790: string): string {
+  return revision790
+    .replace(
+      '<readonly-block type="isv"></readonly-block>',
+      '<Supademo id="cmj9f3j6u0johf6zpk5kdyx3u" title="" />'
+    )
+    .replace(
+      'To create a model provider integration:\n\n1. Log in',
+      'To create a model provider integration:\n\n<Procedures>\n\n1. Log in'
+    )
+    .replace(
+      '\n\nOnce created, the integration becomes available',
+      '\n\n</Procedures>\n\nOnce created, the integration becomes available'
+    );
+}
+
+function incidentSectionBlocks(markdown: string) {
+  const blocks = markdownToFeishuBlocks(canonicalizeMarkdownSemantics(markdown)).map((block, index) => {
+    const rendered = feishuBlocksToMarkdown([block]).trim();
+    if (rendered === '<readonly-block type="isv"></readonly-block>') {
+      return {
+        block_id: 'XViWdTKb4ouwFJxEeepcSNQInLf',
+        block_type: 40,
+        add_ons: {
+          component_type_id: 'blk_682093ba9580c002363b9dc3',
+          record: '{"id":"cmj9f3j6u0johf6zpk5kdyx3u","isShowcase":false}'
+        }
+      };
+    }
+    const blockId = rendered === '<Procedures>'
+      ? 'X4O9dWlMVoZXyrxdiFycqfc3nyf'
+      : rendered === '</Procedures>'
+        ? 'Qfrud6flEoIqN7xLDLEcMUcUn5c'
+        : `incident-${index}`;
+    return { ...block, block_id: blockId };
+  });
+  return [
+    {
+      block_id: 'doc_token',
+      block_type: 1,
+      children: blocks.map((block) => block.block_id)
+    },
+    ...blocks
+  ];
+}
+
 function calloutBlocks(body: string | string[], title = 'Notes') {
   const bodies = Array.isArray(body) ? body : [body];
   const bodyIds = bodies.map((_, index) => `body${index + 1}`);
@@ -1827,6 +2734,7 @@ async function writeTrackedPureCalloutReceipt(input: {
   target: { kind: 'docx'; token: string };
   base: string;
   bodies: string[];
+  title?: string;
 }): Promise<void> {
   const localBaseSnapshot = await writeLocalBaseSnapshot({
     cwd: input.cwd,
@@ -1836,7 +2744,7 @@ async function writeTrackedPureCalloutReceipt(input: {
   const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
     cwd: input.cwd,
     target: input.target,
-    document: remoteSemanticDocument(calloutBlocks(input.bodies), 'doc_token')
+    document: remoteSemanticDocument(calloutBlocks(input.bodies, input.title), 'doc_token')
   });
   await writePublishReceipt({
     cwd: input.cwd,
