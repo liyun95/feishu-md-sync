@@ -8,6 +8,7 @@
 | Collaboration-risk confirmation | `publish` block updates/deletes | Make comment, anchor, and block identity risk explicit. |
 | Untracked-remote confirmation | `publish` against an existing remote without receipt | Prevent accidental adoption or overwrite of a document the CLI has not tracked before. |
 | Whiteboard remote-overwrite confirmation | `publish --sync-whiteboards` after remote board edits | Require confirmation for the exact asset key instead of overwriting a teammate's board edit. |
+| Tracked Whiteboard protection | ordinary `zdoc-authoring` status, diff, and publish | Preserve receipt-matched block/token identity without granting Whiteboard write permission. |
 | Pull overwrite gate | `pull` | Prevent a remote snapshot from replacing an existing local file without `--overwrite`. |
 | Merge abort state | `merge` | Allow local recovery after in-place merge writes. |
 | Readback verification | `publish` writes | Prove Feishu content matches the intended publish draft after writing. |
@@ -32,6 +33,8 @@
 - Updating or deleting existing Callout body blocks requires `--confirm-collaboration-risk`; deleting the complete Callout is allowed only when it is tracked and unchanged remotely.
 - Updating, moving, deleting, or reconciling Code blocks requires `--confirm-collaboration-risk`. Pure Code creation does not independently require it.
 - A remotely changed Whiteboard blocks the complete publish unless its normalized PNG key is explicitly passed with `--confirm-remote-whiteboard-overwrite <asset-key>`.
+- A changed tracked direct SVG also requires `--sync-whiteboards` plus `--confirm-remote-whiteboard-overwrite <asset-key>`; ordinary publish protection never implies board overwrite authority.
+- Missing or mismatched tracked Whiteboard receipt identity blocks scoped publish and document replacement instead of degrading the board to an image.
 - A remote change inside the same managed text, Callout child, Code field/scope, or table scope blocks the write.
 - A remote change outside locally changed scopes produces a warning but does not block the disjoint scoped write.
 
@@ -46,7 +49,7 @@
 
 ## Status And Diff Gates
 
-`status` and `diff` are read-only. For Code blocks, Callouts, HTML tables, semantic receipts, and `--sync-whiteboards`, they also fetch Docx blocks to report scope-aware conflicts, field/child/row-level changes, movement, reconcile summaries, and per-asset Whiteboard state. They never write files, remote content, or receipts.
+`status` and `diff` are read-only. For Code blocks, Callouts, HTML tables, semantic receipts, tracked `zdoc-authoring` Whiteboards, and `--sync-whiteboards`, they also fetch Docx blocks to report scope-aware conflicts, field/child/row-level changes, movement, reconcile summaries, and per-asset Whiteboard state. They never write files, remote content, or receipts.
 
 Use `publish` dry-run for the detailed write plan.
 
