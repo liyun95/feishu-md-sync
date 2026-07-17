@@ -60,7 +60,6 @@ import {
 import {
   findPageBlock,
   renderableDirectChildBlocks,
-  resolvedBlockById,
   resolvedChildBlocks
 } from './block-state.js';
 import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
@@ -1087,6 +1086,7 @@ async function applyScopedOperations(input: {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
     let mutationCompleted = false;
+    let textUpdateReadback: TextUpdateReadbackExpectation | undefined;
     try {
       if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
         operation.kind === 'code-move' || operation.kind === 'code-delete' ||
@@ -1099,6 +1099,7 @@ async function applyScopedOperations(input: {
       } else if (operation.kind === 'update') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
         verifyTextOperationParent(operation, before.blocks);
+        textUpdateReadback = textUpdateReadbackExpectation(operation, before.blocks);
         if (operation.recoveryExpectedRemoteMarkdown) {
           verifyRecoveryUpdatePreflight(operation, before.blocks, input.doc, input.callouts);
         }
@@ -1214,7 +1215,7 @@ async function applyScopedOperations(input: {
         verifyCodeOperation(operation, await fetchRemoteSemantic(input.adapter, input.doc, input.callouts));
       } else {
         const blocks = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyOperation(operation, blocks.blocks, input.doc, input.callouts);
+        verifyOperation(operation, blocks.blocks, input.doc, input.callouts, textUpdateReadback);
       }
       completed.push(summary);
     } catch (error) {
@@ -1884,7 +1885,8 @@ function verifyOperation(
   operation: ScopedPatchOperation,
   blocks: import('../feishu/types.js').FeishuBlock[],
   documentId: string,
-  callouts: CalloutConfig
+  callouts: CalloutConfig,
+  textUpdateReadback?: TextUpdateReadbackExpectation
 ): void {
   if (operation.kind === 'delete' || operation.kind === 'callout-child-delete' ||
     operation.kind === 'callout-delete' || operation.kind === 'code-delete' ||
@@ -1952,10 +1954,51 @@ function verifyOperation(
     verifyTextCreateOperation(operation, blocks);
     return;
   }
-  const matched = resolvedBlockById(blocks, operation.remoteBlockId);
-  const remainsUnderParent = resolvedChildBlocks(blocks, operation.parentBlockId)
-    .some((block) => block.block_id === operation.remoteBlockId);
-  if (!matched || !remainsUnderParent ||
+  verifyTextUpdateReadback(operation, blocks, textUpdateReadback);
+}
+
+type TextUpdateReadbackExpectation = {
+  parentBlockId: string;
+  index: number;
+  siblingIds: string[];
+  blockType: number;
+};
+
+function textUpdateReadbackExpectation(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[]
+): TextUpdateReadbackExpectation {
+  const siblings = resolvedChildBlocks(blocks, operation.parentBlockId);
+  const siblingIds = siblings.flatMap((block) => block.block_id ? [block.block_id] : []);
+  const index = siblingIds.indexOf(operation.remoteBlockId);
+  const source = siblings[index];
+  if (siblingIds.length !== siblings.length || index < 0 || !source) {
+    throw new Error('scoped write preflight failed: text update slot cannot be verified');
+  }
+  return {
+    parentBlockId: operation.parentBlockId,
+    index,
+    siblingIds,
+    blockType: source.block_type
+  };
+}
+
+function verifyTextUpdateReadback(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  expected: TextUpdateReadbackExpectation | undefined
+): void {
+  if (!expected || expected.parentBlockId !== operation.parentBlockId) {
+    throw new Error('scoped readback verification failed: text update slot is missing');
+  }
+  const siblings = resolvedChildBlocks(blocks, expected.parentBlockId);
+  const siblingIds = siblings.flatMap((block) => block.block_id ? [block.block_id] : []);
+  const matched = siblings[expected.index];
+  const stableSiblingsMatch = siblingIds.length === expected.siblingIds.length &&
+    siblingIds.length === siblings.length && expected.siblingIds.every((blockId, index) => {
+      return index === expected.index || siblingIds[index] === blockId;
+    });
+  if (!stableSiblingsMatch || !matched?.block_id || matched.block_type !== expected.blockType ||
     canonicalMarkdown(feishuBlocksToMarkdown([matched]).trim()) !== canonicalMarkdown(operation.desiredMarkdown)) {
     throw new Error('scoped readback verification failed: remote text differs from desired text');
   }

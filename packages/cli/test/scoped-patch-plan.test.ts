@@ -690,6 +690,32 @@ Third detail.
     expect(plan.operations.some((operation) => operation.kind === 'update' || operation.kind === 'create' || operation.kind === 'delete')).toBe(false);
   });
 
+  it('leaves a tracked Code-only deletion to the Code planner', () => {
+    const localBase = document(
+      heading('Build'),
+      code('echo old', 'bash', undefined, ['Build'])
+    );
+    const localCurrent = document(heading('Build'));
+    const remoteBase = document(
+      heading('Build', 'heading-1'),
+      code('echo old', 'bash', 'code-1', ['Build'])
+    );
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent,
+      remoteBase,
+      remoteCurrent: remoteBase,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({ kind: 'code-delete', remoteBlockId: 'code-1' })
+    ]);
+  });
+
   it('fails closed for an untracked indented fenced Code scope', () => {
     const localCurrent = document({
       kind: 'opaque',

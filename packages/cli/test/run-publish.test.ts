@@ -783,6 +783,59 @@ Next text.`, 'utf8');
     });
   });
 
+  it('accepts a text replacement with a new block ID when the exact parent slot and content match', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-text-replace-id-'));
+    const markdownPath = join(dir, 'doc.md');
+    const beforeMarkdown = 'Before.\n\nOld paragraph.\n\nAfter.';
+    const afterMarkdown = 'Before.\n\nNew paragraph.\n\nAfter.';
+    await writeFile(markdownPath, afterMarkdown, 'utf8');
+    let written = false;
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: written ? afterMarkdown : beforeMarkdown }),
+      fetchDocBlocks: async () => ({
+        blocks: written
+          ? [
+              { block_id: 'page', block_type: 1, children: ['before', 'replacement', 'after'] },
+              textBlock('before', 'Before.'),
+              textBlock('replacement', 'New paragraph.'),
+              textBlock('after', 'After.')
+            ]
+          : [
+              { block_id: 'page', block_type: 1, children: ['before', 'original', 'after'] },
+              textBlock('before', 'Before.'),
+              textBlock('original', 'Old paragraph.'),
+              textBlock('after', 'After.')
+            ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        calls.push(`replace:${blockId}:${content}`);
+        written = true;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(calls).toEqual(['replace:original:New paragraph.']);
+  });
+
   it('writes a Code block body update through caption-preserving XML', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');

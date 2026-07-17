@@ -581,7 +581,16 @@ function planTextScopes(input: {
     }
     const entries = remoteEntries.slice(operation.startIndex, operation.endIndex);
     const entry = entries[0];
-    if (!entry || entries.length !== operation.blockIds.length || entries.some((candidate) => candidate.node.kind !== 'text')) {
+    if (!entry || entries.length !== operation.blockIds.length) {
+      input.blockers.push({
+        code: 'unsupported-local-change',
+        message: 'mixed text deletion crosses a non-text managed scope'
+      });
+      return [];
+    }
+    const textEntries = entries.filter((candidate) => candidate.node.kind === 'text');
+    if (textEntries.length === 0) return [];
+    if (textEntries.length !== entries.length) {
       input.blockers.push({
         code: 'unsupported-local-change',
         message: 'mixed text deletion crosses a non-text managed scope'
