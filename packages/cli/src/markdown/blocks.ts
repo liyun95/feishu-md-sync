@@ -1,6 +1,9 @@
 import type { FeishuBlock, TextElement, TextElementStyle } from '../feishu/types.js';
 import { codeLanguageId } from '../code-blocks/code-language.js';
 import { normalizeMarkdownLinkUrl } from './links.js';
+import { fromMarkdown } from 'mdast-util-from-markdown';
+import { gfmFromMarkdown } from 'mdast-util-gfm';
+import { gfm } from 'micromark-extension-gfm';
 
 const BLOCK_TYPES = {
   text: 2,
@@ -70,6 +73,12 @@ export function markdownToFeishuBlocks(markdown: string): FeishuBlock[] {
 
     const listMarker = parseListMarker(line);
     if (listMarker) {
+      const structured = parseStructuredList(lines, index);
+      if (structured) {
+        blocks.push(...structured.blocks);
+        index += structured.consumedLines;
+        continue;
+      }
       while (index < lines.length) {
         const item = parseListMarker(lines[index] ?? '');
         if (!item) break;
@@ -232,6 +241,92 @@ function parseListMarker(line: string): ListMarker | null {
   if (ordered) return { ordered: true, text: ordered[1].trim() };
 
   return null;
+}
+
+type MdastPositioned = {
+  type: string;
+  position?: {
+    start: { offset?: number; line?: number };
+    end: { offset?: number; line?: number };
+  };
+};
+
+type MdastList = MdastPositioned & {
+  type: 'list';
+  ordered?: boolean | null;
+  children: MdastListItem[];
+};
+
+type MdastListItem = MdastPositioned & {
+  type: 'listItem';
+  children: MdastListChild[];
+};
+
+type MdastParagraph = MdastPositioned & { type: 'paragraph' };
+type MdastListChild = MdastParagraph | MdastList | MdastPositioned;
+
+function parseStructuredList(
+  lines: string[],
+  index: number
+): { blocks: FeishuBlock[]; consumedLines: number } | undefined {
+  const source = lines.slice(index).join('\n');
+  const tree = fromMarkdown(source, {
+    extensions: [gfm()],
+    mdastExtensions: [gfmFromMarkdown()]
+  }) as { children?: MdastPositioned[] };
+  const first = tree.children?.[0];
+  if (!isMdastList(first) || !listHasStructuredChildren(first)) return undefined;
+  const blocks = blocksFromMdastList(first, source);
+  const consumedLines = first.position?.end.line;
+  if (!blocks || !consumedLines) return undefined;
+  return { blocks, consumedLines };
+}
+
+function listHasStructuredChildren(list: MdastList): boolean {
+  return list.children.some((item) => {
+    return item.children.length > 1 || item.children.some((child) => {
+      return isMdastList(child) && listHasStructuredChildren(child);
+    });
+  });
+}
+
+function blocksFromMdastList(list: MdastList, source: string): FeishuBlock[] | undefined {
+  const blocks: FeishuBlock[] = [];
+  for (const item of list.children) {
+    const [first, ...rest] = item.children;
+    if (!isMdastParagraph(first)) return undefined;
+    const children: FeishuBlock[] = [];
+    for (const child of rest) {
+      if (isMdastParagraph(child)) {
+        children.push(textBlock(markdownForMdastNode(child, source)));
+        continue;
+      }
+      if (isMdastList(child)) {
+        const nested = blocksFromMdastList(child, source);
+        if (!nested) return undefined;
+        children.push(...nested);
+        continue;
+      }
+      return undefined;
+    }
+    blocks.push(listBlock(markdownForMdastNode(first, source), list.ordered === true, children));
+  }
+  return blocks;
+}
+
+function markdownForMdastNode(node: MdastPositioned, source: string): string {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  if (start === undefined || end === undefined) return '';
+  return source.slice(start, end).split('\n').map((line) => line.trim()).join(' ');
+}
+
+function isMdastList(value: MdastPositioned | undefined): value is MdastList {
+  return value?.type === 'list' && Array.isArray((value as MdastList).children);
+}
+
+function isMdastParagraph(value: MdastListChild | undefined): value is MdastParagraph {
+  return value?.type === 'paragraph';
 }
 
 function stripHeadingAnchor(text: string): string {

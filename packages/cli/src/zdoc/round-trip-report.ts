@@ -7,6 +7,7 @@ import type {
   ProceduresOperation,
   ProceduresPlanBlocker
 } from './procedures-plan.js';
+import type { RecordedRoundTripLoss } from '../publish/scoped-patch-plan.js';
 
 export function buildZdocRoundTripReport(input: {
   inventory: ZdocComponentInventory;
@@ -18,8 +19,21 @@ export function buildZdocRoundTripReport(input: {
     items: ZdocRoundTripItem[];
     blockers: Array<{ code: string; message: string }>;
   };
+  roundTripLosses?: RecordedRoundTripLoss[];
 }): ZdocRoundTripReport {
   const items: ZdocRoundTripItem[] = [];
+
+  for (const loss of input.roundTripLosses ?? []) {
+    items.push({
+      code: loss.state === 'repairable'
+        ? 'round-trip-loss-repair'
+        : loss.side === 'divergent' ? 'round-trip-loss-ambiguous' : 'round-trip-loss-drift',
+      severity: loss.state === 'repairable' ? 'warning' : 'blocker',
+      component: loss.nodeKind === 'table' ? 'Table' : 'Text',
+      message: loss.message,
+      ...(loss.remoteBlockId ? { remoteBlockId: loss.remoteBlockId } : {})
+    });
+  }
 
   for (const metadata of input.inventory.ignoredMetadata) {
     items.push({

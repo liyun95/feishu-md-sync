@@ -70,6 +70,43 @@ describe('Zdoc round-trip report', () => {
       remoteBlockId: 'open-token'
     }));
   });
+
+  it('reports repairable and ambiguous receipt-recorded round-trip loss', () => {
+    const report = buildZdocRoundTripReport({
+      inventory: inventory([]),
+      procedures: { operations: [], blockers: [] },
+      roundTripLosses: [
+        {
+          side: 'local-only',
+          nodeKind: 'table',
+          locator: { sectionPath: ['Params'], kind: 'table', ordinal: 0 },
+          state: 'repairable',
+          action: 'create-native-table',
+          message: 'repair the missing native table'
+        },
+        {
+          side: 'divergent',
+          nodeKind: 'text',
+          locator: { sectionPath: ['Params'], kind: 'text', ordinal: 1 },
+          state: 'blocked',
+          action: 'block',
+          message: 'baseline correspondence is ambiguous',
+          remoteBlockId: 'p1'
+        }
+      ]
+    });
+
+    expect(report.safeToPublish).toBe(false);
+    expect(report.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'round-trip-loss-repair', severity: 'warning', component: 'Table' }),
+      expect.objectContaining({
+        code: 'round-trip-loss-ambiguous',
+        severity: 'blocker',
+        component: 'Text',
+        remoteBlockId: 'p1'
+      })
+    ]));
+  });
 });
 
 function inventory(components: ZdocComponentInventory['components']): ZdocComponentInventory {

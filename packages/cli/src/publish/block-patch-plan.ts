@@ -6,8 +6,10 @@ import { isTextLikeBlockPairUpdateable } from './block-update.js';
 export type PublishBlockPatchOperation =
   | {
     kind: 'update';
+    parentBlockId: string;
     remoteBlockId: string;
     path: number[];
+    desiredPath?: number[];
     blockType: number;
   }
   | {
@@ -128,7 +130,12 @@ function planSequence(input: {
   }
 
   if (remoteMiddle.length !== desiredMiddle.length) {
-    return `block order or count changed at ${formatPath(input.path)}`;
+    return planMixedSequence({
+      ...input,
+      prefixLength,
+      remoteMiddle,
+      desiredMiddle
+    });
   }
 
   for (let index = 0; index < remoteMiddle.length; index += 1) {
@@ -137,6 +144,7 @@ function planSequence(input: {
     const absoluteIndex = prefixLength + index;
     const childPath = [...input.path, absoluteIndex];
     const fallbackReason = planBlockPair({
+      parentBlockId: input.parentBlockId,
       remote,
       desired,
       path: childPath,
@@ -148,10 +156,180 @@ function planSequence(input: {
   return undefined;
 }
 
+function planMixedSequence(input: {
+  parentBlockId: string;
+  remoteBlocks: FeishuBlock[];
+  desiredBlocks: FeishuBlock[];
+  path: number[];
+  state: PlanningState;
+  prefixLength: number;
+  remoteMiddle: FeishuBlock[];
+  desiredMiddle: FeishuBlock[];
+}): string | undefined {
+  const anchors = uniqueStableAnchors(input.remoteMiddle, input.desiredMiddle);
+  if (anchors.length === 0) {
+    if (hasEquivalentCrossMatch(input.remoteMiddle, input.desiredMiddle)) {
+      return `block order or count changed without a unique stable anchor at ${formatPath(input.path)}`;
+    }
+    const hasStableBoundary = input.prefixLength > 0 ||
+      input.prefixLength + input.remoteMiddle.length < input.remoteBlocks.length ||
+      input.prefixLength + input.desiredMiddle.length < input.desiredBlocks.length;
+    if (hasStableBoundary) {
+      return planMixedGap({
+        ...input,
+        remoteGap: input.remoteMiddle,
+        desiredGap: input.desiredMiddle,
+        remoteStart: input.prefixLength,
+        desiredStart: input.prefixLength
+      });
+    }
+    return `block order or count changed without a unique stable anchor at ${formatPath(input.path)}`;
+  }
+  for (let index = 1; index < anchors.length; index += 1) {
+    if (anchors[index]!.desiredIndex <= anchors[index - 1]!.desiredIndex) {
+      return `stable block correspondence is reordered at ${formatPath(input.path)}`;
+    }
+  }
+
+  let previousRemoteIndex = -1;
+  let previousDesiredIndex = -1;
+  for (const anchor of [...anchors, {
+    remoteIndex: input.remoteMiddle.length,
+    desiredIndex: input.desiredMiddle.length
+  }]) {
+    const remoteStart = previousRemoteIndex + 1;
+    const desiredStart = previousDesiredIndex + 1;
+    const remoteGap = input.remoteMiddle.slice(remoteStart, anchor.remoteIndex);
+    const desiredGap = input.desiredMiddle.slice(desiredStart, anchor.desiredIndex);
+    const fallbackReason = planMixedGap({
+      ...input,
+      remoteGap,
+      desiredGap,
+      remoteStart: input.prefixLength + remoteStart,
+      desiredStart: input.prefixLength + desiredStart
+    });
+    if (fallbackReason) return fallbackReason;
+    previousRemoteIndex = anchor.remoteIndex;
+    previousDesiredIndex = anchor.desiredIndex;
+  }
+  return undefined;
+}
+
+function planMixedGap(input: {
+  parentBlockId: string;
+  remoteBlocks: FeishuBlock[];
+  desiredBlocks: FeishuBlock[];
+  path: number[];
+  state: PlanningState;
+  remoteGap: FeishuBlock[];
+  desiredGap: FeishuBlock[];
+  remoteStart: number;
+  desiredStart: number;
+}): string | undefined {
+  if (input.remoteGap.length === 0 && input.desiredGap.length === 0) return undefined;
+  if (input.remoteGap.length === 1 && input.desiredGap.length === 1) {
+    return planBlockPair({
+      parentBlockId: input.parentBlockId,
+      remote: input.remoteGap[0]!,
+      desired: input.desiredGap[0]!,
+      path: [...input.path, input.remoteStart],
+      desiredPath: [...input.path, input.desiredStart],
+      state: input.state
+    });
+  }
+
+  if (hasEquivalentCrossMatch(input.remoteGap, input.desiredGap)) {
+    return `mixed block correspondence is ambiguous at ${formatPath([...input.path, input.remoteStart])}`;
+  }
+  const unsupportedCreate = input.desiredGap.find((block) => !isWritableMarkdownBlockForPatch(block));
+  if (unsupportedCreate) {
+    return `create block_type ${unsupportedCreate.block_type} is unsupported at ${formatPath([...input.path, input.desiredStart])}`;
+  }
+  const unsupportedDelete = input.remoteGap.find((block) => !isWritableMarkdownBlockForPatch(block));
+  if (unsupportedDelete) {
+    return `delete block_type ${unsupportedDelete.block_type} is unsupported at ${formatPath([...input.path, input.remoteStart])}`;
+  }
+  const blockIds = blockIdsForDelete(input.remoteGap);
+  if (blockIds.length !== input.remoteGap.length) {
+    return `delete block id is missing at ${formatPath([...input.path, input.remoteStart])}`;
+  }
+  const insertAfterBlockId = insertAfterBlockIdForCreate(
+    input.remoteBlocks,
+    input.parentBlockId,
+    input.remoteStart
+  );
+  if (!insertAfterBlockId) {
+    return `create anchor is missing at ${formatPath([...input.path, input.remoteStart])}`;
+  }
+  if (input.desiredGap.length > 0) {
+    input.state.operations.push({
+      kind: 'create',
+      parentBlockId: input.parentBlockId,
+      insertAfterBlockId,
+      index: input.desiredStart,
+      path: [...input.path, input.desiredStart],
+      blocks: input.desiredGap
+    });
+  }
+  if (input.remoteGap.length > 0) {
+    input.state.operations.push({
+      kind: 'delete',
+      parentBlockId: input.parentBlockId,
+      blockIds,
+      startIndex: input.remoteStart,
+      endIndex: input.remoteStart + input.remoteGap.length,
+      path: [...input.path, input.remoteStart]
+    });
+  }
+  return undefined;
+}
+
+function uniqueStableAnchors(
+  remoteBlocks: FeishuBlock[],
+  desiredBlocks: FeishuBlock[]
+): Array<{ remoteIndex: number; desiredIndex: number }> {
+  const remoteByKey = indexesByMatchKey(remoteBlocks);
+  const desiredByKey = indexesByMatchKey(desiredBlocks);
+  return [...remoteByKey.entries()].flatMap(([key, remoteIndexes]) => {
+    const desiredIndexes = desiredByKey.get(key);
+    if (remoteIndexes.length !== 1 || desiredIndexes?.length !== 1) return [];
+    const remoteIndex = remoteIndexes[0]!;
+    const desiredIndex = desiredIndexes[0]!;
+    const remote = remoteBlocks[remoteIndex];
+    const desired = desiredBlocks[desiredIndex];
+    return remote?.block_id && remote && desired && blocksEquivalent([remote], [desired])
+      ? [{ remoteIndex, desiredIndex }]
+      : [];
+  }).sort((left, right) => left.remoteIndex - right.remoteIndex);
+}
+
+function indexesByMatchKey(blocks: FeishuBlock[]): Map<string, number[]> {
+  const result = new Map<string, number[]>();
+  blocks.forEach((block, index) => {
+    const key = blockMatchKey(block);
+    result.set(key, [...(result.get(key) ?? []), index]);
+  });
+  return result;
+}
+
+function blockMatchKey(block: FeishuBlock): string {
+  return canUseCanonicalMarkdown([block])
+    ? `markdown:${canonicalMarkdown([block])}`
+    : `block:${hashComparableBlocks([block])}`;
+}
+
+function hasEquivalentCrossMatch(remoteBlocks: FeishuBlock[], desiredBlocks: FeishuBlock[]): boolean {
+  return remoteBlocks.some((remote) => desiredBlocks.some((desired) => {
+    return blocksEquivalent([remote], [desired]);
+  }));
+}
+
 function planBlockPair(input: {
+  parentBlockId: string;
   remote: FeishuBlock;
   desired: FeishuBlock;
   path: number[];
+  desiredPath?: number[];
   state: PlanningState;
 }): string | undefined {
   if (blocksEquivalent([input.remote], [input.desired])) return undefined;
@@ -185,8 +363,12 @@ function planBlockPair(input: {
 
   input.state.operations.push({
     kind: 'update',
+    parentBlockId: input.parentBlockId,
     remoteBlockId: input.remote.block_id as string,
     path: input.path,
+    ...(input.desiredPath && input.desiredPath.some((part, index) => part !== input.path[index])
+      ? { desiredPath: input.desiredPath }
+      : {}),
     blockType: input.remote.block_type
   });
   return undefined;
@@ -284,7 +466,10 @@ function blockIdsForDelete(blocks: FeishuBlock[]): string[] {
 function isWritableMarkdownBlockForPatch(block: FeishuBlock): boolean {
   const writableType = block.block_type === 2 || (block.block_type >= 3 && block.block_type <= 8) || block.block_type === 12 || block.block_type === 13 || block.block_type === 14 || block.block_type === 31;
   if (!writableType) return false;
-  if (Array.isArray(block.children) && block.children.length > 0) return false;
+  if (Array.isArray(block.children) && block.children.length > 0) {
+    return (block.block_type === 12 || block.block_type === 13) &&
+      block.children.every((child) => isFeishuBlock(child) && isWritableMarkdownBlockForPatch(child));
+  }
   if (block.block_type !== 31) return true;
   const cells = (block.table as { cells?: unknown[] } | undefined)?.cells ?? [];
   return cells.every((cell) => isFeishuBlock(cell) && cell.block_type === 2 && (!Array.isArray(cell.children) || cell.children.length === 0));

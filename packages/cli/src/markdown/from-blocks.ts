@@ -25,11 +25,11 @@ function renderBlock(block: FeishuBlock, callouts: CalloutConfig): string {
   }
 
   if (block.block_type === 12) {
-    return `- ${renderElements((block.bullet as { elements?: TextElement[] } | undefined)?.elements)}`;
+    return renderListBlock(block, false, callouts);
   }
 
   if (block.block_type === 13) {
-    return `1. ${renderElements((block.ordered as { elements?: TextElement[] } | undefined)?.elements)}`;
+    return renderListBlock(block, true, callouts);
   }
 
   if (block.block_type === 14) {
@@ -52,6 +52,23 @@ function renderBlock(block: FeishuBlock, callouts: CalloutConfig): string {
   }
 
   return `<!-- unsupported Feishu block_type ${block.block_type} omitted by pull -->`;
+}
+
+function renderListBlock(block: FeishuBlock, ordered: boolean, callouts: CalloutConfig): string {
+  const key = ordered ? 'ordered' : 'bullet';
+  const marker = ordered ? '1.' : '-';
+  const head = `${marker} ${renderElements((block[key] as { elements?: TextElement[] } | undefined)?.elements)}`;
+  const children = Array.isArray(block.children) ? block.children.filter(isBlock) : [];
+  if (children.length === 0) return head;
+  const rendered = children
+    .map((child) => renderBlock(child, callouts))
+    .filter((part) => part.trim() !== '')
+    .map(indentListChild);
+  return rendered.length > 0 ? [head, ...rendered].join('\n\n') : head;
+}
+
+function indentListChild(markdown: string): string {
+  return markdown.split('\n').map((line) => line ? `    ${line}` : '').join('\n');
 }
 
 function renderSourceSynced(block: FeishuBlock, callouts: CalloutConfig): string {

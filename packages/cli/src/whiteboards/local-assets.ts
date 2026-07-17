@@ -7,6 +7,8 @@ import { validateWhiteboardSvg } from './svg-validation.js';
 
 export type LocalWhiteboardAsset = {
   assetKey: string;
+  svgKey: string;
+  sourceKind: 'png-sibling' | 'direct-svg';
   locator: SemanticLocator;
   alt: string;
   pngPath: string;
@@ -27,6 +29,7 @@ export async function discoverLocalWhiteboardAssets(input: {
   markdown: string;
   document: SemanticDocument;
   tracked: Array<{ assetKey: string; svgPath: string }>;
+  includeDirectSvg?: boolean;
 }): Promise<{ assets: LocalWhiteboardAsset[]; blockers: LocalWhiteboardBlocker[] }> {
   const assets: LocalWhiteboardAsset[] = [];
   const blockers: LocalWhiteboardBlocker[] = [];
@@ -34,10 +37,11 @@ export async function discoverLocalWhiteboardAssets(input: {
   const trackedKeys = new Set(input.tracked.map((entry) => normalizeAssetKey(entry.assetKey)));
 
   for (const node of input.document.nodes.filter(isLocalImageAsset)) {
-    const local = localPngPath(node.source, sourceDir);
+    const local = localWhiteboardPath(node.source, sourceDir, input.includeDirectSvg === true);
     if (!local) continue;
     const tracked = trackedKeys.has(local.assetKey);
-    const pngExists = await fileExists(local.pngPath);
+    if (local.sourceKind === 'direct-svg' && !tracked && input.includeDirectSvg !== true) continue;
+    const pngExists = local.sourceKind === 'direct-svg' || await fileExists(local.pngPath);
     const svgExists = await fileExists(local.svgPath);
 
     if (!pngExists) {
@@ -62,6 +66,21 @@ export async function discoverLocalWhiteboardAssets(input: {
     }
 
     const svgSource = await readFile(local.svgPath, 'utf8');
+    if (local.sourceKind === 'direct-svg' && !tracked) {
+      assets.push({
+        assetKey: local.assetKey,
+        svgKey: local.svgKey,
+        sourceKind: local.sourceKind,
+        locator: node.locator,
+        alt: node.alt ?? '',
+        pngPath: local.pngPath,
+        svgPath: local.svgPath,
+        svgSource,
+        svgHash: sha256(svgSource),
+        expectedTexts: []
+      });
+      continue;
+    }
     const validation = validateWhiteboardSvg(svgSource);
     if (!validation.valid) {
       blockers.push({
@@ -73,6 +92,8 @@ export async function discoverLocalWhiteboardAssets(input: {
     }
     assets.push({
       assetKey: local.assetKey,
+      svgKey: local.svgKey,
+      sourceKind: local.sourceKind,
       locator: node.locator,
       alt: node.alt ?? '',
       pngPath: local.pngPath,
@@ -86,9 +107,11 @@ export async function discoverLocalWhiteboardAssets(input: {
   for (const segment of splitMarkdownImageBlocks(input.markdown)) {
     if (segment.kind !== 'inline-image') continue;
     for (const image of segment.images) {
-      const local = localPngPath(image.source, sourceDir);
+      const local = localWhiteboardPath(image.source, sourceDir, input.includeDirectSvg === true);
       if (!local) continue;
-      if (!await fileExists(local.pngPath) || !await fileExists(local.svgPath)) continue;
+      if (local.sourceKind === 'direct-svg' && !trackedKeys.has(local.assetKey)) continue;
+      if (local.sourceKind === 'png-sibling' && !await fileExists(local.pngPath)) continue;
+      if (!await fileExists(local.svgPath)) continue;
       blockers.push({
         code: 'inline-whiteboard-unsupported',
         assetKey: local.assetKey,
@@ -109,8 +132,10 @@ function isLocalImageAsset(node: SemanticDocument['nodes'][number]): node is Sem
   return node.kind === 'asset' && node.representation === 'image' && typeof node.source === 'string';
 }
 
-function localPngPath(source: string, sourceDir: string): {
+function localWhiteboardPath(source: string, sourceDir: string, includeDirectSvg: boolean): {
   assetKey: string;
+  svgKey: string;
+  sourceKind: LocalWhiteboardAsset['sourceKind'];
   pngPath: string;
   svgPath: string;
 } | undefined {
@@ -122,11 +147,20 @@ function localPngPath(source: string, sourceDir: string): {
   } catch {
     decoded = withoutSuffix;
   }
-  if (extname(decoded).toLocaleLowerCase('en-US') !== '.png') return undefined;
-  const pngPath = resolve(sourceDir, decoded);
-  const svgPath = `${pngPath.slice(0, -extname(pngPath).length)}.svg`;
+  const extension = extname(decoded).toLocaleLowerCase('en-US');
+  if (extension !== '.png' && (!includeDirectSvg || extension !== '.svg')) return undefined;
+  const sourceKind = extension === '.svg' ? 'direct-svg' : 'png-sibling';
+  const sourcePath = resolve(sourceDir, decoded);
+  const pngPath = sourceKind === 'direct-svg'
+    ? `${sourcePath.slice(0, -extension.length)}.png`
+    : sourcePath;
+  const svgPath = sourceKind === 'direct-svg'
+    ? sourcePath
+    : `${sourcePath.slice(0, -extension.length)}.svg`;
   return {
     assetKey: normalizeAssetKey(relative(sourceDir, pngPath)),
+    svgKey: normalizeAssetKey(relative(sourceDir, svgPath)),
+    sourceKind,
     pngPath,
     svgPath
   };

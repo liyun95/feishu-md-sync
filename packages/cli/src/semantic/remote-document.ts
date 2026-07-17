@@ -18,6 +18,7 @@ import type {
   SemanticNode,
   SemanticProtectedResource
 } from './types.js';
+import { semanticTextChildren } from './text-tree.js';
 
 const TEXT_KEY_BY_TYPE: Record<number, string> = {
   2: 'text',
@@ -74,12 +75,14 @@ export function remoteSemanticDocument(
         headingPath.length = level - 1;
         headingPath[level - 1] = title;
       }
+      const children = semanticTextChildren(block, callouts);
       nodes.push({
         kind: 'text',
         locator: nextLocator(headingPath, 'text', ordinals),
         blockType: block.block_type,
         markdown,
-        remoteBlockId: block.block_id
+        remoteBlockId: block.block_id,
+        ...(children ? { children } : {})
       });
       continue;
     }

@@ -3,11 +3,240 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
+import type { FeishuBlock } from '../src/feishu/types.js';
+import { markdownToFeishuBlocks } from '../src/markdown/blocks.js';
 import { readPullReceipt } from '../src/receipts/pull-receipt.js';
 import { hashText } from '../src/receipts/publish-receipt.js';
 import { runPull } from '../src/pull/run-pull.js';
 
 describe('runPull', () => {
+  it('reconstructs nested list child paragraphs from the native block tree when lark-cli Markdown is lossy', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-nested-tree-'));
+    const output = join(dir, 'doc.remote.md');
+    const desiredList = `- **Parent one**
+
+    Child one.
+
+    Child two.
+
+- **Parent two**
+
+    Leading paragraph.
+
+    - Nested one.
+
+    - Nested two.
+
+    Trailing paragraph.
+
+- **Parent three**
+
+    Only child.`;
+    const lossyList = `- **Parent one**Child one.Child two.
+
+- **Parent two**Leading paragraph.Trailing paragraph.
+
+    - Nested one.
+
+    - Nested two.
+
+- **Parent three**Only child.`;
+    const remoteMarkdown = `## Before
+
+${lossyList}
+
+## After
+
+Stable paragraph.`;
+    const expected = `## Before
+
+${desiredList}
+
+## After
+
+Stable paragraph.`;
+    const tree = materializePullTree(desiredList, 'nested');
+
+    const result = await runPull({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '44' }),
+        fetchDocBlocks: async () => ({
+          blocks: [
+            { block_id: 'doc_token', block_type: 1, children: tree.roots.map((block) => block.block_id!) },
+            ...tree.roots,
+            ...tree.descendants
+          ]
+        }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    await expect(readFile(output, 'utf8')).resolves.toBe(expected);
+    expect(result.remoteRevision).toBe('44');
+    expect(result.remoteRawHash).toBe(hashText(remoteMarkdown));
+    expect(result.warnings).toContain('reconstructed nested list hierarchy from Docx block API');
+  });
+
+  it('reconstructs the compact two-space nested list serialization observed at revision 44', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-nested-tree-'));
+    const output = join(dir, 'doc.remote.md');
+    const desiredList = `- **Parent one**
+
+    Child one.
+
+    Child two.
+
+- **Parent two**
+
+    Leading paragraph.
+
+    - Nested one.
+
+    - Nested two.
+
+    - Nested three.
+
+    Trailing paragraph one.
+
+    Trailing paragraph two.
+
+- **Parent three**
+
+    Only child.`;
+    const compactLossyList = `- **Parent one**Child one.Child two.
+- **Parent two**Leading paragraph.Trailing paragraph one.Trailing paragraph two.
+
+  - Nested one.
+  - Nested two.
+  - Nested three.
+- **Parent three**Only child.`;
+    const remoteMarkdown = `Opening paragraph.
+
+${compactLossyList}
+
+![Flow](remote-whiteboard)
+
+Following paragraph.`;
+    const expected = `Opening paragraph.
+
+${desiredList}
+
+![Flow](remote-whiteboard)
+
+Following paragraph.`;
+    const tree = materializePullTree(desiredList, 'revision44');
+
+    const result = await runPull({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '44' }),
+        fetchDocBlocks: async () => ({
+          blocks: [
+            { block_id: 'doc_token', block_type: 1, children: tree.roots.map((block) => block.block_id!) },
+            ...tree.roots,
+            ...tree.descendants
+          ]
+        }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    await expect(readFile(output, 'utf8')).resolves.toBe(expected);
+    expect(result.warnings).toEqual(['reconstructed nested list hierarchy from Docx block API']);
+  });
+
+  it('keeps an already-correct nested list and resolves wiki targets before block reconstruction', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-nested-tree-'));
+    const output = join(dir, 'doc.remote.md');
+    const desired = `- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+
+    Trailing paragraph.`;
+    const tree = materializePullTree(desired, 'correct');
+    const resolved: string[] = [];
+    const result = await runPull({
+      cwd: dir,
+      target: { kind: 'wiki', token: 'wiki_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter: {
+        resolveDocumentId: async ({ target }) => {
+          resolved.push(target.token);
+          return 'doc_token';
+        },
+        fetchDocMarkdown: async () => ({ markdown: desired, revision: '44' }),
+        fetchDocBlocks: async ({ doc }) => {
+          expect(doc).toBe('doc_token');
+          return {
+            blocks: [
+              { block_id: 'doc_token', block_type: 1, children: tree.roots.map((block) => block.block_id!) },
+              ...tree.roots,
+              ...tree.descendants
+            ]
+          };
+        },
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    await expect(readFile(output, 'utf8')).resolves.toBe(desired);
+    expect(resolved).toEqual(['wiki_token']);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('fails closed when a lossy nested list cannot be uniquely matched in fetched Markdown', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-nested-tree-'));
+    const output = join(dir, 'doc.remote.md');
+    const desired = `- **Parent**
+
+    Child paragraph.`;
+    const lossy = '- **Parent**Child paragraph.';
+    const tree = materializePullTree(desired, 'ambiguous');
+
+    await expect(runPull({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: `${lossy}\n\n${lossy}` }),
+        fetchDocBlocks: async () => ({
+          blocks: [
+            { block_id: 'doc_token', block_type: 1, children: tree.roots.map((block) => block.block_id!) },
+            ...tree.roots,
+            ...tree.descendants
+          ]
+        }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    })).rejects.toThrow(
+      'pull nested list hierarchy reconstruction failed: native block sequence cannot be uniquely matched'
+    );
+    await expect(readFile(output, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('emits canonical Feishu Code block languages', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-pull-code-'));
     const output = join(dir, 'doc.remote.md');
@@ -208,3 +437,35 @@ describe('runPull', () => {
     });
   });
 });
+
+function materializePullTree(
+  markdown: string,
+  prefix: string
+): { roots: FeishuBlock[]; descendants: FeishuBlock[] } {
+  let ordinal = 0;
+  const visit = (block: FeishuBlock): { root: FeishuBlock; descendants: FeishuBlock[] } => {
+    ordinal += 1;
+    const blockId = `${prefix}-${ordinal}`;
+    const children = Array.isArray(block.children)
+      ? block.children.filter((child): child is FeishuBlock => {
+        return Boolean(child && typeof child === 'object' && !Array.isArray(child) && 'block_type' in child);
+      })
+      : [];
+    const materialized = children.map(visit);
+    return {
+      root: {
+        ...block,
+        block_id: blockId,
+        ...(materialized.length > 0
+          ? { children: materialized.map((child) => child.root.block_id!) }
+          : { children: undefined })
+      },
+      descendants: materialized.flatMap((child) => [child.root, ...child.descendants])
+    };
+  };
+  const materialized = markdownToFeishuBlocks(markdown).map(visit);
+  return {
+    roots: materialized.map((entry) => entry.root),
+    descendants: materialized.flatMap((entry) => entry.descendants)
+  };
+}

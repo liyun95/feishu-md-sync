@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import type { FeishuBlock } from '../src/feishu/types.js';
 import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
+import { stripExecutionMetadata } from '../src/semantic/normalize.js';
 
 describe('remote semantic document', () => {
   it('builds section-aware tables with multi-block cells', () => {
@@ -82,6 +83,51 @@ describe('remote semantic document', () => {
     expect(document.nodes).toEqual([
       expect.objectContaining({ kind: 'text', markdown: 'Visible paragraph.' })
     ]);
+  });
+
+  it('preserves nested text hierarchy and distinguishes flat root siblings', () => {
+    const nested = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['parent'] },
+      {
+        block_id: 'parent',
+        block_type: 12,
+        children: ['child', 'nested-bullet', 'nested-ordered'],
+        bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: { bold: true } } }] }
+      },
+      text('child', 'Child paragraph.'),
+      bullet('nested-bullet', 'Nested bullet.'),
+      {
+        block_id: 'nested-ordered',
+        block_type: 13,
+        ordered: { elements: [{ text_run: { content: 'Nested ordered.', text_element_style: {} } }] }
+      }
+    ], 'doc_token');
+    const flat = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['parent', 'child', 'nested-bullet', 'nested-ordered'] },
+      {
+        block_id: 'parent',
+        block_type: 12,
+        bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: { bold: true } } }] }
+      },
+      text('child', 'Child paragraph.'),
+      bullet('nested-bullet', 'Nested bullet.'),
+      {
+        block_id: 'nested-ordered',
+        block_type: 13,
+        ordered: { elements: [{ text_run: { content: 'Nested ordered.', text_element_style: {} } }] }
+      }
+    ], 'doc_token');
+
+    expect(nested.nodes).toEqual([expect.objectContaining({
+      kind: 'text',
+      remoteBlockId: 'parent',
+      children: [
+        expect.objectContaining({ remoteBlockId: 'child', blockType: 2 }),
+        expect.objectContaining({ remoteBlockId: 'nested-bullet', blockType: 12 }),
+        expect.objectContaining({ remoteBlockId: 'nested-ordered', blockType: 13 })
+      ]
+    })]);
+    expect(stripExecutionMetadata(nested)).not.toEqual(stripExecutionMetadata(flat));
   });
 
   it('classifies exact Procedures paragraphs as authoring tokens', () => {

@@ -281,6 +281,48 @@ describe('runDiff', () => {
     expect(result.hasDiff).toBe(true);
   });
 
+  it('reports a preserved tracked Whiteboard beside Zdoc text changes without sync opt-in', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-diff-zdoc-whiteboard-protection-'));
+    const images = join(dir, 'images');
+    const file = join(dir, 'doc.md');
+    const baselineMarkdown = 'Old surrounding text.\n\n![Flow](./images/flow.svg)';
+    const currentMarkdown = 'Updated surrounding text.\n\n![Flow](./images/flow.svg)';
+    const remoteMarkdown = 'Old surrounding text.\n\n![Flow](remote-whiteboard)';
+    await mkdir(images);
+    await writeFile(file, currentMarkdown, 'utf8');
+    await writeFile(join(images, 'flow.svg'), '<svg viewBox="0 0 10 10"><text>Flow</text></svg>', 'utf8');
+    await seedDirectSvgWhiteboardReceipt(dir, baselineMarkdown, remoteMarkdown);
+
+    const result = await runDiff({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: remoteMarkdown }),
+        fetchDocBlocks: async () => ({ blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['text_block', 'wb_block'] },
+          textBlock('text_block', 'Old surrounding text.'),
+          { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+        ] }),
+        replaceDocument: async () => {}
+      }
+    });
+
+    expect(result.scoped.text).toContainEqual(expect.objectContaining({
+      kind: 'update',
+      desiredMarkdown: 'Updated surrounding text.'
+    }));
+    expect(result.scoped.blockers).toEqual([]);
+    expect(result.scoped.whiteboards).toEqual([expect.objectContaining({
+      assetKey: 'images/flow.png',
+      action: 'preserve tracked whiteboard',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    })]);
+  });
+
   it('includes Whiteboard discovery blockers in scoped diff output', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-diff-whiteboard-blocker-'));
     const assets = join(dir, 'assets');
@@ -431,6 +473,60 @@ async function seedTrackedCalloutReceipt(cwd: string, markdown: string): Promise
       localBaseSnapshot,
       remoteSemanticSnapshot,
       updatedAt: '2026-07-14T00:00:00.000Z'
+    }
+  });
+}
+
+async function seedDirectSvgWhiteboardReceipt(
+  cwd: string,
+  markdown: string,
+  remoteMarkdown: string
+): Promise<void> {
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd, target, markdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd,
+    target,
+    document: { nodes: [
+      {
+        kind: 'text',
+        locator: { sectionPath: [], kind: 'text', ordinal: 0 },
+        blockType: 2,
+        markdown: 'Old surrounding text.',
+        remoteBlockId: 'text_block'
+      },
+      {
+        kind: 'asset',
+        locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+        representation: 'whiteboard',
+        remoteBlockId: 'wb_block',
+        remoteToken: 'wb_token'
+      }
+    ] }
+  });
+  await writePublishReceipt({
+    cwd,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(markdown),
+      publishDraftHash: hashText(markdown),
+      remoteSnapshotHash: hashText(remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'images/flow.png',
+        pngPath: 'images/flow.png',
+        svgPath: 'images/flow.svg',
+        svgHash: hashText('<svg viewBox="0 0 10 10"><text>Flow</text></svg>'),
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: 'remote-state',
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-16T00:00:00.000Z'
     }
   });
 }

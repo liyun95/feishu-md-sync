@@ -1,7 +1,12 @@
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import type { DialectDiagnostic, DialectName } from '../dialects/types.js';
 import type { LinkResolutionSummary } from '../link-resolvers/types.js';
-import { hashText, type PublishReceipt, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
+import {
+  hashText,
+  whiteboardEntries,
+  type PublishReceipt,
+  type PublishReceiptTarget
+} from '../receipts/publish-receipt.js';
 import type { PublishBlockPatchPlan } from './block-patch-plan.js';
 import type { ScopedPatchPlan } from './scoped-patch-plan.js';
 import type { WhiteboardPlan } from '../whiteboards/whiteboard-plan.js';
@@ -152,6 +157,26 @@ export function buildPublishPlan(input: {
   if (remoteChanged) risks.push('remote changed since last publish receipt');
 
   if (input.forceDocumentReplace) {
+    const protectedWhiteboards = dialectFields.dialect === 'zdoc-authoring' &&
+      whiteboardEntries(input.receipt).length > 0;
+    if (protectedWhiteboards) {
+      risks.push('document replacement cannot preserve tracked Whiteboard block and token identity');
+      return {
+        target: input.target,
+        profile: input.profile,
+        ...dialectFields,
+        strategy: 'blocked',
+        safeToWrite: false,
+        remoteChanged,
+        localSourceHash,
+        publishDraftHash,
+        remoteSnapshotHash,
+        requiresCollaborationRiskConfirmation: false,
+        requiresUntrackedRemoteConfirmation: false,
+        risks,
+        warnings: input.transformWarnings
+      };
+    }
     const protectedSupademo = input.zdocRoundTrip?.items.some((item) => {
       return item.code === 'supademo-adopt' || item.code === 'supademo-protected';
     }) ?? false;
@@ -208,7 +233,8 @@ export function buildPublishPlan(input: {
       (!input.receipt && Boolean(input.scopedPatch)) ||
       (input.whiteboards?.requiresUntrackedRemoteConfirmation ?? false);
     const requiredRemoteWhiteboardOverwrites = whiteboardOperations.flatMap((operation) => {
-      return operation.kind === 'whiteboard-update' && operation.reason === 'confirmed-remote-overwrite'
+      return operation.kind === 'whiteboard-update' &&
+        (operation.reason === 'confirmed-remote-overwrite' || operation.reason === 'confirmed-protected-overwrite')
         ? [operation.assetKey]
         : [];
     });
