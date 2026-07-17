@@ -30,6 +30,7 @@ export type SemanticLocator = {
   sectionPath: string[];
   kind: 'text' | 'code' | 'table' | 'asset' | 'callout' | 'opaque' | 'authoring-token' | 'protected-resource';
   ordinal: number;
+  textPath?: number[];
 };
 
 export type SemanticAuthoringToken = {
@@ -114,6 +115,14 @@ export type SemanticTextBlock = {
   blockType: number;
   markdown: string;
   remoteBlockId?: string;
+  children?: SemanticTextChild[];
+};
+
+export type SemanticTextChild = {
+  blockType: number;
+  markdown: string;
+  remoteBlockId?: string;
+  children?: SemanticTextChild[];
 };
 
 export type SemanticOpaqueNode = {

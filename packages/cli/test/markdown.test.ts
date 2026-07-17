@@ -139,6 +139,45 @@ The name of the database.
     });
   });
 
+  it('preserves blank-separated child paragraphs and nested list hierarchy', () => {
+    const source = `- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+    1. Nested ordered.
+`;
+
+    const blocks = markdownToFeishuBlocks(source);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      block_type: 12,
+      children: [
+        {
+          block_type: 2,
+          text: { elements: [{ text_run: { content: 'Child paragraph.' } }] }
+        },
+        {
+          block_type: 12,
+          bullet: { elements: [{ text_run: { content: 'Nested bullet.' } }] }
+        },
+        {
+          block_type: 13,
+          ordered: { elements: [{ text_run: { content: 'Nested ordered.' } }] }
+        }
+      ]
+    });
+    expect(feishuBlocksToMarkdown(blocks)).toBe(`- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+
+    1. Nested ordered.
+`);
+  });
+
   it('renders Feishu document mentions as Markdown links', () => {
     const markdown = feishuBlocksToMarkdown([
       {

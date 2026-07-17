@@ -82,6 +82,17 @@ describe('pull CLI', () => {
 async function createFakeLarkCli(path: string): Promise<void> {
   await writeFile(path, [
     '#!/usr/bin/env node',
+    'const args = process.argv.slice(2);',
+    'if (args[0] === "api") {',
+    '  console.log(JSON.stringify({',
+    '    ok: true,',
+    '    data: {',
+    '      items: [{ block_id: "doccn123456789012345678901234", block_type: 1, children: [] }],',
+    '      has_more: false',
+    '    }',
+    '  }));',
+    '  process.exit(0);',
+    '}',
     'console.log(JSON.stringify({',
     '  ok: true,',
     '  data: {',

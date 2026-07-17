@@ -66,6 +66,47 @@ describe('zdoc-authoring dialect', () => {
     expect(result.warnings[0].message).toContain('heading fragment');
   });
 
+  it('resolves document links in four-space-indented paragraphs under list items', async () => {
+    const resolvedUrl = 'https://zilliverse.feishu.cn/wiki/wiki_next';
+    const result = await preprocessText([
+      '[Root](./next)',
+      '',
+      '- **Create credentials**',
+      '',
+      '    For details, see [Next](./next).',
+      '',
+      '    Keep this paragraph nested.',
+      '',
+      '- **Choose a model**',
+      ''
+    ].join('\n'), fakeResolver({ slug: 'next', url: resolvedUrl }));
+
+    expect(result.markdown).toBe([
+      `[Root](${resolvedUrl})`,
+      '',
+      '- **Create credentials**',
+      '',
+      `    For details, see [Next](${resolvedUrl}).`,
+      '',
+      '    Keep this paragraph nested.',
+      '',
+      '- **Choose a model**',
+      ''
+    ].join('\n'));
+    expect(result.linkResolution.resolvedToFeishu).toBe(2);
+  });
+
+  it('does not resolve Markdown-looking links in actual indented code', async () => {
+    const markdown = '    [Next](./next)\n';
+    const result = await preprocessText(markdown, fakeResolver({
+      slug: 'next',
+      url: 'https://zilliverse.feishu.cn/wiki/wiki_next'
+    }));
+
+    expect(result.markdown).toBe(markdown);
+    expect(result.linkResolution.resolvedToFeishu).toBe(0);
+  });
+
   it('leaves component-looking text inside code fences unchanged', async () => {
     const markdown = '```mdx\n<Tabs>\n:::\n```\n';
     const result = await preprocessText(markdown);

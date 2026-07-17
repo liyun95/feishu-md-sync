@@ -87,6 +87,26 @@ describe('local Whiteboard assets', () => {
     expect(result).toEqual({ assets: [], blockers: [] });
   });
 
+  it('loads a tracked direct SVG under its existing PNG receipt key', async () => {
+    const fixture = await createFixture('![CAGRA](./assets/cagra.svg)', false, true);
+    const result = await discoverLocalWhiteboardAssets({
+      sourcePath: fixture.sourcePath,
+      markdown: fixture.markdown,
+      document: localSemanticDocument(fixture.markdown),
+      tracked: [{ assetKey: 'assets/cagra.png', svgPath: 'assets/cagra.svg' }],
+      includeDirectSvg: true
+    });
+
+    expect(result.blockers).toEqual([]);
+    expect(result.assets).toContainEqual(expect.objectContaining({
+      assetKey: 'assets/cagra.png',
+      svgKey: 'assets/cagra.svg',
+      sourceKind: 'direct-svg',
+      pngPath: join(fixture.dir, 'assets', 'cagra.png'),
+      svgPath: join(fixture.dir, 'assets', 'cagra.svg')
+    }));
+  });
+
   it('normalizes equivalent asset keys to POSIX relative paths', () => {
     expect(normalizeAssetKey('./assets/../assets/cagra.png')).toBe('assets/cagra.png');
     expect(normalizeAssetKey('assets\\cagra.png')).toBe('assets/cagra.png');

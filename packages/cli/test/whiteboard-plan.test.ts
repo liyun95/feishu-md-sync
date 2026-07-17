@@ -32,6 +32,20 @@ describe('Whiteboard publish plan', () => {
     expect(result.assets).toContainEqual(expect.objectContaining({ state: 'untracked', remote: 'untracked' }));
   });
 
+  it('does not initialize a Whiteboard from an untracked direct SVG', () => {
+    const result = planWhiteboardPublish({
+      ...planningInput({ remote: remoteAsset('image', 'image_block', 'image_token') }),
+      localAssets: [{
+        ...localAsset('svg-current'),
+        sourceKind: 'direct-svg'
+      }]
+    });
+
+    expect(result.operations).toEqual([]);
+    expect(result.blockers).toEqual([]);
+    expect(result.assets).toEqual([]);
+  });
+
   it('blocks untracked correspondence when a local image was inserted before the remote slot', () => {
     const followingLocalImage: SemanticAssetNode = {
       ...localNode(),
@@ -95,6 +109,53 @@ describe('Whiteboard publish plan', () => {
     expect(result.operations).toEqual([]);
     expect(result.blockers).toEqual([]);
     expect(result.assets).toEqual([expect.objectContaining({ state: 'clean', action: 'no-op' })]);
+  });
+
+  it('protects a tracked direct SVG without planning a Whiteboard write', () => {
+    const result = planWhiteboardPublish({
+      ...trackedInput({ localHash: 'svg-base', remoteHash: 'remote-base' }),
+      intent: 'protect',
+      localAssets: [{
+        ...localAsset('svg-base'),
+        svgKey: 'assets/cagra.svg',
+        sourceKind: 'direct-svg'
+      }]
+    });
+
+    expect(result.blockers).toEqual([]);
+    expect(result.operations).toEqual([]);
+    expect(result.assets).toEqual([expect.objectContaining({
+      state: 'clean',
+      action: 'preserve tracked whiteboard',
+      protection: 'tracked',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    })]);
+  });
+
+  it('requires asset-specific confirmation before updating a tracked direct SVG', () => {
+    const input = {
+      ...trackedInput({ localHash: 'svg-current', remoteHash: 'remote-base' }),
+      localAssets: [{
+        ...localAsset('svg-current'),
+        svgKey: 'assets/cagra.svg',
+        sourceKind: 'direct-svg' as const
+      }]
+    };
+    const blocked = planWhiteboardPublish(input);
+    const confirmed = planWhiteboardPublish({
+      ...input,
+      confirmedRemoteOverwrites: new Set(['assets/cagra.png'])
+    });
+
+    expect(blocked.operations).toEqual([]);
+    expect(blocked.blockers).toContainEqual(expect.objectContaining({
+      code: 'protected-whiteboard-overwrite-confirmation-required'
+    }));
+    expect(confirmed.operations).toEqual([expect.objectContaining({
+      kind: 'whiteboard-update',
+      reason: 'confirmed-protected-overwrite'
+    })]);
   });
 
   it('updates a tracked Whiteboard when only the local SVG changed', () => {
@@ -185,6 +246,7 @@ describe('Whiteboard publish plan', () => {
     const otherLocalAsset: LocalWhiteboardAsset = {
       ...localAsset('other-svg'),
       assetKey: 'assets/other.png',
+      svgKey: 'assets/other.svg',
       locator: otherLocalNode.locator,
       pngPath: '/tmp/assets/other.png',
       svgPath: '/tmp/assets/other.svg'
@@ -274,6 +336,8 @@ function localNode(): SemanticAssetNode {
 function localAsset(svgHash: string): LocalWhiteboardAsset {
   return {
     assetKey: 'assets/cagra.png',
+    svgKey: 'assets/cagra.svg',
+    sourceKind: 'png-sibling',
     locator: localNode().locator,
     alt: 'CAGRA',
     pngPath: '/tmp/assets/cagra.png',

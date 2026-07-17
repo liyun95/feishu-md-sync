@@ -208,4 +208,31 @@ First warning.
     expect(canonical?.kind).toBe('table');
     expect(stripExecutionMetadata(short)).toEqual(stripExecutionMetadata(canonical));
   });
+
+  it('represents nested list descendants inside one root text scope', () => {
+    const document = localSemanticDocument(`- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+    1. Nested ordered.
+`);
+
+    expect(document.nodes).toEqual([expect.objectContaining({
+      kind: 'text',
+      blockType: 12,
+      markdown: `- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+
+    1. Nested ordered.`,
+      children: [
+        expect.objectContaining({ blockType: 2, markdown: 'Child paragraph.' }),
+        expect.objectContaining({ blockType: 12, markdown: '- Nested bullet.' }),
+        expect.objectContaining({ blockType: 13, markdown: '1. Nested ordered.' })
+      ]
+    })]);
+  });
 });

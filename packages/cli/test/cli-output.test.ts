@@ -1,9 +1,33 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderCliFailure } from '../src/cli/error-output.js';
 import { printFormatted } from '../src/cli/output.js';
+import { CliFailure } from '../src/core/cli-failure.js';
 
 describe('CLI pretty output', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('includes the provider code in the JSON error contract', () => {
+    const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    renderCliFailure(new CliFailure({
+      type: 'internal',
+      subtype: 'openapi_error',
+      providerCode: 4003101,
+      message: 'doc is applying',
+      retryable: false
+    }), 'json');
+
+    expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      error: {
+        type: 'internal',
+        subtype: 'openapi_error',
+        providerCode: 4003101,
+        retryable: false
+      }
+    });
   });
 
   it('prints Whiteboard operations, blockers, and confirmation requirements', () => {

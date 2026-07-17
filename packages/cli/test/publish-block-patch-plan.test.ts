@@ -29,6 +29,7 @@ describe('publish block patch plan', () => {
     expect(plan.requiresCollaborationRiskConfirmation).toBe(true);
     expect(plan.operations).toEqual([{
       kind: 'update',
+      parentBlockId: 'page',
       remoteBlockId: 'b1',
       path: [0],
       blockType: 2
@@ -55,10 +56,41 @@ describe('publish block patch plan', () => {
     expect(plan.safeToWrite).toBe(true);
     expect(plan.operations).toEqual([{
       kind: 'update',
+      parentBlockId: 'callout1',
       remoteBlockId: 'p1',
       path: [0, 0],
       blockType: 2
     }]);
+  });
+
+  it('creates a nested text tree after a stable root anchor', () => {
+    const nested = {
+      block_type: 12,
+      bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: {} } }] },
+      children: [
+        paragraph(undefined, 'Child paragraph.'),
+        {
+          block_type: 12,
+          bullet: { elements: [{ text_run: { content: 'Nested bullet.', text_element_style: {} } }] }
+        }
+      ]
+    } satisfies FeishuBlock;
+    const plan = planPublishBlockPatch({
+      parentBlockId: 'page',
+      remoteBlocks: [paragraph('anchor', 'Before.')],
+      desiredBlocks: [paragraph(undefined, 'Before.'), nested]
+    });
+
+    expect(plan).toMatchObject({
+      safeToWrite: true,
+      operations: [{
+        kind: 'create',
+        parentBlockId: 'page',
+        insertAfterBlockId: 'anchor',
+        path: [1],
+        blocks: [nested]
+      }]
+    });
   });
 
   it('allows insert-only nested block patches without collaboration-risk confirmation', () => {
@@ -136,6 +168,31 @@ describe('publish block patch plan', () => {
 
     expect(plan.safeToWrite).toBe(false);
     expect(plan.fallbackReason).toBe('create block_type 43 is unsupported at 0');
+  });
+
+  it('fails closed when mixed sequence anchors are duplicated and ambiguous', () => {
+    const plan = planPublishBlockPatch({
+      parentBlockId: 'page',
+      remoteBlocks: [
+        paragraph('old-start', 'Old start.'),
+        paragraph('duplicate-1', 'Repeated anchor.'),
+        paragraph('duplicate-2', 'Repeated anchor.'),
+        paragraph('old-tail', 'Old tail.'),
+        paragraph('stable-end', 'Stable end.')
+      ],
+      desiredBlocks: [
+        paragraph(undefined, 'New start.'),
+        paragraph(undefined, 'Repeated anchor.'),
+        paragraph(undefined, 'Inserted detail.'),
+        paragraph(undefined, 'Repeated anchor.'),
+        paragraph(undefined, 'New tail.'),
+        paragraph(undefined, 'Stable end.')
+      ]
+    });
+
+    expect(plan.safeToWrite).toBe(false);
+    expect(plan.operations).toEqual([]);
+    expect(plan.fallbackReason).toBe('block order or count changed without a unique stable anchor at <root>');
   });
 });
 

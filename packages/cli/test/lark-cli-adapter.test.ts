@@ -348,6 +348,88 @@ describe('LarkCliAdapter', () => {
     ]);
   });
 
+  it('creates blocks under an explicit parent through the Docx children OpenAPI', async () => {
+    const calls: string[][] = [];
+    const adapter = new LarkCliAdapter({
+      identity: 'user',
+      exec: async (args) => {
+        calls.push(args);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              children: [
+                {
+                  block_id: 'child-1',
+                  parent_id: 'parent-1',
+                  block_type: 2,
+                  text: {
+                    elements: [
+                      { text_run: { content: 'Child paragraph with ', text_element_style: {} } },
+                      {
+                        text_run: {
+                          content: 'a link',
+                          text_element_style: { link: { url: 'https%3A%2F%2Fexample.com%2Fnested' } }
+                        }
+                      }
+                    ],
+                    style: {}
+                  }
+                }
+              ],
+              client_token: '123e4567-e89b-42d3-a456-426614174000',
+              document_revision_id: 8
+            }
+          }),
+          stderr: ''
+        };
+      }
+    });
+
+    await expect(adapter.createChildBlocks({
+      doc: 'doc_token',
+      parentBlockId: 'parent-1',
+      index: 2,
+      clientToken: '123e4567-e89b-42d3-a456-426614174000',
+      blocks: [{
+        block_type: 2,
+        text: {
+          elements: [
+            { text_run: { content: 'Child paragraph with ', text_element_style: {} } },
+            {
+              text_run: {
+                content: 'a link',
+                text_element_style: { link: { url: 'https://example.com/nested' } }
+              }
+            }
+          ],
+          style: {}
+        }
+      }]
+    })).resolves.toEqual({
+      blocks: [expect.objectContaining({
+        block_id: 'child-1',
+        parent_id: 'parent-1',
+        block_type: 2
+      })],
+      revision: '8',
+      clientToken: '123e4567-e89b-42d3-a456-426614174000'
+    });
+    expect(calls).toEqual([[
+      'api',
+      'POST',
+      '/open-apis/docx/v1/documents/doc_token/blocks/parent-1/children',
+      '--params',
+      '{"document_revision_id":-1,"client_token":"123e4567-e89b-42d3-a456-426614174000"}',
+      '--data',
+      '{"index":2,"children":[{"block_type":2,"text":{"elements":[{"text_run":{"content":"Child paragraph with ","text_element_style":{}}},{"text_run":{"content":"a link","text_element_style":{"link":{"url":"https%3A%2F%2Fexample.com%2Fnested"}}}}],"style":{}}}]}',
+      '--format',
+      'json',
+      '--as',
+      'user'
+    ]]);
+  });
+
   it('inserts Callout XML through stdin', async () => {
     const calls: Array<{ args: string[]; stdin?: string }> = [];
     const adapter = new LarkCliAdapter({
@@ -434,6 +516,7 @@ describe('LarkCliAdapter', () => {
           error: {
             type: 'authorization',
             subtype: 'missing_scope',
+            code: 4003101,
             message: 'permission denied',
             hint: 'run lark-cli auth login --scope docx:document:readonly',
             retryable: false,
@@ -450,6 +533,7 @@ describe('LarkCliAdapter', () => {
     expect((failure as CliFailure).details).toEqual({
       type: 'authorization',
       subtype: 'missing_scope',
+      providerCode: 4003101,
       message: 'permission denied',
       hint: 'run lark-cli auth login --scope docx:document:readonly',
       retryable: false,
@@ -558,27 +642,79 @@ describe('LarkCliAdapter', () => {
   });
 
   it('rejects an empty raw Whiteboard query result', async () => {
+    let calls = 0;
     const adapter = new LarkCliAdapter({
-      exec: async () => ({
-        stdout: JSON.stringify({ ok: true, data: { raw: undefined } }),
-        stderr: ''
-      })
+      exec: async () => {
+        calls += 1;
+        return {
+          stdout: JSON.stringify({ ok: true, data: { raw: undefined } }),
+          stderr: ''
+        };
+      }
     });
 
-    await expect(adapter.queryWhiteboard({ whiteboardToken: 'wb_token' }))
-      .rejects.toThrow('lark-cli whiteboard +query did not return raw node state');
+    const failure = await adapter.queryWhiteboard({ whiteboardToken: 'wb_token' })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CliFailure);
+    expect((failure as CliFailure).details).toMatchObject({
+      type: 'verification',
+      subtype: 'whiteboard_raw_not_ready',
+      retryable: false
+    });
+    expect(calls).toBe(1);
   });
 
-  it('rejects raw Whiteboard metadata without a nodes array', async () => {
+  it.each([
+    ['an empty nodes array', { raw: { nodes: [] } }],
+    ['an empty top-level raw array', { raw: [] }]
+  ])('classifies %s as raw Whiteboard state not ready', async (_description, data) => {
+    let calls = 0;
     const adapter = new LarkCliAdapter({
-      exec: async () => ({
-        stdout: JSON.stringify({ ok: true, data: { raw: { version: 1 } } }),
-        stderr: ''
-      })
+      exec: async () => {
+        calls += 1;
+        return {
+          stdout: JSON.stringify({ ok: true, data }),
+          stderr: ''
+        };
+      }
     });
 
-    await expect(adapter.queryWhiteboard({ whiteboardToken: 'wb_token' }))
-      .rejects.toThrow('lark-cli whiteboard +query did not return raw node state');
+    const failure = await adapter.queryWhiteboard({ whiteboardToken: 'wb_token' })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CliFailure);
+    expect((failure as CliFailure).details).toMatchObject({
+      type: 'verification',
+      subtype: 'whiteboard_raw_not_ready',
+      retryable: false
+    });
+    expect(calls).toBe(1);
+  });
+
+  it.each([
+    ['raw metadata without a nodes field', { raw: { version: 1 } }, 'lark-cli whiteboard +query did not return raw node state.'],
+    ['a non-array nodes field', { raw: { nodes: { id: 'node-1' } } }, 'lark-cli whiteboard +query did not return raw node state.'],
+    ['invalid embedded raw JSON', { content: '{' }, 'lark-cli whiteboard +query returned invalid raw JSON.']
+  ])('rejects malformed Whiteboard state from %s', async (_description, data, message) => {
+    let calls = 0;
+    const adapter = new LarkCliAdapter({
+      exec: async () => {
+        calls += 1;
+        return {
+          stdout: JSON.stringify({ ok: true, data }),
+          stderr: ''
+        };
+      }
+    });
+
+    const failure = await adapter.queryWhiteboard({ whiteboardToken: 'wb_token' })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(CliFailure);
+    expect((failure as Error).message).toBe(message);
+    expect(calls).toBe(1);
   });
 
   it('updates a Whiteboard from SVG through stdin with overwrite and idempotency', async () => {
