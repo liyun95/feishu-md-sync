@@ -1568,6 +1568,7 @@ export function assertCheckpointHasNoUnrelatedChanges(
     if ((operation.kind === 'code-move' || operation.kind === 'code-delete') && operation.remoteBlockId) {
       return [];
     }
+    if (operation.kind === 'callout-delete' && operation.blockIds.length > 0) return [];
     if (operation.kind === 'code-section-reconcile') return [];
     return [operation.locator].map(locatorKey);
   }));
@@ -1592,8 +1593,14 @@ export function assertCheckpointHasNoUnrelatedChanges(
     if (operation.kind === 'code-delete') return [operation.sourceLocator.sectionPath];
     return [];
   });
+  const structurallyChangedCalloutSections = operations.flatMap((operation) => {
+    return operation.kind === 'callout-create' || operation.kind === 'callout-delete'
+      ? [operation.locator.sectionPath]
+      : [];
+  });
   const outside = (document: SemanticDocument): unknown => {
     const codeOrdinals = new Map<string, number>();
+    const calloutOrdinals = new Map<string, number>();
     const nodes = document.nodes.filter((node) => {
       if (allowedLocators.has(locatorKey(node.locator))) return false;
       if (node.remoteBlockId && allowedBlockIds.has(node.remoteBlockId)) return false;
@@ -1602,6 +1609,14 @@ export function assertCheckpointHasNoUnrelatedChanges(
       })) return false;
       return true;
     }).map((node) => {
+      if (node.kind === 'callout' && structurallyChangedCalloutSections.some((sectionPath) => {
+        return sameSectionPath(node.locator.sectionPath, sectionPath);
+      })) {
+        const sectionKey = JSON.stringify(node.locator.sectionPath);
+        const ordinal = calloutOrdinals.get(sectionKey) ?? 0;
+        calloutOrdinals.set(sectionKey, ordinal + 1);
+        return { ...node, locator: { ...node.locator, ordinal } };
+      }
       if (node.kind !== 'code' || !structurallyChangedCodeSections.some((sectionPath) => {
         return sameSectionPath(node.locator.sectionPath, sectionPath);
       })) return node;

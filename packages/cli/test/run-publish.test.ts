@@ -29,7 +29,7 @@ import { normalizeCliFailure } from '../src/core/cli-failure.js';
 import { semanticHash } from '../src/semantic/normalize.js';
 import { canonicalizeMarkdownSemantics } from '../src/semantic/markdown-equivalence.js';
 import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
-import type { SemanticCodeBlock, SemanticDocument } from '../src/semantic/types.js';
+import type { SemanticCallout, SemanticCodeBlock, SemanticDocument } from '../src/semantic/types.js';
 import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runPublish', () => {
@@ -81,6 +81,46 @@ describe('runPublish', () => {
         stableText
       ]
     }, [operation])).toThrow('Remote changed outside the verified partial-write scopes');
+  });
+
+  it('normalizes remaining Callout ordinals after a verified Callout delete', () => {
+    const note: SemanticCallout = {
+      kind: 'callout',
+      locator: { sectionPath: [], kind: 'callout', ordinal: 0 },
+      calloutType: 'note',
+      children: [{ ordinal: 0, blockType: 2, markdown: 'Note.', remoteBlockId: 'note-child' }],
+      remoteBlockId: 'note'
+    };
+    const warning: SemanticCallout = {
+      kind: 'callout',
+      locator: { sectionPath: [], kind: 'callout', ordinal: 1 },
+      calloutType: 'warning',
+      children: [{ ordinal: 0, blockType: 2, markdown: 'Warning.', remoteBlockId: 'warning-child' }],
+      remoteBlockId: 'warning'
+    };
+    const remaining = {
+      ...warning,
+      locator: { ...warning.locator, ordinal: 0 }
+    };
+    const operation: Extract<ScopedPatchOperation, { kind: 'callout-delete' }> = {
+      kind: 'callout-delete',
+      locator: note.locator,
+      blockIds: ['note']
+    };
+
+    expect(() => assertCheckpointHasNoUnrelatedChanges(
+      { nodes: [note, warning] },
+      { nodes: [remaining] },
+      [operation]
+    )).not.toThrow();
+    expect(() => assertCheckpointHasNoUnrelatedChanges(
+      { nodes: [note, warning] },
+      { nodes: [{
+        ...remaining,
+        children: [{ ...remaining.children[0]!, markdown: 'Teammate changed warning.' }]
+      }] },
+      [operation]
+    )).toThrow('Remote changed outside the verified partial-write scopes');
   });
 
   it('checks text creation placement against cross-kind direct-child order', () => {
