@@ -10,6 +10,10 @@ export type RemoteBlocks = {
   blocks: FeishuBlock[];
 };
 
+export type RemoteMutationResult = {
+  revision?: string;
+};
+
 export type CreatedChildBlocks = {
   blocks: FeishuBlock[];
   revision?: string;
@@ -65,13 +69,13 @@ export type FeishuAdapter = {
     blockId: string;
     content: string;
     format: 'markdown' | 'xml';
-  }): Promise<void>;
+  }): Promise<RemoteMutationResult | void>;
   insertBlocksAfter?(input: {
     doc: string;
     blockId: string;
     content: string;
     format: 'markdown' | 'xml';
-  }): Promise<void>;
+  }): Promise<RemoteMutationResult | void>;
   createChildBlocks?(input: {
     doc: string;
     parentBlockId: string;

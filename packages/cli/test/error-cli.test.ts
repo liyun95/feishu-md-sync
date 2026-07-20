@@ -88,4 +88,75 @@ describe('CLI error contract', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('Invalid --format yaml. Expected pretty or json.');
   });
+
+  it('requires exactly one explicit local baseline source', async () => {
+    const result = await runCli([
+      'baseline',
+      'adopt',
+      'missing.md',
+      '--target',
+      'doccn123456789012345678901234',
+      '--format',
+      'json'
+    ]);
+
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation',
+        subtype: 'baseline_source_required'
+      }
+    });
+  });
+
+  it('requires the dedicated baseline fingerprint before local apply', async () => {
+    const result = await runCli([
+      'baseline',
+      'adopt',
+      'missing.md',
+      '--target',
+      'doccn123456789012345678901234',
+      '--git-ref',
+      'HEAD',
+      '--apply',
+      '--format',
+      'json'
+    ]);
+
+    expect(result.status).toBe(10);
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      ok: false,
+      error: {
+        type: 'confirmation_required',
+        subtype: 'baseline_adoption',
+        requiredFlags: ['--confirm-baseline-adoption <fingerprint>']
+      }
+    });
+  });
+
+  it('rejects a baseline confirmation without local apply', async () => {
+    const result = await runCli([
+      'baseline',
+      'adopt',
+      'missing.md',
+      '--target',
+      'doccn123456789012345678901234',
+      '--git-ref',
+      'HEAD',
+      '--confirm-baseline-adoption',
+      'fingerprint',
+      '--format',
+      'json'
+    ]);
+
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stderr)).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation',
+        subtype: 'baseline_confirmation_without_apply'
+      }
+    });
+  });
 });

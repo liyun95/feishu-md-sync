@@ -37,6 +37,7 @@ import {
   type WhiteboardReceiptEntry
 } from '../receipts/publish-receipt.js';
 import { readRemoteSemanticSnapshot, writeRemoteSemanticSnapshot } from '../receipts/semantic-snapshot.js';
+import { writePublishRemoteCheckpoint } from '../receipts/publish-baseline-bundle.js';
 import { localSemanticDocument } from '../semantic/local-document.js';
 import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import { markdownToFeishuBlocks } from '../markdown/blocks.js';
@@ -48,7 +49,8 @@ import type {
   SemanticLocator,
   SemanticNode,
   SemanticTable,
-  SemanticTextBlock
+  SemanticTextBlock,
+  SemanticTextChild
 } from '../semantic/types.js';
 import { discoverLocalWhiteboardAssets, normalizeAssetKey, type LocalWhiteboardAsset } from '../whiteboards/local-assets.js';
 import { verifyWhiteboardReadback, whiteboardRemoteStateHash } from '../whiteboards/remote-state.js';
@@ -66,6 +68,7 @@ import { PartialWriteError, type PublishWriteOperationSummary } from './partial-
 import type { CalloutOperation } from './callout-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
 import { buildPublishContext, type PublishContext } from './publish-context.js';
+import { markdownBodyForBlockPatch } from './block-patch-markdown.js';
 import { applyPublishTransformForProfile } from './profile-transform.js';
 import { planScopedPatch, type ScopedPatchOperation, type ScopedPatchPlan } from './scoped-patch-plan.js';
 import { diffCorrespondingTable, findCorrespondingRemoteTable } from './table-diff.js';
@@ -85,6 +88,8 @@ export type RunPublishResult = {
   };
 };
 
+const TABLE_READBACK_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
+const CHECKPOINT_READ_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 const WHITEBOARD_APPLYING_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 
 export type PublishAnalysis = {
@@ -232,11 +237,104 @@ export async function runPublish(input: {
       operations: plan.scopedPatch.operations,
       callouts
     });
+    const existingCheckpoint = analysis.receipt?.version === 4 || analysis.receipt?.version === 5
+      ? analysis.receipt.partialWriteCheckpoint
+      : undefined;
+    const recoveryCheckpoint = {
+      written: Boolean(existingCheckpoint),
+      revision: existingCheckpoint?.remoteRevision
+    };
+    const checkpointVerifiedOperations: ScopedPatchOperation[] = [];
+    const recordCheckpoint = analysis.receipt?.version === 4 || analysis.receipt?.version === 5
+      ? async (
+          completedOperations: PublishWriteOperationSummary[],
+          verifiedOperations: ScopedPatchOperation[]
+        ): Promise<void> => {
+          const checkpointState = await withCheckpointReadRetry(async () => {
+            const remoteBefore = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({
+              doc: analysis.resolvedDocumentId
+            }));
+            const remoteBlocks = await withRateLimitRetry(() => input.adapter.fetchDocBlocks!({
+              doc: analysis.resolvedDocumentId
+            }));
+            const remoteCodeMetadata = await fetchRemoteCodeMetadata(
+              input.adapter,
+              analysis.resolvedDocumentId,
+              remoteBlocks.blocks
+            );
+            const remoteSemantic = applyTrackedCalloutTypes(
+              remoteSemanticDocument(
+                remoteBlocks.blocks,
+                analysis.resolvedDocumentId,
+                callouts,
+                remoteCodeMetadata
+              ),
+              analysis.localCurrent
+            );
+            verifyCheckpointOperations({
+              operations: verifiedOperations,
+              remoteBlocks: remoteBlocks.blocks,
+              remoteSemantic,
+              documentId: analysis.resolvedDocumentId,
+              callouts
+            });
+            assertCheckpointHasNoUnrelatedChanges(
+              analysis.remoteCurrent,
+              remoteSemantic,
+              verifiedOperations
+            );
+            const remoteRaw = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({
+              doc: analysis.resolvedDocumentId
+            }));
+            if (remoteBefore.revision !== remoteRaw.revision ||
+              hashText(remoteBefore.markdown) !== hashText(remoteRaw.markdown)) {
+              throw new Error('Remote changed while recording the partial-write recovery checkpoint.');
+            }
+            return {
+              remoteRaw,
+              remoteSemantic,
+              canonicalRemote: canonicalizeRemoteCalloutMarkdown({
+                markdown: remoteRaw.markdown,
+                config: callouts,
+                typeHints: calloutTypeHints(remoteSemantic)
+              }).markdown
+            };
+          });
+          const updatedAt = new Date().toISOString();
+          await writePublishRemoteCheckpoint({
+            cwd: input.cwd,
+            receipt: analysis.receipt as Extract<PublishReceipt, { version: 4 | 5 }>,
+            remoteMarkdown: checkpointState.canonicalRemote,
+            remoteRevision: checkpointState.remoteRaw.revision,
+            remoteSemantic: checkpointState.remoteSemantic,
+            checkpoint: {
+              planFingerprint: semanticHash({
+                documentId: analysis.resolvedDocumentId,
+                localSourceHash: hashText(analysis.localSource),
+                publishDraftHash: hashText(analysis.publishDraft),
+                startingRemoteHash: hashText(analysis.remote.markdown),
+                startingRemoteRevision: analysis.remote.revision,
+                operations: plan.scopedPatch?.operations.map(summarizeScopedOperation) ?? []
+              }),
+              completedOperations,
+              ...(checkpointState.remoteRaw.revision
+                ? { remoteRevision: checkpointState.remoteRaw.revision }
+                : {}),
+              updatedAt
+            }
+          });
+          recoveryCheckpoint.written = true;
+          recoveryCheckpoint.revision = checkpointState.remoteRaw.revision;
+        }
+      : undefined;
     let completedOperations = await applyScopedOperations({
       adapter: input.adapter,
       doc: analysis.resolvedDocumentId,
       operations: [...phases.updates, ...phases.creates, ...phases.moves, ...phases.tables],
       callouts,
+      recordCheckpoint,
+      recoveryCheckpoint,
+      verifiedOperations: checkpointVerifiedOperations,
       pendingAfter: [
         ...(plan.whiteboards?.operations ?? []).map(summarizeWhiteboardOperation),
         ...phases.deletes.map(summarizeScopedOperation)
@@ -259,7 +357,10 @@ export async function runPublish(input: {
       doc: analysis.resolvedDocumentId,
       operations: phases.deletes,
       callouts,
-      completedOperations
+      completedOperations,
+      recordCheckpoint,
+      recoveryCheckpoint,
+      verifiedOperations: checkpointVerifiedOperations
     });
     const afterMarkdownRaw = await input.adapter.fetchDocMarkdown({ doc: analysis.resolvedDocumentId });
     const afterSemantic = applyTrackedCalloutTypes(
@@ -409,7 +510,11 @@ export async function analyzeExistingPublish(input: {
   if (input.strategy === 'document-replace') {
     const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
     const remote = { ...remoteRaw, markdown: normalized.markdown };
-    const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
+    const blockPatchDraft = markdownBodyForBlockPatch(
+      transform.markdown,
+      remote.markdown,
+      publishContext.documentTitle
+    );
     return {
       plan: buildPublishPlan({
         target: input.target,
@@ -435,7 +540,11 @@ export async function analyzeExistingPublish(input: {
   if (!input.adapter.fetchDocBlocks) {
     const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
     const remote = { ...remoteRaw, markdown: normalized.markdown };
-    const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
+    const blockPatchDraft = markdownBodyForBlockPatch(
+      transform.markdown,
+      remote.markdown,
+      publishContext.documentTitle
+    );
     const whiteboards = input.syncWhiteboards || requiresTrackedWhiteboardProtection
       ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', 'Whiteboard planning requires Docx block reads.')
       : undefined;
@@ -468,7 +577,11 @@ export async function analyzeExistingPublish(input: {
   } catch (error) {
     const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
     const remote = { ...remoteRaw, markdown: normalized.markdown };
-    const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
+    const blockPatchDraft = markdownBodyForBlockPatch(
+      transform.markdown,
+      remote.markdown,
+      publishContext.documentTitle
+    );
     const message = error instanceof Error ? error.message : String(error);
     const whiteboards = input.syncWhiteboards || requiresTrackedWhiteboardProtection
       ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', `Whiteboard planning requires Docx block reads: ${message}`)
@@ -519,7 +632,11 @@ export async function analyzeExistingPublish(input: {
     typeHints: remoteCalloutHints.map((hint, index) => hint ?? localCalloutHints[index])
   });
   const remote = { ...remoteRaw, markdown: normalized.markdown };
-  const blockPatchDraft = markdownBodyForBlockPatch(transform.markdown, remote.markdown);
+  const blockPatchDraft = markdownBodyForBlockPatch(
+    transform.markdown,
+    remote.markdown,
+    publishContext.documentTitle
+  );
   const localCurrent = localSemanticDocument(
     blockPatchDraft,
     codeBlocks,
@@ -540,6 +657,7 @@ export async function analyzeExistingPublish(input: {
     currentRemoteMarkdown: remote.markdown,
     currentRemoteSemantic: remoteCurrent,
     codeBlocks,
+    documentTitle: publishContext.documentTitle,
     zdoc: publishContext.zdoc?.inventory
   });
   const scopedPatch = baseline.blocker
@@ -927,6 +1045,7 @@ async function loadSemanticBaselines(input: {
   currentRemoteMarkdown: string;
   currentRemoteSemantic: SemanticDocument;
   codeBlocks: CodeBlockConfig;
+  documentTitle?: string;
   zdoc?: ZdocComponentInventory;
 }): Promise<{ localBase?: SemanticDocument; remoteBase?: SemanticDocument; blocker?: string }> {
   if (!input.receipt) return {};
@@ -938,7 +1057,7 @@ async function loadSemanticBaselines(input: {
     });
     if (!publishBase) return { blocker: 'publish draft baseline unavailable' };
     const localBase = localSemanticDocument(
-      markdownBodyForBlockPatch(publishBase, input.currentRemoteMarkdown),
+      markdownBodyForBlockPatch(publishBase, input.currentRemoteMarkdown, input.documentTitle),
       input.codeBlocks,
       input.zdoc
     );
@@ -963,7 +1082,7 @@ async function loadSemanticBaselines(input: {
 
   const localBaseDraft = applyPublishTransformForProfile(localBaseSource, input.profile).markdown;
   const localBase = localSemanticDocument(
-    markdownBodyForBlockPatch(localBaseDraft, input.currentRemoteMarkdown),
+    markdownBodyForBlockPatch(localBaseDraft, input.currentRemoteMarkdown, input.documentTitle),
     input.codeBlocks,
     input.zdoc
   );
@@ -1077,15 +1196,24 @@ async function applyScopedOperations(input: {
   callouts: CalloutConfig;
   completedOperations?: PublishWriteOperationSummary[];
   pendingAfter?: PublishWriteOperationSummary[];
+  recordCheckpoint?: (
+    completedOperations: PublishWriteOperationSummary[],
+    verifiedOperations: ScopedPatchOperation[]
+  ) => Promise<void>;
+  recoveryCheckpoint?: { written: boolean; revision?: string };
+  verifiedOperations?: ScopedPatchOperation[];
 }): Promise<PublishWriteOperationSummary[]> {
   if (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks || !input.adapter.fetchDocBlocks) {
     throw new Error('Configured Feishu adapter does not support scoped block-patch writes');
   }
   const completed = [...(input.completedOperations ?? [])];
+  const verifiedOperations = input.verifiedOperations ?? [];
   for (let index = 0; index < input.operations.length; index += 1) {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
+    let appliedOperation: ScopedPatchOperation = operation;
     let mutationCompleted = false;
+    let mutationRevision: string | undefined;
     let textUpdateReadback: TextUpdateReadbackExpectation | undefined;
     try {
       if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
@@ -1103,32 +1231,42 @@ async function applyScopedOperations(input: {
         if (operation.recoveryExpectedRemoteMarkdown) {
           verifyRecoveryUpdatePreflight(operation, before.blocks, input.doc, input.callouts);
         }
-        await input.adapter.replaceBlock({
+        const result = await input.adapter.replaceBlock({
           doc: input.doc,
           blockId: operation.remoteBlockId,
           content: operation.desiredMarkdown,
           format: 'markdown'
         });
+        mutationRevision = result?.revision;
       } else if (operation.kind === 'create') {
+        const insertAfterBlockId = await resolveCurrentInsertionAnchor({
+          adapter: input.adapter,
+          doc: input.doc,
+          originalBlockId: operation.insertAfterBlockId,
+          afterLocator: operation.afterLocator,
+          callouts: input.callouts
+        });
+        appliedOperation = { ...operation, insertAfterBlockId };
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyTextOperationParent(operation, before.blocks);
+        verifyTextOperationParent(appliedOperation, before.blocks);
         const desiredTrees = markdownToFeishuBlocks(operation.desiredMarkdown);
         const structured = desiredTrees.some((block) => childBlockObjects(block).length > 0);
         if (structured) {
           await createStructuredTextTrees({
             adapter: input.adapter,
             doc: input.doc,
-            operation,
+            operation: appliedOperation,
             desiredTrees,
             beforeBlocks: before.blocks
           });
         } else {
-          await input.adapter.insertBlocksAfter({
+          const result = await input.adapter.insertBlocksAfter({
             doc: input.doc,
-            blockId: operation.insertAfterBlockId,
+            blockId: insertAfterBlockId,
             content: operation.desiredMarkdown,
             format: 'markdown'
           });
+          mutationRevision = result?.revision;
         }
       } else if (operation.kind === 'delete') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
@@ -1138,12 +1276,13 @@ async function applyScopedOperations(input: {
         }
         await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
       } else if (operation.kind === 'table-replace') {
-        await input.adapter.replaceBlock({
+        const result = await input.adapter.replaceBlock({
           doc: input.doc,
           blockId: operation.remoteBlockId,
           content: renderTableXml(operation.desiredTable),
           format: 'xml'
         });
+        mutationRevision = result?.revision;
       } else if (operation.kind === 'table-create') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
         verifyTableCreateAnchors(operation, before.blocks, input.doc);
@@ -1154,12 +1293,21 @@ async function applyScopedOperations(input: {
           format: 'xml'
         });
       } else if (operation.kind === 'callout-create') {
-        await input.adapter.insertBlocksAfter({
+        const insertAfterBlockId = await resolveCurrentInsertionAnchor({
+          adapter: input.adapter,
           doc: input.doc,
-          blockId: operation.insertAfterBlockId,
+          originalBlockId: operation.insertAfterBlockId,
+          afterLocator: operation.afterLocator,
+          callouts: input.callouts
+        });
+        appliedOperation = { ...operation, insertAfterBlockId };
+        const result = await input.adapter.insertBlocksAfter({
+          doc: input.doc,
+          blockId: insertAfterBlockId,
           content: renderCalloutXml({ callout: operation.desiredCallout, config: input.callouts }),
           format: 'xml'
         });
+        mutationRevision = result?.revision;
       } else if (operation.kind === 'callout-child-update') {
         await input.adapter.replaceBlock({
           doc: input.doc,
@@ -1214,12 +1362,37 @@ async function applyScopedOperations(input: {
         operation.kind === 'code-section-reconcile') {
         verifyCodeOperation(operation, await fetchRemoteSemantic(input.adapter, input.doc, input.callouts));
       } else {
-        const blocks = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyOperation(operation, blocks.blocks, input.doc, input.callouts, textUpdateReadback);
+        await verifyScopedOperationReadback({
+          adapter: input.adapter,
+          doc: input.doc,
+          operation: appliedOperation,
+          callouts: input.callouts,
+          mutationRevision,
+          textUpdateReadback
+        });
       }
       completed.push(summary);
+      verifiedOperations.push(appliedOperation);
+      if (input.recordCheckpoint) {
+        try {
+          await input.recordCheckpoint(completed, verifiedOperations);
+        } catch (error) {
+          throw new PartialWriteError({
+            completedOperations: completed,
+            failedOperation: { kind: 'receipt-write' },
+            pendingOperations: [
+              ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+              ...(input.pendingAfter ?? [])
+            ],
+            recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+            recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
+            cause: error
+          });
+        }
+      }
     } catch (error) {
       if (error instanceof PartialWriteError) {
+        if (error.failedOperation.kind === 'receipt-write') throw error;
         throw new PartialWriteError({
           completedOperations: [...completed, ...error.completedOperations],
           failedOperation: error.failedOperation,
@@ -1229,6 +1402,8 @@ async function applyScopedOperations(input: {
             ...(input.pendingAfter ?? [])
           ],
           document: error.document,
+          recoveryCheckpointWritten: error.recoveryCheckpointWritten || input.recoveryCheckpoint?.written,
+          recoveryCheckpointRevision: error.recoveryCheckpointRevision ?? input.recoveryCheckpoint?.revision,
           cause: error
         });
       }
@@ -1240,6 +1415,8 @@ async function applyScopedOperations(input: {
             ...input.operations.slice(index + 1).map(summarizeScopedOperation),
             ...(input.pendingAfter ?? [])
           ],
+          recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+          recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
           cause: error
         });
       }
@@ -1251,11 +1428,224 @@ async function applyScopedOperations(input: {
           ...input.operations.slice(index + 1).map(summarizeScopedOperation),
           ...(input.pendingAfter ?? [])
         ],
+        recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+        recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
         cause: error
       });
     }
   }
   return completed;
+}
+
+async function verifyScopedOperationReadback(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: ScopedPatchOperation;
+  callouts: CalloutConfig;
+  mutationRevision?: string;
+  textUpdateReadback?: TextUpdateReadbackExpectation;
+}): Promise<void> {
+  const retryDelays = input.operation.kind === 'table-replace'
+    ? TABLE_READBACK_RETRY_DELAYS_MS
+    : [];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      if (input.operation.kind === 'table-replace' && input.mutationRevision) {
+        const remote = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({ doc: input.doc }));
+        if (!revisionHasReached(remote.revision, input.mutationRevision)) {
+          throw new Error(
+            `scoped readback verification is waiting for remote revision ${input.mutationRevision}; ` +
+            `observed ${remote.revision ?? 'unknown'}`
+          );
+        }
+      }
+      const blocks = await withRateLimitRetry(() => input.adapter.fetchDocBlocks!({ doc: input.doc }));
+      verifyOperation(
+        input.operation,
+        blocks.blocks,
+        input.doc,
+        input.callouts,
+        input.textUpdateReadback
+      );
+      return;
+    } catch (error) {
+      const delayMs = retryDelays[attempt];
+      if (delayMs === undefined || !isTransientTableReadbackError(error)) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isTransientTableReadbackError(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const details = (error as { details?: { retryable?: unknown } }).details;
+    if (details?.retryable === true) return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /scoped readback verification failed: remote table differs from desired table/i.test(message) ||
+    /scoped readback verification is waiting for remote revision/i.test(message);
+}
+
+function revisionHasReached(observed: string | undefined, expected: string): boolean {
+  if (!observed) return false;
+  if (/^\d+$/.test(observed) && /^\d+$/.test(expected)) {
+    return BigInt(observed) >= BigInt(expected);
+  }
+  return observed === expected;
+}
+
+function verifyCheckpointOperations(input: {
+  operations: ScopedPatchOperation[];
+  remoteBlocks: import('../feishu/types.js').FeishuBlock[];
+  remoteSemantic: SemanticDocument;
+  documentId: string;
+  callouts: CalloutConfig;
+}): void {
+  for (const operation of input.operations) {
+    if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
+      operation.kind === 'code-move' || operation.kind === 'code-delete' ||
+      operation.kind === 'code-section-reconcile') {
+      verifyCodeOperation(operation, input.remoteSemantic);
+      continue;
+    }
+    if (operation.kind === 'update') {
+      verifyCheckpointTextUpdate(operation, input.remoteSemantic);
+      continue;
+    }
+    let currentOperation = operation;
+    if ((operation.kind === 'create' || operation.kind === 'callout-create') && operation.afterLocator) {
+      const anchor = input.remoteSemantic.nodes.find((node) => sameLocator(node.locator, operation.afterLocator!));
+      if (!anchor?.remoteBlockId) {
+        throw new Error(`checkpoint create anchor is no longer resolvable at ${locatorKey(operation.afterLocator)}`);
+      }
+      currentOperation = { ...operation, insertAfterBlockId: anchor.remoteBlockId };
+    }
+    verifyOperation(
+      currentOperation,
+      input.remoteBlocks,
+      input.documentId,
+      input.callouts
+    );
+  }
+}
+
+function verifyCheckpointTextUpdate(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' }>,
+  remote: SemanticDocument
+): void {
+  const path = operation.locator.textPath ?? [];
+  const root = remote.nodes.find((node): node is SemanticTextBlock => {
+    return node.kind === 'text' &&
+      JSON.stringify(node.locator.sectionPath) === JSON.stringify(operation.locator.sectionPath) &&
+      node.locator.ordinal === operation.locator.ordinal;
+  });
+  if (!root) throw new Error('scoped readback verification failed: checkpoint text locator is missing');
+  let target: SemanticTextBlock | SemanticTextChild = root;
+  let parentBlockId: string | undefined;
+  for (const index of path) {
+    parentBlockId = target.remoteBlockId;
+    const children = target.children;
+    const child = children?.[index];
+    if (!child) throw new Error('scoped readback verification failed: checkpoint text path is missing');
+    target = child;
+  }
+  if (path.length > 0 && parentBlockId !== operation.parentBlockId) {
+    throw new Error('scoped readback verification failed: checkpoint text parent changed');
+  }
+  if (!target.remoteBlockId ||
+    canonicalMarkdown(target.markdown) !== canonicalMarkdown(operation.desiredMarkdown)) {
+    throw new Error('scoped readback verification failed: remote text differs from desired text');
+  }
+}
+
+export function assertCheckpointHasNoUnrelatedChanges(
+  baseline: SemanticDocument | undefined,
+  current: SemanticDocument,
+  operations: ScopedPatchOperation[]
+): void {
+  if (!baseline) throw new Error('Partial-write recovery checkpoint requires a remote semantic baseline.');
+  const allowedLocators = new Set(operations.flatMap((operation) => {
+    if ((operation.kind === 'code-move' || operation.kind === 'code-delete') && operation.remoteBlockId) {
+      return [];
+    }
+    if (operation.kind === 'callout-delete' && operation.blockIds.length > 0) return [];
+    if (operation.kind === 'code-section-reconcile') return [];
+    return [operation.locator].map(locatorKey);
+  }));
+  const allowedBlockIds = new Set(operations.flatMap((operation) => {
+    const direct = 'remoteBlockId' in operation && operation.remoteBlockId
+      ? [operation.remoteBlockId]
+      : [];
+    const deleted = 'blockIds' in operation ? operation.blockIds : [];
+    const reconciled = operation.kind === 'code-section-reconcile'
+      ? operation.remoteCodes.flatMap((code) => code.remoteBlockId ? [code.remoteBlockId] : [])
+      : [];
+    return [...direct, ...deleted, ...reconciled];
+  }));
+  const reconciledCodeSections = operations.flatMap((operation) => {
+    return operation.kind === 'code-section-reconcile' ? operation.sectionPaths : [];
+  });
+  const structurallyChangedCodeSections = operations.flatMap((operation) => {
+    if (operation.kind === 'code-move') {
+      return [operation.sourceLocator.sectionPath, operation.locator.sectionPath];
+    }
+    if (operation.kind === 'code-create') return [operation.locator.sectionPath];
+    if (operation.kind === 'code-delete') return [operation.sourceLocator.sectionPath];
+    return [];
+  });
+  const structurallyChangedCalloutSections = operations.flatMap((operation) => {
+    return operation.kind === 'callout-create' || operation.kind === 'callout-delete'
+      ? [operation.locator.sectionPath]
+      : [];
+  });
+  const outside = (document: SemanticDocument): unknown => {
+    const codeOrdinals = new Map<string, number>();
+    const calloutOrdinals = new Map<string, number>();
+    const nodes = document.nodes.filter((node) => {
+      if (allowedLocators.has(locatorKey(node.locator))) return false;
+      if (node.remoteBlockId && allowedBlockIds.has(node.remoteBlockId)) return false;
+      if (node.kind === 'code' && reconciledCodeSections.some((sectionPath) => {
+        return sameSectionPath(node.locator.sectionPath, sectionPath);
+      })) return false;
+      return true;
+    }).map((node) => {
+      if (node.kind === 'callout' && structurallyChangedCalloutSections.some((sectionPath) => {
+        return sameSectionPath(node.locator.sectionPath, sectionPath);
+      })) {
+        const sectionKey = JSON.stringify(node.locator.sectionPath);
+        const ordinal = calloutOrdinals.get(sectionKey) ?? 0;
+        calloutOrdinals.set(sectionKey, ordinal + 1);
+        return { ...node, locator: { ...node.locator, ordinal } };
+      }
+      if (node.kind !== 'code' || !structurallyChangedCodeSections.some((sectionPath) => {
+        return sameSectionPath(node.locator.sectionPath, sectionPath);
+      })) return node;
+      const sectionKey = JSON.stringify(node.locator.sectionPath);
+      const ordinal = codeOrdinals.get(sectionKey) ?? 0;
+      codeOrdinals.set(sectionKey, ordinal + 1);
+      return { ...node, locator: { ...node.locator, ordinal } };
+    });
+    return stripExecutionMetadata({ nodes });
+  };
+  if (semanticHash(outside(baseline)) !== semanticHash(outside(current))) {
+    throw new Error('Remote changed outside the verified partial-write scopes; recovery checkpoint was not advanced.');
+  }
+}
+
+async function resolveCurrentInsertionAnchor(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  originalBlockId: string;
+  afterLocator?: SemanticLocator;
+  callouts: CalloutConfig;
+}): Promise<string> {
+  if (!input.afterLocator) return input.originalBlockId;
+  const current = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+  const anchor = current.nodes.find((node) => sameLocator(node.locator, input.afterLocator!));
+  if (!anchor?.remoteBlockId) {
+    throw new Error(`create anchor correspondence is no longer resolvable at ${locatorKey(input.afterLocator)}`);
+  }
+  return anchor.remoteBlockId;
 }
 
 async function verifyScopedRecoveryPreflight(input: {
@@ -1552,7 +1942,34 @@ export async function withRateLimitRetry<T>(operation: () => Promise<T>): Promis
   }
 }
 
+async function withCheckpointReadRetry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = CHECKPOINT_READ_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isCheckpointReadTransientError(error)) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isCheckpointReadTransientError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as {
+    code?: unknown;
+    details?: { providerCode?: unknown };
+    cause?: unknown;
+  };
+  if (record.code === 12330102 || record.details?.providerCode === 12330102) return true;
+  return record.cause !== undefined && isCheckpointReadTransientError(record.cause);
+}
+
 function isRateLimitError(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const details = (error as { details?: { type?: unknown; retryable?: unknown } }).details;
+    if (details?.type === 'network' && details.retryable === true) return true;
+  }
   const message = error instanceof Error ? error.message : String(error);
   return /(?:\b429\b|rate.?limit|too many requests)/i.test(message);
 }
@@ -2702,14 +3119,6 @@ function applyManagedCalloutMetadata(
   };
 }
 
-function markdownBodyForBlockPatch(publishDraft: string, remoteMarkdown: string): string {
-  const publishTitle = leadingH1Title(publishDraft);
-  if (!publishTitle) return publishDraft;
-  const remoteTitle = leadingH1Title(remoteMarkdown);
-  if (remoteTitle !== publishTitle) return publishDraft;
-  return stripLeadingH1(publishDraft);
-}
-
 function publishPlanDialectFields(context: PublishContext): Pick<
   PublishPlan,
   | 'dialect'
@@ -2726,30 +3135,6 @@ function publishPlanDialectFields(context: PublishContext): Pick<
     dialectWarnings: context.dialectWarnings,
     linkResolution: context.linkResolution,
     linkResolutionFingerprint: context.linkResolutionFingerprint
-  };
-}
-
-function leadingH1Title(markdown: string): string | undefined {
-  const { body } = splitLeadingFrontmatter(markdown);
-  const match = body.match(/^#\s+(.+?)(?:\n|$)/);
-  return match?.[1]?.trim();
-}
-
-function stripLeadingH1(markdown: string): string {
-  const { frontmatter, body } = splitLeadingFrontmatter(markdown);
-  const stripped = body
-    .replace(/^#\s+.+?(?:\n{1,2}|$)/, '')
-    .trimStart();
-  return frontmatter ? `${frontmatter}\n${stripped}` : stripped;
-}
-
-function splitLeadingFrontmatter(markdown: string): { frontmatter?: string; body: string } {
-  const normalized = markdown.replace(/\r\n/g, '\n').trimStart();
-  const match = normalized.match(/^---\n[\s\S]*?\n---(?:\n|$)/);
-  if (!match) return { body: normalized };
-  return {
-    frontmatter: match[0].trimEnd(),
-    body: normalized.slice(match[0].length).trimStart()
   };
 }
 

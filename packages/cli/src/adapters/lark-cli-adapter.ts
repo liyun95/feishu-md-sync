@@ -13,6 +13,7 @@ import type {
   RemoteBlocks,
   RemoteCodeMetadata,
   RemoteMarkdown,
+  RemoteMutationResult,
   RemoteWhiteboard
 } from './feishu-adapter.js';
 
@@ -217,8 +218,8 @@ export class LarkCliAdapter implements FeishuAdapter {
     blockId: string;
     content: string;
     format: 'markdown' | 'xml';
-  }): Promise<void> {
-    await this.updateBlock({
+  }): Promise<RemoteMutationResult> {
+    return this.updateBlock({
       doc: input.doc,
       command: 'block_replace',
       blockId: input.blockId,
@@ -254,8 +255,8 @@ export class LarkCliAdapter implements FeishuAdapter {
     blockId: string;
     content: string;
     format: 'markdown' | 'xml';
-  }): Promise<void> {
-    await this.updateBlock({
+  }): Promise<RemoteMutationResult> {
+    return this.updateBlock({
       doc: input.doc,
       command: 'block_insert_after',
       blockId: input.blockId,
@@ -402,8 +403,8 @@ export class LarkCliAdapter implements FeishuAdapter {
     content: string;
     format: 'markdown' | 'xml';
     stdin?: string;
-  }): Promise<void> {
-    parseLarkCliJson(await this.exec(withIdentity([
+  }): Promise<RemoteMutationResult> {
+    const parsed = parseLarkCliJson(await this.exec(withIdentity([
       'docs',
       '+update',
       '--doc',
@@ -419,6 +420,7 @@ export class LarkCliAdapter implements FeishuAdapter {
       '--format',
       'json'
     ], this.identity), input.stdin === undefined ? undefined : { stdin: input.stdin }));
+    return { revision: revisionFromData(parsed.data) };
   }
 }
 

@@ -48,7 +48,7 @@ export async function preprocessMilvusAuthoring(input: {
     blockers
   });
 
-  let markdown = expanded;
+  let markdown = dedentMilvusListFences(await stripMultipleCodeSelectors(expanded));
   if (blockers.length === 0) {
     const unsupported = firstUnsupportedDirective(markdown, input.sourcePath);
     if (unsupported) blockers.push(unsupported);
@@ -80,6 +80,66 @@ export async function preprocessMilvusAuthoring(input: {
     resolvedLinks,
     linkResolution
   };
+}
+
+async function stripMultipleCodeSelectors(markdown: string): Promise<string> {
+  return replaceUnprotectedMatches(
+    markdown,
+    /<div\b[^>]*>[\s\S]*?<\/div\s*>/gi,
+    async (match) => {
+      const opening = match[0].match(/^<div\b([^>]*)>/i);
+      const classMatch = opening?.[1]?.match(/\bclass\s*=\s*(["'])(.*?)\1/i);
+      const classes = (classMatch?.[2] ?? '').split(/\s+/).map((value) => value.toLowerCase());
+      if (!classes.includes('multiplecode')) return match[0];
+
+      const body = match[0]
+        .replace(/^<div\b[^>]*>/i, '')
+        .replace(/<\/div\s*>$/i, '');
+      const unsupported = body.replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/gi, '').trim();
+      return unsupported === '' ? '' : match[0];
+    }
+  );
+}
+
+function dedentMilvusListFences(markdown: string): string {
+  const lines = markdown.split('\n');
+  const ranges: Array<{ start: number; end: number; indentation: string }> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = lines[index]?.match(/^( {4,})(`{3,}|~{3,})[^\n]*$/);
+    if (!opening) continue;
+
+    const indentation = opening[1]!;
+    if (!belongsToListItem(lines, index, indentation)) continue;
+    const fence = opening[2]!;
+    const marker = fence[0]!;
+    let closing = index + 1;
+    while (closing < lines.length) {
+      const candidate = lines[closing]?.match(/^ {4,}(`+|~+)[ \t]*$/);
+      if (candidate?.[1]?.[0] === marker && candidate[1].length >= fence.length) break;
+      closing += 1;
+    }
+    if (closing >= lines.length) continue;
+    ranges.push({ start: index, end: closing, indentation });
+    index = closing;
+  }
+  for (const range of ranges) {
+    for (let lineIndex = range.start; lineIndex <= range.end; lineIndex += 1) {
+      const line = lines[lineIndex] ?? '';
+      if (line.startsWith(range.indentation)) {
+        lines[lineIndex] = line.slice(range.indentation.length);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+function belongsToListItem(lines: string[], index: number, indentation: string): boolean {
+  for (let previous = index - 1; previous >= 0; previous -= 1) {
+    const line = lines[previous] ?? '';
+    if (line.trim() === '' || line.startsWith(indentation)) continue;
+    return /^\s*(?:\d+\.|[-+*])\s+/.test(line);
+  }
+  return false;
 }
 
 async function resolveSourceRoot(cwd: string, sourcePath: string, configured?: string): Promise<string> {

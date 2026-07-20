@@ -33,6 +33,48 @@ describe('Lark Base document link resolver', () => {
     });
   });
 
+  it('resolves a local slug alias through the canonical Base slug', async () => {
+    const resolver = await createResolverWithRecords([
+      baseRecord(
+        'canonical',
+        'inverted-index-type',
+        'https://example.feishu.cn/wiki/inverted'
+      )
+    ], {
+      ...resolverConfig,
+      slugAliases: { inverted: 'inverted-index-type' }
+    } as LarkBaseLinkResolverConfig);
+    const result = await resolver.resolve({
+      slug: 'inverted',
+      originalUrl: 'inverted.md',
+      location: { file: '/workspace/json-indexing.md', line: 99 }
+    });
+
+    expect(result.resolved).toMatchObject({
+      slug: 'inverted',
+      resolvedUrl: 'https://example.feishu.cn/wiki/inverted',
+      source: 'live-base'
+    });
+  });
+
+  it('prefers a direct Base slug over its configured alias target', async () => {
+    const resolver = await createResolverWithRecords([
+      baseRecord('canonical', 'inverted', 'https://example.feishu.cn/wiki/direct'),
+      baseRecord('canonical', 'inverted-index-type', 'https://example.feishu.cn/wiki/alias')
+    ], {
+      ...resolverConfig,
+      slugAliases: { inverted: 'inverted-index-type' }
+    } as LarkBaseLinkResolverConfig);
+
+    const result = await resolver.resolve({
+      slug: 'inverted',
+      originalUrl: 'inverted.md',
+      location: { file: '/workspace/json-indexing.md', line: 99 }
+    });
+
+    expect(result.resolved?.resolvedUrl).toBe('https://example.feishu.cn/wiki/direct');
+  });
+
   it('ignores section and link rows and blocks duplicate canonical candidates', async () => {
     const resolver = await createResolverWithRecords([
       baseRecord('section', 'next', 'http://Next'),
@@ -107,11 +149,14 @@ function baseAdapter(records: RemoteBaseRecord[], failRecords = false): FeishuAd
   };
 }
 
-async function createResolverWithRecords(records: RemoteBaseRecord[]) {
+async function createResolverWithRecords(
+  records: RemoteBaseRecord[],
+  config: LarkBaseLinkResolverConfig = resolverConfig
+) {
   const cwd = await mkdtemp(join(tmpdir(), 'fms-base-resolver-'));
   const created = await createDocumentLinkResolver({
     cwd,
-    config: resolverConfig,
+    config,
     adapter: baseAdapter(records),
     now: new Date('2026-07-15T08:00:00.000Z')
   });

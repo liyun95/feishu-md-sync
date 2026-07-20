@@ -429,6 +429,43 @@ describe('runStatus', () => {
     expect(result.transformWarnings).toEqual([]);
   });
 
+  it('does not treat pull-only paragraph normalization as remote receipt drift', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-callout-paragraphs-'));
+    const file = join(dir, 'doc.md');
+    const base = '<div class="alert note">\n\nBase body.\n\n</div>';
+    const local = '<div class="alert note">\n\nLocal body.\n\n</div>';
+    const legacyRemote = '<div class="alert note">\n\n\n\n</div>';
+    await writeFile(file, local, 'utf8');
+    await seedPublishReceipt(dir, base, legacyRemote);
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: '<callout><p>Notes</p><p>Base body.</p></callout>',
+        revision: '1365'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+        { block_id: 'callout1', block_type: 19, callout: { emoji_id: '📘' }, children: ['title1', 'body1'] },
+        statusTextBlock('title1', 'Notes'),
+        statusTextBlock('body1', 'Base body.')
+      ] }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      adapter
+    });
+
+    expect(result.state).toBe('local-changed');
+    expect(result.localChanged).toBe(true);
+    expect(result.remoteChanged).toBe(false);
+    expect(result.transformWarnings).toEqual([]);
+  });
+
   it('reports a local SVG change when Whiteboard status is enabled', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-status-whiteboard-'));
     const assets = join(dir, 'assets');

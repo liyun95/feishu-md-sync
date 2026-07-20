@@ -32,6 +32,39 @@ describe('table correspondence and diff', () => {
     }]);
   });
 
+  it('matches one renamed row by stable position and unchanged non-key content', () => {
+    const remote = table([
+      row('scalar', 'Scalar', 'BOOL'),
+      row('whole object', 'Object indexing', 'JSON'),
+      row('array', 'Array indexing', 'ARRAY')
+    ]);
+    const local = table([
+      row('scalar', 'Scalar', 'BOOL'),
+      row('whole object (deprecated)', 'Compatibility only', 'JSON'),
+      row('array', 'Array indexing', 'ARRAY')
+    ]);
+
+    expect(diffCorrespondingTable(remote, local, { allowSingleRowRename: true })).toEqual({
+      kind: 'table-diff',
+      additions: [],
+      updates: [{
+        key: 'whole object (deprecated)',
+        changedCellIndexes: [0, 1]
+      }],
+      blockers: []
+    });
+  });
+
+  it('does not infer a row rename from one shared generic non-key cell', () => {
+    const remote = table([row('whole object', 'Object indexing', 'JSON')]);
+    const local = table([row('replacement', 'Compatibility only', 'JSON')]);
+
+    const diff = diffCorrespondingTable(remote, local);
+
+    expect(diff.blockers).toContain('source table deletes remote row: whole object');
+    expect(diff.additions).toEqual([{ key: 'replacement', index: 0 }]);
+  });
+
   it('blocks deletion, reorder, unsupported content, and header changes', () => {
     const remote = table([row('a', 'A'), row('b', 'B')]);
     const deleted = table([row('a', 'A')]);
@@ -43,6 +76,42 @@ describe('table correspondence and diff', () => {
     expect(diffCorrespondingTable(remote, reordered).blockers).toContain('source table reorders existing rows');
     expect(diffCorrespondingTable(remote, unsupported).blockers).toContain('source table has unsupported content: nested lists are unsupported');
     expect(diffCorrespondingTable(remote, changedHeader).blockers).toContain('table headers differ');
+  });
+
+  it('reports an explicitly allowed same-width header update', () => {
+    const remote = table([row('a', 'A')]);
+    const local = {
+      ...table([row('a', 'A')]),
+      headers: [cell('Parameter'), cell('Description (deprecated)'), cell('Default')]
+    };
+
+    expect(diffCorrespondingTable(remote, local, { allowHeaderChanges: true })).toMatchObject({
+      headerChanged: true,
+      blockers: []
+    });
+  });
+
+  it('ignores Feishu table-header presentation and trailing empty paragraphs', () => {
+    const remote = table([row('ef', 'Old')]);
+    remote.headers = remote.headers.map((header) => ({
+      blocks: [
+        ...header.blocks,
+        { kind: 'paragraph', inlines: [] }
+      ]
+    }));
+    const local = table([row('ef', 'Old')]);
+    local.headers = local.headers.map((header) => ({
+      blocks: header.blocks.map((block) => block.kind === 'paragraph'
+        ? {
+            ...block,
+            inlines: block.inlines.map((inline) => inline.kind === 'text'
+              ? { ...inline, marks: { ...inline.marks, bold: true as const } }
+              : inline)
+          }
+        : block)
+    }));
+
+    expect(diffCorrespondingTable(remote, local).blockers).not.toContain('table headers differ');
   });
 
   it('matches one remote table and reports ambiguity', () => {

@@ -2,13 +2,14 @@
 import { Command, CommanderError } from 'commander';
 import { registerCoreCommands } from './commands/core.js';
 import { registerPublishCommand } from './commands/publish.js';
+import { registerBaselineCommand } from './commands/baseline.js';
 import { normalizeCliFailure, validationFailure } from '../core/cli-failure.js';
 import { renderCliFailure, requestedOutputFormat } from './error-output.js';
 import { buildAuthDoctorReport, loadCliEnv } from './env.js';
 import { parseOutputFormat, printFormatted } from './output.js';
 import { CLI_VERSION } from './version.js';
 
-const topLevelCommands = ['publish', 'status', 'pull', 'diff', 'merge', 'doctor', 'help'];
+const topLevelCommands = ['publish', 'status', 'pull', 'diff', 'merge', 'baseline', 'doctor', 'help'];
 
 main().catch((error: unknown) => {
   const failure = error instanceof CommanderError
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
 
   registerPublishCommand(program);
   registerCoreCommands(program);
+  registerBaselineCommand(program);
 
   const doctor = program
     .command('doctor')

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import type { DialectDependency, DialectName } from '../dialects/types.js';
 import type { ResolvedDocumentLink } from '../link-resolvers/types.js';
+import type { SemanticLocator } from '../semantic/types.js';
 
 export type PublishReceiptTarget = {
   kind: 'docx' | 'wiki' | 'folder';
@@ -79,7 +80,19 @@ export type PublishReceiptV4 = {
   remoteRevision?: string;
   localBaseSnapshot: LocalBaseSnapshot;
   remoteSemanticSnapshot?: SnapshotReference;
+  partialWriteCheckpoint?: PartialWriteCheckpoint;
   whiteboards: WhiteboardReceiptEntry[];
+  updatedAt: string;
+};
+
+export type PartialWriteCheckpoint = {
+  planFingerprint: string;
+  completedOperations: Array<{
+    kind: string;
+    locator?: SemanticLocator;
+    assetKey?: string;
+  }>;
+  remoteRevision?: string;
   updatedAt: string;
 };
 
@@ -191,12 +204,17 @@ export async function readLocalBaseSnapshot(input: {
   cwd: string;
   snapshot: LocalBaseSnapshot;
 }): Promise<string | undefined> {
+  let markdown: string;
   try {
-    return await readFile(join(input.cwd, input.snapshot.path), 'utf8');
+    markdown = await readFile(join(input.cwd, input.snapshot.path), 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+  if (hashText(markdown) !== input.snapshot.hash) {
+    throw new Error('Local base snapshot hash mismatch.');
+  }
+  return markdown;
 }
 
 export async function writePublishBaseSnapshot(input: {

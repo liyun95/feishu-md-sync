@@ -37,6 +37,9 @@ function prettyLines(value: unknown): string[] | undefined {
   const record = value as Record<string, unknown>;
   const plan = asRecord(record.plan);
   if (plan) return publishPlanLines(record, plan);
+  if (typeof record.confirmationFingerprint === 'string' && asRecord(record.sources)) {
+    return baselineAdoptLines(record);
+  }
   if (typeof record.state === 'string' && asRecord(record.recommendation)) {
     const recommendation = asRecord(record.recommendation)!;
     const lines = [
@@ -47,6 +50,15 @@ function prettyLines(value: unknown): string[] | undefined {
       `remote changed: ${String(record.remoteChanged)}`,
       `recommendation: ${String(recommendation.action)} - ${String(recommendation.reason)}`
     ];
+    const checkpoint = asRecord(record.partialWriteCheckpoint);
+    if (checkpoint) {
+      const completed = Array.isArray(checkpoint.completedOperations)
+        ? checkpoint.completedOperations.length
+        : 0;
+      lines.push(
+        `partial-write checkpoint: revision ${String(checkpoint.remoteRevision ?? '<unavailable>')}, ${completed} verified operations`
+      );
+    }
     for (const value of Array.isArray(record.whiteboards) ? record.whiteboards : []) {
       const whiteboard = asRecord(value);
       if (whiteboard) {
@@ -73,6 +85,44 @@ function prettyLines(value: unknown): string[] | undefined {
     return lines;
   }
   return undefined;
+}
+
+function baselineAdoptLines(record: Record<string, unknown>): string[] {
+  const sources = asRecord(record.sources)!;
+  const localBaseline = asRecord(sources.localBaseline);
+  const localCurrent = asRecord(sources.localCurrent);
+  const remote = asRecord(sources.remote);
+  const divergence = asRecord(record.existingDivergence);
+  const delta = asRecord(record.delta);
+  const operations = Array.isArray(delta?.operations) ? delta.operations : [];
+  const blockers = Array.isArray(record.blockers) ? record.blockers : [];
+  const lines = [
+    `mode: ${String(record.mode)}`,
+    `safe to adopt: ${String(record.safeToAdopt)}`,
+    `L0: ${String(localBaseline?.kind)} ${String(localBaseline?.ref ?? localBaseline?.path ?? '')}`.trim(),
+    `L0 source hash: ${String(localBaseline?.sourceHash)}`,
+    `L0 publish hash: ${String(localBaseline?.publishDraftHash)}`,
+    `L1: ${String(localCurrent?.path)}`,
+    `L1 source hash: ${String(localCurrent?.sourceHash)}`,
+    `L1 publish hash: ${String(localCurrent?.publishDraftHash)}`,
+    `R0 document: ${String(remote?.documentId)}`,
+    `R0 revision: ${String(remote?.revision ?? '<unavailable>')}`,
+    `R0 markdown hash: ${String(remote?.markdownHash)}`,
+    `R0 semantic hash: ${String(remote?.semanticHash)}`,
+    `existing divergence: ${String(divergence?.changed ?? 0)} changed, ${String(divergence?.localOnly ?? 0)} local-only, ${String(divergence?.remoteOnly ?? 0)} remote-only`,
+    `prospective L0 -> L1 operations: ${operations.length}`
+  ];
+  for (const value of operations) {
+    const operation = asRecord(value);
+    if (operation) lines.push(`delta[${String(operation.kind)}]: ${locatorLabel(asRecord(operation.locator))}`);
+  }
+  for (const value of blockers) {
+    const blocker = asRecord(value);
+    if (blocker) lines.push(`blocker[${String(blocker.code)}]: ${String(blocker.message)}`);
+  }
+  lines.push(`confirmation fingerprint: ${String(record.confirmationFingerprint)}`);
+  if (record.receiptWritten === true) lines.push(`receipt: ${String(record.receiptPath)}`);
+  return lines;
 }
 
 function publishPlanLines(result: Record<string, unknown>, plan: Record<string, unknown>): string[] {
@@ -104,6 +154,7 @@ function publishPlanLines(result: Record<string, unknown>, plan: Record<string, 
     if (operation.kind === 'table-replace') {
       lines.push(`table: ${label}`);
       const diff = asRecord(operation.diff);
+      if (diff?.headerChanged === true) lines.push('  ~ headers');
       for (const additionValue of Array.isArray(diff?.additions) ? diff.additions : []) {
         const addition = asRecord(additionValue);
         if (addition) lines.push(`  + row ${String(addition.key)}`);

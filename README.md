@@ -68,6 +68,21 @@ feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write
 
 When the merge already makes the local publish draft match the remote document, the final `publish --write` is a no-op remote write: it refreshes the local receipt and merge base snapshot without changing Feishu content.
 
+When a document already has intentional local/remote history before the CLI starts tracking it, adopt that divergence explicitly instead of replaying it as a publish. First review the selected local baseline (L0), current workspace (L1), and current Feishu state (R0):
+
+```bash
+feishu-md-sync baseline adopt ./doc.md --target <docx-url-or-token> --git-ref HEAD --format json
+```
+
+After reviewing `safeToAdopt`, every blocker, the prospective L0 to L1 operations, and the exact fingerprint, write only the local receipt bundle:
+
+```bash
+feishu-md-sync baseline adopt ./doc.md --target <docx-url-or-token> --git-ref HEAD \
+  --apply --confirm-baseline-adoption <fingerprint> --format json
+```
+
+This command has no `--write` option and performs no Feishu or Base mutation. A later ordinary publish keeps R0 as the remote baseline and plans only L0 to L1.
+
 ## Source Dialects and Profiles
 
 Dialect and profile solve different problems. A dialect describes the syntax in the source file; a profile applies product-content wording after that syntax has been converted into publishable Markdown.
@@ -106,6 +121,8 @@ feishu-md-sync publish ./doc.md --target <docx-url-or-token> --write --strategy 
 ## Safety Model
 
 Commands are dry-run by default. `--write` allows remote writes, but it does not allow destructive strategies by itself.
+
+`baseline adopt` is separate from remote writes. It requires exactly one explicit L0 source (`--local-baseline` or `--git-ref`) and a dedicated reviewed-state fingerprint before `--apply` can atomically update local receipt files. Never edit publish receipts or baseline sidecars manually; their hashes and protected-resource mappings are integrity checked.
 
 Existing-document whole replacement requires all of these gates:
 

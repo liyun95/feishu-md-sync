@@ -8,6 +8,7 @@ export type LarkBaseLinkResolverConfig = {
   placementTypeField: string;
   referenceField?: string;
   acceptedPlacementTypes: string[];
+  slugAliases?: Record<string, string>;
 };
 
 export type DialectWorkspaceConfig = {

@@ -105,12 +105,16 @@ export function planCodeBlockChanges(input: {
 
   for (let index = 0; index < baseLocal.length; index += 1) {
     const localBase = baseLocal[index]!;
+    const local = localMatches.get(localBase);
     const remoteBase = findByLocator(baseRemote, localBase.locator) ?? baseRemote[index];
     if (!remoteBase) {
+      if (local && managedEqual(localBase, local) &&
+        samePlacement(input.localBase, localBase, input.localCurrent, local)) {
+        continue;
+      }
       blockers.push(blocker('code-correspondence-ambiguous', localBase.locator, 'remote Code baseline is missing'));
       continue;
     }
-    const local = localMatches.get(localBase);
     const remote = remoteMatches.get(remoteBase);
 
     if (!local) {
@@ -259,6 +263,17 @@ function planUntracked(
     if (localCount === 1 && remoteMatches.length === 1) {
       assignments.set(index, remoteMatches[0]!);
       reservedRemote.add(remoteMatches[0]!);
+    }
+  }
+  for (const [index, code] of local.entries()) {
+    if (assignments.has(index)) continue;
+    const match = findByLocator(
+      remote.filter((candidate) => !reservedRemote.has(candidate)),
+      code.locator
+    );
+    if (match && managedFingerprint(match) === managedFingerprint(code)) {
+      assignments.set(index, match);
+      reservedRemote.add(match);
     }
   }
   const unmatchedLocalIndexes = local.flatMap((_, index) => assignments.has(index) ? [] : [index]);

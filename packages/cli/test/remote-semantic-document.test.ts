@@ -322,6 +322,27 @@ describe('remote semantic document', () => {
     });
   });
 
+  it('normalizes the Feishu Plain Text label from full-XML Code metadata', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+      {
+        block_id: 'code1',
+        block_type: 14,
+        code: {
+          elements: [{ text_run: { content: 'example', text_element_style: {} } }],
+          style: { language: 1 }
+        }
+      }
+    ], 'doc_token', undefined, [{ blockId: 'code1', language: 'Plain Text' }]);
+
+    expect(document.nodes[0]).toMatchObject({
+      kind: 'code',
+      sourceLanguage: 'Plain Text',
+      resolvedLanguage: 'plaintext',
+      issues: []
+    });
+  });
+
   it('recognizes fixture-backed Supademo add-on blocks as protected resources', async () => {
     const fixture = JSON.parse(await readFile(new URL(
       './fixtures/zdoc/model-providers/isv-blocks.json',

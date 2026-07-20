@@ -24,6 +24,9 @@ export type CliFailureDetails = {
     failedOperation: unknown;
     pendingOperations: unknown[];
     receiptWritten: false;
+    recoveryCheckpointWritten?: boolean;
+    recoveryCheckpointRevision?: string;
+    cause?: unknown;
     document?: { documentId: string; url?: string };
   };
 };
@@ -129,6 +132,9 @@ function partialWriteDetails(error: unknown): CliFailureDetails['partialWrite'] 
     failedOperation?: unknown;
     pendingOperations?: unknown;
     receiptWritten?: unknown;
+    recoveryCheckpointWritten?: unknown;
+    recoveryCheckpointRevision?: unknown;
+    causeDetails?: unknown;
     document?: unknown;
   };
   if (!Array.isArray(record.completedOperations) || !record.failedOperation ||
@@ -144,6 +150,13 @@ function partialWriteDetails(error: unknown): CliFailureDetails['partialWrite'] 
     failedOperation: record.failedOperation,
     pendingOperations: record.pendingOperations,
     receiptWritten: false,
+    ...(record.recoveryCheckpointWritten === true ? { recoveryCheckpointWritten: true } : {}),
+    ...(typeof record.recoveryCheckpointRevision === 'string'
+      ? { recoveryCheckpointRevision: record.recoveryCheckpointRevision }
+      : {}),
+    ...(record.causeDetails && typeof record.causeDetails === 'object'
+      ? { cause: record.causeDetails }
+      : {}),
     ...(document ? { document } : {})
   };
 }

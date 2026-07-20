@@ -39,6 +39,151 @@ describe('scoped patch plan', () => {
     });
   });
 
+  it('uses L0 to R0 correspondence to plan an expected table header change', () => {
+    const localBaseTable = table([row('json', 'Whole object')], false);
+    const localCurrentTable = {
+      ...table([row('json', 'Whole object')], false),
+      headers: [cell('Parameter'), cell('Description (deprecated)')]
+    };
+    const remoteBaseTable = table([row('json', 'Whole object')], false);
+    const remoteCurrentTable = table([row('json', 'Whole object')], true);
+
+    const plan = planScopedPatch({
+      parentBlockId: 'doc',
+      localBase: document(localBaseTable),
+      localCurrent: document(localCurrentTable),
+      remoteBase: document(remoteBaseTable),
+      remoteCurrent: document(remoteCurrentTable),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'table-replace',
+      remoteBlockId: 'table1',
+      diff: expect.objectContaining({ headerChanged: true })
+    }));
+  });
+
+  it('allows a single local row rename only through tracked L0/R0 correspondence', () => {
+    const localBaseTable = table([row('whole object', 'Object indexing', 'JSON')], false);
+    const localCurrentTable = table([
+      row('whole object (deprecated)', 'Compatibility only', 'JSON')
+    ], false);
+    const remoteTable = table([row('whole object', 'Object indexing', 'JSON')], true);
+
+    const plan = planScopedPatch({
+      parentBlockId: 'doc',
+      localBase: document(localBaseTable),
+      localCurrent: document(localCurrentTable),
+      remoteBase: document(remoteTable),
+      remoteCurrent: document(remoteTable),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'table-replace',
+      remoteBlockId: 'table1',
+      diff: expect.objectContaining({
+        updates: [{ key: 'whole object (deprecated)', changedCellIndexes: [0, 1] }],
+        blockers: []
+      })
+    }));
+  });
+
+  it('preserves equivalent remote table-cell authoring markup during replacement', () => {
+    const localBaseTable = table([
+      row('stable', 'Milvus chooses the layout.'),
+      row('changed', 'Old')
+    ], false);
+    const localCurrentTable = table([
+      row('stable', 'Milvus chooses the layout.'),
+      row('changed', 'New')
+    ], false);
+    const remoteTable = table([
+      row('stable', '<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> chooses the layout.'),
+      row('changed', 'Old')
+    ], true);
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(localBaseTable),
+      localCurrent: document(localCurrentTable),
+      remoteBase: document(remoteTable),
+      remoteCurrent: document(remoteTable),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'table-replace',
+      desiredTable: expect.objectContaining({
+        rows: expect.arrayContaining([
+          expect.objectContaining({
+            key: 'stable',
+            cells: expect.arrayContaining([
+              expect.objectContaining({
+                blocks: [expect.objectContaining({
+                  inlines: [expect.objectContaining({ value: expect.stringContaining('<include target="milvus">') })]
+                })]
+              })
+            ])
+          })
+        ])
+      })
+    }));
+  });
+
+  it('applies only the local table delta while preserving historical R0 cells and rows', () => {
+    const localBaseTable = table([
+      row('stable', 'Local baseline wording'),
+      row('changed', 'Old')
+    ], false);
+    const localCurrentTable = table([
+      row('stable', 'Local baseline wording'),
+      row('changed', 'New')
+    ], false);
+    const remoteTable = table([
+      row('stable', 'Remote historical wording'),
+      row('changed', 'Old'),
+      row('remote-only', 'Preserve me')
+    ], true);
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(localBaseTable),
+      localCurrent: document(localCurrentTable),
+      remoteBase: document({ ...remoteTable, remoteBlockId: undefined }),
+      remoteCurrent: document(remoteTable),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'table-replace',
+      desiredTable: expect.objectContaining({
+        rows: [
+          expect.objectContaining({ key: 'stable', cells: expect.arrayContaining([
+            expect.objectContaining({ blocks: [expect.objectContaining({
+              inlines: [expect.objectContaining({ value: 'Remote historical wording' })]
+            })] })
+          ]) }),
+          expect.objectContaining({ key: 'changed', cells: expect.arrayContaining([
+            expect.objectContaining({ blocks: [expect.objectContaining({
+              inlines: [expect.objectContaining({ value: 'New' })]
+            })] })
+          ]) }),
+          expect.objectContaining({ key: 'remote-only' })
+        ]
+      }),
+      diff: expect.objectContaining({
+        updates: [{ key: 'changed', changedCellIndexes: [1] }],
+        blockers: []
+      })
+    }));
+  });
+
   it('warns about unrelated remote changes without blocking local table work', () => {
     const localBase = document(text('Stable paragraph.', 0), text('Other paragraph.', 1), table([row('ef', 'Old')], false));
     const localCurrent = document(text('Stable paragraph.', 0), text('Other paragraph.', 1), table([row('ef', 'New')], false));
@@ -50,6 +195,57 @@ describe('scoped patch plan', () => {
     expect(plan.blockers).toEqual([]);
     expect(plan.warnings).toContain('remote changed outside managed scopes');
     expect(plan.operations.map((operation) => operation.kind)).toEqual(['table-replace']);
+  });
+
+  it('preserves remote-only baseline text when L0 and R0 intentionally diverge', () => {
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(text('Local baseline.', 0)),
+      localCurrent: document(text('Local baseline.', 0)),
+      remoteBase: document(text('Local baseline.', 0), text('Remote-only history.', 1)),
+      remoteCurrent: document(
+        text('Local baseline.', 0, 'p1'),
+        text('Remote-only history.', 1, 'p2')
+      ),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
+  });
+
+  it('blocks deleting tracked text that changed remotely after R0', () => {
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(text('Keep.', 0), text('Delete locally.', 1)),
+      localCurrent: document(text('Keep.', 0)),
+      remoteBase: document(text('Keep.', 0, 'p1'), text('Delete locally.', 1, 'p2')),
+      remoteCurrent: document(text('Keep.', 0, 'p1'), text('Teammate edited this.', 1, 'p2')),
+      tracked: true
+    });
+
+    expect(plan.operations).not.toContainEqual(expect.objectContaining({ kind: 'delete' }));
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'remote-scope-conflict',
+      locator: { sectionPath: [], kind: 'text', ordinal: 1 }
+    }));
+  });
+
+  it('blocks a changed L0 text scope that has no R0 correspondence', () => {
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(text('Old local-only text.', 0)),
+      localCurrent: document(text('New local-only text.', 0)),
+      remoteBase: document(),
+      remoteCurrent: document(),
+      tracked: true
+    });
+
+    expect(plan.operations).toEqual([]);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'unsupported-local-change',
+      message: expect.stringContaining('tracked text correspondence is missing')
+    }));
   });
 
   it('blocks overlapping table changes and unsupported local tables', () => {
@@ -155,6 +351,75 @@ describe('scoped patch plan', () => {
     expect(plan.blockers).toEqual([]);
     expect(plan.operations.map((operation) => operation.kind)).toEqual(['update', 'code-update']);
     expect(plan.requiresCollaborationRiskConfirmation).toBe(true);
+  });
+
+  it('plans scattered tracked text updates with one inserted block', () => {
+    const localBase = document(
+      text('Old intro.', 0),
+      text('Old combined guidance.', 1),
+      text('Stable ending.', 2)
+    );
+    const localCurrent = document(
+      text('New intro.', 0),
+      text('Array guidance.', 1),
+      text('Whole-object compatibility guidance.', 2),
+      text('Stable ending.', 3)
+    );
+    const remoteBase = document(
+      text('Old intro.', 0, 'p1'),
+      text('Old combined guidance.', 1, 'p2'),
+      text('Stable ending.', 2, 'p3')
+    );
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent,
+      remoteBase,
+      remoteCurrent: remoteBase,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({ kind: 'update', remoteBlockId: 'p1', desiredMarkdown: 'New intro.' }),
+      expect.objectContaining({ kind: 'update', remoteBlockId: 'p2', desiredMarkdown: 'Array guidance.' }),
+      expect.objectContaining({
+        kind: 'create',
+        insertAfterBlockId: 'p2',
+        desiredMarkdown: 'Whole-object compatibility guidance.'
+      })
+    ]);
+  });
+
+  it('blocks tracked insertion correspondence when repeated text identities are ambiguous', () => {
+    const localBase = document(
+      text('Intro.', 0),
+      text('Repeated.', 1),
+      text('Repeated.', 2)
+    );
+    const localCurrent = document(
+      text('Intro.', 0),
+      text('Inserted.', 1),
+      text('Repeated.', 2),
+      text('Repeated.', 3)
+    );
+    const remoteBase = remoteize(localBase);
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent,
+      remoteBase,
+      remoteCurrent: remoteBase,
+      tracked: true
+    });
+
+    expect(plan.operations).toEqual([]);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'unsupported-local-change',
+      message: expect.stringContaining('tracked correspondence is ambiguous for repeated blocks')
+    }));
   });
 
   it('anchors text created after a Code block to that Code block', () => {
@@ -749,6 +1014,103 @@ Third detail.
     expect(plan.operations).toEqual([]);
   });
 
+  it('adopts Milvus-visible text from tracked dual-product include markup', () => {
+    const remoteMarkdown = '<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vectors.';
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(text(remoteMarkdown, 0)),
+      localCurrent: document(text('Milvus stores vectors.', 0)),
+      remoteBase: document(text(remoteMarkdown, 0, 'p1')),
+      remoteCurrent: document(text(remoteMarkdown, 0, 'p1')),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
+  });
+
+  it('preserves tracked dual-product include markup in changed text', () => {
+    const remoteMarkdown = '<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vectors.';
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(text(remoteMarkdown, 0)),
+      localCurrent: document(text('Milvus stores vector data.', 0)),
+      remoteBase: document(text(remoteMarkdown, 0, 'p1')),
+      remoteCurrent: document(text(remoteMarkdown, 0, 'p1')),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({
+        kind: 'update',
+        desiredMarkdown: '<include target="milvus">Milvus</include><include target="zilliz">Zilliz Cloud</include> stores vector data.'
+      })
+    ]);
+  });
+
+  it('adopts tracked Feishu block anchors and split link punctuation', () => {
+    const remoteMarkdown = 'See [threshold](https://example.feishu.cn/wiki/doc#block)[?](https://example.feishu.cn/wiki/doc#block)';
+    const localMarkdown = 'See [threshold?](https://example.feishu.cn/wiki/doc)';
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(text(remoteMarkdown, 0)),
+      localCurrent: document(text(localMarkdown, 0)),
+      remoteBase: document(text(remoteMarkdown, 0, 'p1')),
+      remoteCurrent: document(text(remoteMarkdown, 0, 'p1')),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
+  });
+
+  it('preserves a tracked Feishu block anchor in changed link text', () => {
+    const remoteMarkdown = 'Old guidance; see [JSON Shredding](https://example.feishu.cn/wiki/doc#block).';
+    const localMarkdown = 'New guidance; see [JSON Shredding](https://example.feishu.cn/wiki/doc).';
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: document(text(remoteMarkdown, 0)),
+      localCurrent: document(text(localMarkdown, 0)),
+      remoteBase: document(text(remoteMarkdown, 0, 'p1')),
+      remoteCurrent: document(text(remoteMarkdown, 0, 'p1')),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({
+        kind: 'update',
+        desiredMarkdown: 'New guidance; see [JSON Shredding](https://example.feishu.cn/wiki/doc#block).'
+      })
+    ]);
+  });
+
+  it('preserves standalone tracked include boundary blocks outside ordinary text planning', () => {
+    const localBase = document(
+      text('<include target="milvus">', 0),
+      text('Stable.', 1),
+      text('</include>', 2)
+    );
+    const remoteBase = document(
+      text('<include target="milvus">', 0, 'open'),
+      text('Stable.', 1, 'p1'),
+      text('</include>', 2, 'close')
+    );
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent: document(text('Stable.', 0)),
+      remoteBase,
+      remoteCurrent: remoteBase,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
+    expect(plan.warnings).toContain('preserving remote standalone include boundary blocks');
+  });
+
   it('does not misattribute a post-replacement update to an unchanged later section', () => {
     const localBase = document(
       sectionText('## Before you start', ['Before you start'], 0, undefined, 4),
@@ -993,18 +1355,22 @@ function asset(
 }
 
 function table(rows: SemanticTable['rows'], remote: boolean): SemanticTable {
+  const width = Math.max(2, ...rows.map((tableRow) => tableRow.cells.length));
   return {
     kind: 'table',
     locator: { sectionPath: ['Index params'], kind: 'table', ordinal: 0 },
-    headers: [cell('Parameter'), cell('Description')],
+    headers: [cell('Parameter'), cell('Description'), cell('Type')].slice(0, width),
     rows,
     remoteBlockId: remote ? 'table1' : undefined,
     unsupported: []
   };
 }
 
-function row(key: string, description: string): SemanticTable['rows'][number] {
-  return { key, cells: [cell(key), cell(description)] };
+function row(key: string, description: string, type?: string): SemanticTable['rows'][number] {
+  return {
+    key,
+    cells: [cell(key), cell(description), ...(type ? [cell(type)] : [])]
+  };
 }
 
 function cell(value: string): SemanticCell {

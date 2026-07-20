@@ -78,7 +78,7 @@ try {
   const actualCommands = [...help.matchAll(/^  ([a-z][\w-]*)(?:\s|\[|<)/gm)]
     .map((match) => match[1])
     .sort();
-  const expectedCommands = ['diff', 'doctor', 'help', 'merge', 'publish', 'pull', 'status'];
+  const expectedCommands = ['baseline', 'diff', 'doctor', 'help', 'merge', 'publish', 'pull', 'status'];
   if (JSON.stringify(actualCommands) !== JSON.stringify(expectedCommands)) {
     throw new Error(`packaged CLI commands differ: expected ${expectedCommands.join(', ')}, got ${actualCommands.join(', ')}`);
   }

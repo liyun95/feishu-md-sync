@@ -16,13 +16,113 @@ import {
   writePublishReceipt
 } from '../src/receipts/publish-receipt.js';
 import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
-import { runPublish, textCreatePlacementMatches } from '../src/publish/run-publish.js';
+import { writePublishBaselineBundle } from '../src/receipts/publish-baseline-bundle.js';
+import {
+  assertCheckpointHasNoUnrelatedChanges,
+  runPublish,
+  textCreatePlacementMatches
+} from '../src/publish/run-publish.js';
+import type { ScopedPatchOperation } from '../src/publish/scoped-patch-plan.js';
+import { runStatus } from '../src/status/run-status.js';
+import { runDiff } from '../src/diff/run-diff.js';
+import { normalizeCliFailure } from '../src/core/cli-failure.js';
 import { semanticHash } from '../src/semantic/normalize.js';
 import { canonicalizeMarkdownSemantics } from '../src/semantic/markdown-equivalence.js';
 import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
+import type { SemanticCallout, SemanticCodeBlock, SemanticDocument } from '../src/semantic/types.js';
 import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runPublish', () => {
+  it('treats a moved Code block as the same verified checkpoint scope', () => {
+    const buildLocator = { sectionPath: ['Build'], kind: 'code' as const, ordinal: 0 };
+    const searchLocator = { sectionPath: ['Search'], kind: 'code' as const, ordinal: 0 };
+    const baselineCode: SemanticCodeBlock = {
+      kind: 'code',
+      locator: buildLocator,
+      content: 'print(1)\n',
+      sourceLanguage: 'python',
+      resolvedLanguage: 'python',
+      remoteBlockId: 'code-1',
+      issues: []
+    };
+    const currentCode: SemanticCodeBlock = { ...baselineCode, locator: searchLocator };
+    const stationaryCode: SemanticCodeBlock = {
+      ...baselineCode,
+      locator: searchLocator,
+      content: 'print(2)\n',
+      remoteBlockId: 'code-2'
+    };
+    const shiftedStationaryCode: SemanticCodeBlock = {
+      ...stationaryCode,
+      locator: { ...searchLocator, ordinal: 1 }
+    };
+    const stableText = {
+      kind: 'text' as const,
+      locator: { sectionPath: [], kind: 'text' as const, ordinal: 0 },
+      blockType: 2,
+      markdown: 'Stable.',
+      remoteBlockId: 'p1'
+    };
+    const baseline: SemanticDocument = { nodes: [baselineCode, stationaryCode, stableText] };
+    const current: SemanticDocument = { nodes: [currentCode, shiftedStationaryCode, stableText] };
+    const operation: Extract<ScopedPatchOperation, { kind: 'code-move' }> = {
+      kind: 'code-move',
+      locator: searchLocator,
+      sourceLocator: buildLocator,
+      remoteBlockId: 'code-1',
+      desiredCode: currentCode
+    };
+
+    expect(() => assertCheckpointHasNoUnrelatedChanges(baseline, current, [operation])).not.toThrow();
+    expect(() => assertCheckpointHasNoUnrelatedChanges(baseline, {
+      nodes: [
+        currentCode,
+        { ...shiftedStationaryCode, content: 'print("teammate")\n' },
+        stableText
+      ]
+    }, [operation])).toThrow('Remote changed outside the verified partial-write scopes');
+  });
+
+  it('normalizes remaining Callout ordinals after a verified Callout delete', () => {
+    const note: SemanticCallout = {
+      kind: 'callout',
+      locator: { sectionPath: [], kind: 'callout', ordinal: 0 },
+      calloutType: 'note',
+      children: [{ ordinal: 0, blockType: 2, markdown: 'Note.', remoteBlockId: 'note-child' }],
+      remoteBlockId: 'note'
+    };
+    const warning: SemanticCallout = {
+      kind: 'callout',
+      locator: { sectionPath: [], kind: 'callout', ordinal: 1 },
+      calloutType: 'warning',
+      children: [{ ordinal: 0, blockType: 2, markdown: 'Warning.', remoteBlockId: 'warning-child' }],
+      remoteBlockId: 'warning'
+    };
+    const remaining = {
+      ...warning,
+      locator: { ...warning.locator, ordinal: 0 }
+    };
+    const operation: Extract<ScopedPatchOperation, { kind: 'callout-delete' }> = {
+      kind: 'callout-delete',
+      locator: note.locator,
+      blockIds: ['note']
+    };
+
+    expect(() => assertCheckpointHasNoUnrelatedChanges(
+      { nodes: [note, warning] },
+      { nodes: [remaining] },
+      [operation]
+    )).not.toThrow();
+    expect(() => assertCheckpointHasNoUnrelatedChanges(
+      { nodes: [note, warning] },
+      { nodes: [{
+        ...remaining,
+        children: [{ ...remaining.children[0]!, markdown: 'Teammate changed warning.' }]
+      }] },
+      [operation]
+    )).toThrow('Remote changed outside the verified partial-write scopes');
+  });
+
   it('checks text creation placement against cross-kind direct-child order', () => {
     const misplaced = [
       { block_id: 'doc', block_type: 1, children: ['p1', 'p2', 'code1'] },
@@ -607,6 +707,475 @@ Next text.`, 'utf8');
       expect.objectContaining({ kind: 'callout-child-update', childOrdinal: 1 }),
       expect.objectContaining({ kind: 'callout-child-update', childOrdinal: 2 })
     ]);
+  });
+
+  it('re-resolves a create anchor after an earlier update replaces its block ID', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-create-anchor-refresh-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const base = 'First.\n\nOld anchor.';
+    const desired = 'First.\n\nUpdated anchor.\n\nNew tail.';
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, desired, 'utf8');
+    const localBaseSnapshot = await writeLocalBaseSnapshot({
+      cwd: dir,
+      target,
+      markdown: base
+    });
+    const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+      cwd: dir,
+      target,
+      document: remoteSemanticDocument([
+        { block_id: 'doc_token', block_type: 1, children: ['first', 'anchor-old'] },
+        textBlock('first', 'First.'),
+        textBlock('anchor-old', 'Old anchor.')
+      ], 'doc_token')
+    });
+    await writePublishReceipt({
+      cwd: dir,
+      receipt: {
+        version: 3,
+        target,
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        localSourceHash: hashText(base),
+        publishDraftHash: hashText(base),
+        remoteSnapshotHash: hashText(base),
+        remoteRevision: '1',
+        localBaseSnapshot,
+        remoteSemanticSnapshot,
+        whiteboards: [],
+        updatedAt: new Date().toISOString()
+      }
+    });
+
+    let anchorId = 'anchor-old';
+    let anchorUpdated = false;
+    let tailCreated = false;
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: tailCreated
+          ? desired
+          : anchorUpdated
+            ? 'First.\n\nUpdated anchor.'
+            : base,
+        revision: tailCreated ? '3' : anchorUpdated ? '2' : '1'
+      }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          {
+            block_id: 'doc_token',
+            block_type: 1,
+            children: ['first', anchorId, ...(tailCreated ? ['tail'] : [])]
+          },
+          textBlock('first', 'First.'),
+          textBlock(anchorId, anchorUpdated ? 'Updated anchor.' : 'Old anchor.'),
+          ...(tailCreated ? [textBlock('tail', 'New tail.')] : [])
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId }) => {
+        calls.push(`replace:${blockId}`);
+        anchorUpdated = true;
+        anchorId = 'anchor-new';
+      },
+      insertBlocksAfter: async ({ blockId }) => {
+        calls.push(`insert:${blockId}`);
+        if (blockId !== anchorId) throw new Error(`stale create anchor: ${blockId}`);
+        tailCreated = true;
+      },
+      deleteBlocks: async () => {}
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    })).resolves.toMatchObject({ mode: 'write' });
+
+    expect(calls).toEqual(['replace:anchor-old', 'insert:anchor-new']);
+  });
+
+  it('checkpoints ten verified writes so a 16-operation publish replans only the remaining six', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-partial-checkpoint-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const baseParagraphs = Array.from({ length: 9 }, (_, index) => `Old paragraph ${index + 1}.`);
+    const desiredParagraphs = Array.from({ length: 9 }, (_, index) => `Updated paragraph ${index + 1}.`);
+    const tableKeys = ['alpha', 'beta', 'gamma', 'delta'];
+    const base = partialCheckpointMarkdown({
+      paragraphs: baseParagraphs,
+      calloutBody: 'Old Callout body.',
+      includeNewTail: false,
+      includeNewCallout: false,
+      updatedTables: new Set()
+    });
+    const desired = partialCheckpointMarkdown({
+      paragraphs: desiredParagraphs,
+      calloutBody: 'Updated Callout body.',
+      includeNewTail: true,
+      includeNewCallout: true,
+      updatedTables: new Set(tableKeys)
+    });
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, desired, 'utf8');
+    const initialBlocks = partialCheckpointBlocks({
+      paragraphs: baseParagraphs,
+      paragraphIds: baseParagraphs.map((_, index) => `p${index + 1}`),
+      calloutBody: 'Old Callout body.',
+      calloutBodyId: 'callout-body',
+      includeNewTail: false,
+      includeNewCallout: false,
+      updatedTables: new Set()
+    });
+    await writePublishBaselineBundle({
+      cwd: dir,
+      target,
+      localBaseline: base,
+      publishBaseline: base,
+      remoteSemantic: remoteSemanticDocument(initialBlocks, 'doc_token'),
+      receipt: {
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        dialect: 'gfm',
+        dialectDraftHash: hashText(base),
+        dialectDependencies: [],
+        linkResolutionFingerprint: semanticHash([]),
+        resolvedLinks: [],
+        localSourceHash: hashText(base),
+        publishDraftHash: hashText(base),
+        remoteSnapshotHash: hashText(base),
+        remoteRevision: '1',
+        whiteboards: [],
+        updatedAt: new Date().toISOString()
+      }
+    });
+
+    const paragraphs = [...baseParagraphs];
+    const paragraphIds = baseParagraphs.map((_, index) => `p${index + 1}`);
+    let calloutBody = 'Old Callout body.';
+    let calloutBodyId = 'callout-body';
+    const updatedTables = new Set<string>();
+    let revision = 1;
+    let failCreate = true;
+    let checkpointApplyingReads = 1;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => {
+        if (revision > 1 && checkpointApplyingReads > 0) {
+          checkpointApplyingReads -= 1;
+          throw new CliFailure({
+            type: 'internal',
+            subtype: 'unknown',
+            message: 'An error occurred during processing. Check the input and retry',
+            retryable: false,
+            providerCode: 12330102
+          });
+        }
+        return {
+          markdown: partialCheckpointMarkdown({
+            paragraphs,
+            calloutBody,
+            includeNewTail: false,
+            includeNewCallout: false,
+            updatedTables
+          }),
+          revision: String(revision)
+        };
+      },
+      fetchDocBlocks: async () => ({
+        blocks: partialCheckpointBlocks({
+          paragraphs,
+          paragraphIds,
+          calloutBody,
+          calloutBodyId,
+          includeNewTail: false,
+          includeNewCallout: false,
+          updatedTables
+        })
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content, format }) => {
+        if (format === 'xml') {
+          const key = tableKeys.find((candidate) => blockId === `table-${candidate}`);
+          if (!key) throw new Error(`unexpected table block: ${blockId}`);
+          updatedTables.add(key);
+          revision += 1;
+          return;
+        }
+        const paragraphIndex = paragraphIds.indexOf(blockId);
+        if (paragraphIndex >= 0) {
+          paragraphs[paragraphIndex] = content;
+          paragraphIds[paragraphIndex] = `${blockId}-new`;
+          revision += 1;
+          return;
+        }
+        if (blockId === calloutBodyId) {
+          calloutBody = content;
+          calloutBodyId = `${blockId}-new`;
+          revision += 1;
+          return;
+        }
+        throw new Error(`unexpected replace block: ${blockId}`);
+      },
+      insertBlocksAfter: async ({ blockId }) => {
+        expect(blockId).toBe(paragraphIds[8]);
+        if (failCreate) throw new Error('simulated create failure');
+      },
+      deleteBlocks: async () => {}
+    };
+
+    let thrown: unknown;
+    try {
+      await runPublish({
+        cwd: dir,
+        file: markdownPath,
+        target,
+        profile: 'none',
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        adapter
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: expect.arrayContaining([
+        ...Array.from({ length: 9 }, () => expect.objectContaining({ kind: 'update' })),
+        expect.objectContaining({ kind: 'callout-child-update' })
+      ]),
+      failedOperation: expect.objectContaining({ kind: 'create' }),
+      recoveryCheckpointWritten: true,
+      recoveryCheckpointRevision: '11'
+    });
+    expect(revision).toBe(11);
+    expect(checkpointApplyingReads).toBe(0);
+    const checkpoint = await readPublishReceipt({ cwd: dir, target });
+    expect(checkpoint).toMatchObject({
+      version: 4,
+      localSourceHash: hashText(base),
+      publishDraftHash: hashText(base),
+      remoteRevision: '11',
+      partialWriteCheckpoint: {
+        completedOperations: expect.arrayContaining([
+          ...Array.from({ length: 9 }, () => expect.objectContaining({ kind: 'update' })),
+          expect.objectContaining({ kind: 'callout-child-update' })
+        ])
+      }
+    });
+
+    const status = await runStatus({
+      cwd: dir,
+      sourcePath: markdownPath,
+      target,
+      profile: 'none',
+      dialect: 'gfm',
+      adapter
+    });
+    expect(status).toMatchObject({
+      state: 'local-changed',
+      localChanged: true,
+      remoteChanged: false,
+      partialWriteCheckpoint: { remoteRevision: '11' }
+    });
+
+    const diff = await runDiff({
+      cwd: dir,
+      sourcePath: markdownPath,
+      target,
+      profile: 'none',
+      dialect: 'gfm',
+      adapter
+    });
+    expect([
+      ...diff.scoped.text.map((operation) => operation.kind),
+      ...diff.scoped.callouts.map((operation) => operation.action),
+      ...diff.scoped.tables.map(() => 'table-replace')
+    ]).toEqual([
+      'create',
+      'create',
+      'table-replace',
+      'table-replace',
+      'table-replace',
+      'table-replace'
+    ]);
+
+    failCreate = false;
+    const retry = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+    expect(retry.plan.remoteChanged).toBe(false);
+    expect(retry.plan.scopedPatch?.operations.map((operation) => operation.kind)).toEqual([
+      'create',
+      'callout-create',
+      'table-replace',
+      'table-replace',
+      'table-replace',
+      'table-replace'
+    ]);
+  });
+
+  it('does not recreate tracked text and Callout additions that already reached the remote', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-applied-additions-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const base = 'Anchor.';
+    const desired = 'Anchor.\n\nNew tail.\n\n<div class="alert warning">\n\nNew warning.\n\n</div>';
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, desired, 'utf8');
+    await writePublishBaselineBundle({
+      cwd: dir,
+      target,
+      localBaseline: base,
+      publishBaseline: base,
+      remoteSemantic: remoteSemanticDocument([
+        { block_id: 'doc_token', block_type: 1, children: ['anchor'] },
+        textBlock('anchor', 'Anchor.')
+      ], 'doc_token'),
+      receipt: {
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        dialect: 'gfm',
+        dialectDraftHash: hashText(base),
+        dialectDependencies: [],
+        linkResolutionFingerprint: semanticHash([]),
+        resolvedLinks: [],
+        localSourceHash: hashText(base),
+        publishDraftHash: hashText(base),
+        remoteSnapshotHash: hashText(base),
+        remoteRevision: '1',
+        whiteboards: [],
+        updatedAt: new Date().toISOString()
+      }
+    });
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: desired, revision: '3' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['anchor', 'tail', 'warning'] },
+        textBlock('anchor', 'Anchor.'),
+        textBlock('tail', 'New tail.'),
+        {
+          block_id: 'warning',
+          block_type: 19,
+          callout: { emoji_id: '❗' },
+          children: ['warning-title', 'warning-body']
+        },
+        textBlock('warning-title', 'Warning'),
+        textBlock('warning-body', 'New warning.')
+      ] }),
+      replaceDocument: async () => {}
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.scopedPatch?.operations).toEqual([]);
+  });
+
+  it('refuses to checkpoint when an unrelated remote scope changes during the write', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-checkpoint-drift-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const base = 'A.\n\nB.';
+    const desired = 'A2.\n\nB.';
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, desired, 'utf8');
+    await writePublishBaselineBundle({
+      cwd: dir,
+      target,
+      localBaseline: base,
+      publishBaseline: base,
+      remoteSemantic: remoteSemanticDocument([
+        { block_id: 'doc_token', block_type: 1, children: ['a', 'b'] },
+        textBlock('a', 'A.'),
+        textBlock('b', 'B.')
+      ], 'doc_token'),
+      receipt: {
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        dialect: 'gfm',
+        dialectDraftHash: hashText(base),
+        dialectDependencies: [],
+        linkResolutionFingerprint: semanticHash([]),
+        resolvedLinks: [],
+        localSourceHash: hashText(base),
+        publishDraftHash: hashText(base),
+        remoteSnapshotHash: hashText(base),
+        remoteRevision: '1',
+        whiteboards: [],
+        updatedAt: new Date().toISOString()
+      }
+    });
+    let written = false;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: written ? 'A2.\n\nRemote collaborator changed B.' : base,
+        revision: written ? '3' : '1'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: [written ? 'a-new' : 'a', 'b'] },
+        textBlock(written ? 'a-new' : 'a', written ? 'A2.' : 'A.'),
+        textBlock('b', written ? 'Remote collaborator changed B.' : 'B.')
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => { written = true; },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    let thrown: unknown;
+    try {
+      await runPublish({
+        cwd: dir,
+        file: markdownPath,
+        target,
+        profile: 'none',
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        adapter
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      name: 'PartialWriteError',
+      failedOperation: { kind: 'receipt-write' },
+      recoveryCheckpointWritten: false
+    });
+    expect(normalizeCliFailure(thrown).details.partialWrite)
+      .not.toHaveProperty('recoveryCheckpointRevision');
+    const receipt = await readPublishReceipt({ cwd: dir, target });
+    expect(receipt).toMatchObject({ remoteRevision: '1' });
+    expect(receipt && 'partialWriteCheckpoint' in receipt).toBe(false);
   });
 
   it('plans block-patch against the document body when the leading title matches', async () => {
@@ -2216,6 +2785,284 @@ Next text.`, 'utf8');
       receiptWritten: false
     });
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
+  });
+
+  it('retries table readback without repeating a successful table mutation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-table-readback-retry-'));
+    const markdownPath = join(dir, 'doc.md');
+    const before = [['ef', 'Accuracy trade-off.']] as Array<[string, string]>;
+    const after = [
+      ['ef', 'Accuracy trade-off.'],
+      ['num_random_samplings', 'Initial random seed iterations.']
+    ] as Array<[string, string]>;
+    await writeFile(markdownPath, htmlParameterTable(after), 'utf8');
+    let mutated = false;
+    let staleReadbacks = 2;
+    let mutationCount = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: markdownParameterTable(mutated ? after : before),
+        revision: mutated ? '2' : '1'
+      }),
+      fetchDocBlocks: async () => {
+        const stale = mutated && staleReadbacks > 0;
+        if (stale) staleReadbacks -= 1;
+        const rows = mutated && !stale ? after : before;
+        return { blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+          ...feishuTableBlocks(rows, 'table1')
+        ] };
+      },
+      replaceDocument: async () => {},
+      replaceBlock: async () => {
+        mutationCount += 1;
+        mutated = true;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      adapter
+    })).resolves.toMatchObject({ mode: 'write' });
+
+    expect(mutationCount).toBe(1);
+    expect(staleReadbacks).toBe(0);
+  });
+
+  it('waits for a delayed table view, checkpoints its mutation revision, and continues with the next table', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-table-readback-stabilization-'));
+    try {
+      const target = { kind: 'docx' as const, token: 'doc_token' };
+      const base = partialCheckpointMarkdown({
+        paragraphs: [],
+        calloutBody: 'Body.',
+        includeNewTail: false,
+        includeNewCallout: false,
+        updatedTables: new Set()
+      });
+      const desired = partialCheckpointMarkdown({
+        paragraphs: [],
+        calloutBody: 'Body.',
+        includeNewTail: false,
+        includeNewCallout: false,
+        updatedTables: new Set(['alpha', 'beta'])
+      });
+      const markdownPath = join(dir, 'doc.md');
+      await writeFile(markdownPath, desired, 'utf8');
+      const initialBlocks = partialCheckpointBlocks({
+        paragraphs: [],
+        paragraphIds: [],
+        calloutBody: 'Body.',
+        calloutBodyId: 'callout-body',
+        includeNewTail: false,
+        includeNewCallout: false,
+        updatedTables: new Set()
+      });
+      await writePublishBaselineBundle({
+        cwd: dir,
+        target,
+        localBaseline: base,
+        publishBaseline: base,
+        remoteSemantic: remoteSemanticDocument(initialBlocks, 'doc_token'),
+        receipt: {
+          resolvedDocumentId: 'doc_token',
+          profile: 'none',
+          dialect: 'gfm',
+          dialectDraftHash: hashText(base),
+          dialectDependencies: [],
+          linkResolutionFingerprint: semanticHash([]),
+          resolvedLinks: [],
+          localSourceHash: hashText(base),
+          publishDraftHash: hashText(base),
+          remoteSnapshotHash: hashText(base),
+          remoteRevision: '2268',
+          whiteboards: [],
+          updatedAt: new Date().toISOString()
+        }
+      });
+
+      const mutatedTables = new Set<string>();
+      let revision = 2268;
+      let alphaStaleReadbacks = 6;
+      const mutations: string[] = [];
+      let resolveFirstMutation!: () => void;
+      const firstMutation = new Promise<void>((resolve) => {
+        resolveFirstMutation = resolve;
+      });
+      const adapter: FeishuAdapter = {
+        fetchDocMarkdown: async () => ({
+          markdown: partialCheckpointMarkdown({
+            paragraphs: [],
+            calloutBody: 'Body.',
+            includeNewTail: false,
+            includeNewCallout: false,
+            updatedTables: mutatedTables
+          }),
+          revision: String(revision)
+        }),
+        fetchDocBlocks: async () => {
+          const visibleTables = new Set(mutatedTables);
+          if (mutatedTables.has('alpha') && alphaStaleReadbacks > 0) {
+            visibleTables.delete('alpha');
+            alphaStaleReadbacks -= 1;
+          }
+          return {
+            blocks: partialCheckpointBlocks({
+              paragraphs: [],
+              paragraphIds: [],
+              calloutBody: 'Body.',
+              calloutBodyId: 'callout-body',
+              includeNewTail: false,
+              includeNewCallout: false,
+              updatedTables: visibleTables
+            })
+          };
+        },
+        replaceDocument: async () => {},
+        replaceBlock: async ({ blockId }) => {
+          const key = blockId === 'table-alpha' ? 'alpha' : blockId === 'table-beta' ? 'beta' : undefined;
+          if (!key) throw new Error(`unexpected table mutation: ${blockId}`);
+          mutations.push(key);
+          mutatedTables.add(key);
+          revision += 1;
+          if (mutations.length === 1) resolveFirstMutation();
+          return { revision: String(revision) };
+        },
+        insertBlocksAfter: async () => {},
+        deleteBlocks: async () => {}
+      };
+
+      vi.useFakeTimers();
+      const publish = runPublish({
+        cwd: dir,
+        file: markdownPath,
+        target,
+        profile: 'none',
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        adapter
+      });
+      await firstMutation;
+      await vi.runAllTimersAsync();
+
+      await expect(publish).resolves.toMatchObject({ mode: 'write' });
+      expect(mutations).toEqual(['alpha', 'beta']);
+      expect(alphaStaleReadbacks).toBe(0);
+      await expect(readPublishReceipt({ cwd: dir, target })).resolves.toMatchObject({
+        version: 4,
+        remoteRevision: '2270'
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not accept a desired table view before the mutation revision becomes visible', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-table-revision-stabilization-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const before = [['ef', 'Accuracy trade-off.']] as Array<[string, string]>;
+    const after = [
+      ['ef', 'Accuracy trade-off.'],
+      ['num_random_samplings', 'Initial random seed iterations.']
+    ] as Array<[string, string]>;
+    const base = htmlParameterTable(before);
+    const desired = htmlParameterTable(after);
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, desired, 'utf8');
+    await writePublishBaselineBundle({
+      cwd: dir,
+      target,
+      localBaseline: base,
+      publishBaseline: base,
+      remoteSemantic: remoteSemanticDocument([
+        { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+        ...feishuTableBlocks(before, 'table1')
+      ], 'doc_token'),
+      receipt: {
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        dialect: 'gfm',
+        dialectDraftHash: hashText(base),
+        dialectDependencies: [],
+        linkResolutionFingerprint: semanticHash([]),
+        resolvedLinks: [],
+        localSourceHash: hashText(base),
+        publishDraftHash: hashText(base),
+        remoteSnapshotHash: hashText(markdownParameterTable(before)),
+        remoteRevision: '2268',
+        whiteboards: [],
+        updatedAt: new Date().toISOString()
+      }
+    });
+
+    let mutated = false;
+    let postMutationMarkdownReads = 0;
+    let resolveMutation!: () => void;
+    const mutation = new Promise<void>((resolve) => {
+      resolveMutation = resolve;
+    });
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => {
+        if (!mutated) return { markdown: markdownParameterTable(before), revision: '2268' };
+        postMutationMarkdownReads += 1;
+        return postMutationMarkdownReads === 1
+          ? { markdown: markdownParameterTable(before), revision: '2268' }
+          : { markdown: markdownParameterTable(after), revision: '2269' };
+      },
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+        ...feishuTableBlocks(mutated ? after : before, 'table1')
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {
+        mutated = true;
+        resolveMutation();
+        return { revision: '2269' };
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    vi.useFakeTimers();
+    try {
+      const publish = runPublish({
+        cwd: dir,
+        file: markdownPath,
+        target,
+        profile: 'none',
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        adapter
+      });
+      await mutation;
+      await vi.runAllTimersAsync();
+      await expect(publish).resolves.toMatchObject({ mode: 'write' });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(postMutationMarkdownReads).toBeGreaterThanOrEqual(2);
+    await expect(readPublishReceipt({ cwd: dir, target })).resolves.toMatchObject({
+      version: 4,
+      remoteRevision: '2269'
+    });
   });
 
   it('refuses block-patch writes when the remote changed since the last receipt', async () => {
@@ -6260,6 +7107,116 @@ function calloutBlocks(body: string | string[], title = 'Notes') {
 
 function canonicalCallout(bodies: string[]): string {
   return `<div class="alert note">\n\n${bodies.join('\n\n')}\n\n</div>`;
+}
+
+function partialCheckpointMarkdown(input: {
+  paragraphs: string[];
+  calloutBody: string;
+  includeNewTail: boolean;
+  includeNewCallout: boolean;
+  updatedTables: Set<string>;
+}): string {
+  const text = [
+    ...input.paragraphs,
+    ...(input.includeNewTail ? ['New tail.'] : []),
+    `<div class="alert note">\n\n${input.calloutBody}\n\n</div>`,
+    ...(input.includeNewCallout
+      ? ['<div class="alert warning">\n\nNew warning.\n\n</div>']
+      : []),
+    ...['alpha', 'beta', 'gamma', 'delta'].map((key) => {
+      const value = input.updatedTables.has(key) ? `Updated ${key}.` : `Old ${key}.`;
+      return `<table>\n  <tr><th><p>Key ${key}</p></th><th><p>Value ${key}</p></th></tr>\n` +
+        `  <tr><td><p><code>${key}</code></p></td><td><p>${value}</p></td></tr>\n</table>`;
+    })
+  ];
+  return text.join('\n\n');
+}
+
+function partialCheckpointBlocks(input: {
+  paragraphs: string[];
+  paragraphIds: string[];
+  calloutBody: string;
+  calloutBodyId: string;
+  includeNewTail: boolean;
+  includeNewCallout: boolean;
+  updatedTables: Set<string>;
+}): Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] {
+  const tableKeys = ['alpha', 'beta', 'gamma', 'delta'];
+  const directChildren = [
+    ...input.paragraphIds,
+    ...(input.includeNewTail ? ['new-tail'] : []),
+    'callout-existing',
+    ...(input.includeNewCallout ? ['callout-new'] : []),
+    ...tableKeys.map((key) => `table-${key}`)
+  ];
+  return [
+    { block_id: 'doc_token', block_type: 1, children: directChildren },
+    ...input.paragraphs.map((paragraph, index) => textBlock(input.paragraphIds[index]!, paragraph)),
+    ...(input.includeNewTail ? [textBlock('new-tail', 'New tail.')] : []),
+    {
+      block_id: 'callout-existing',
+      block_type: 19,
+      callout: { emoji_id: '📘' },
+      children: ['callout-title', input.calloutBodyId]
+    },
+    textBlock('callout-title', 'Notes'),
+    textBlock(input.calloutBodyId, input.calloutBody),
+    ...(input.includeNewCallout
+      ? [
+          {
+            block_id: 'callout-new',
+            block_type: 19,
+            callout: { emoji_id: '❗' },
+            children: ['callout-new-title', 'callout-new-body']
+          },
+          textBlock('callout-new-title', 'Warning'),
+          textBlock('callout-new-body', 'New warning.')
+        ]
+      : []),
+    ...tableKeys.flatMap((key) => feishuNamedTableBlocks({
+      tableId: `table-${key}`,
+      key,
+      value: input.updatedTables.has(key) ? `Updated ${key}.` : `Old ${key}.`
+    }))
+  ];
+}
+
+function feishuNamedTableBlocks(input: {
+  tableId: string;
+  key: string;
+  value: string;
+}): Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] {
+  const values = [
+    [`Key ${input.key}`, `Value ${input.key}`],
+    [input.key, input.value]
+  ];
+  const cellIds = values.flatMap((_, row) => [
+    `${input.tableId}-c${row}-0`,
+    `${input.tableId}-c${row}-1`
+  ]);
+  return [
+    {
+      block_id: input.tableId,
+      block_type: 31,
+      table: { property: { row_size: 2, column_size: 2 }, cells: cellIds }
+    },
+    ...values.flatMap((row, rowIndex) => row.flatMap((value, columnIndex) => {
+      const cellId = `${input.tableId}-c${rowIndex}-${columnIndex}`;
+      const textId = `${cellId}-p`;
+      return [
+        { block_id: cellId, block_type: 32, children: [textId] },
+        {
+          ...textBlock(textId, value),
+          text: {
+            elements: [{ text_run: {
+              content: value,
+              text_element_style: rowIndex === 1 && columnIndex === 0 ? { inline_code: true } : {}
+            } }]
+          }
+        }
+      ];
+    }))
+  ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
 }
 
 async function writeTrackedPureCalloutReceipt(input: {

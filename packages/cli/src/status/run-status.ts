@@ -15,6 +15,7 @@ import {
   publishReceiptPath,
   readPublishReceipt,
   receiptDialect,
+  type PartialWriteCheckpoint,
   type PublishReceipt,
   type PublishReceiptTarget
 } from '../receipts/publish-receipt.js';
@@ -58,6 +59,7 @@ export type PublishStatusResult = {
   remoteChanged: boolean;
   contentMatchesRemote: boolean;
   hasReceipt: boolean;
+  partialWriteCheckpoint?: PartialWriteCheckpoint;
   receiptPath: string;
   localSourceHash: string;
   publishDraftHash: string;
@@ -329,6 +331,10 @@ export function statusFromContext(context: PublishStatusContext): PublishStatusR
     remoteChanged,
     contentMatchesRemote,
     hasReceipt: true,
+    ...((context.receipt.version === 4 || context.receipt.version === 5) &&
+      context.receipt.partialWriteCheckpoint
+      ? { partialWriteCheckpoint: context.receipt.partialWriteCheckpoint }
+      : {}),
     receiptPath,
     localSourceHash,
     publishDraftHash,

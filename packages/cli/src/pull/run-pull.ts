@@ -5,6 +5,7 @@ import {
   type CodeBlockConfig
 } from '../code-blocks/code-language.js';
 import { canonicalizeFencedCodeLanguages } from '../code-blocks/code-markdown.js';
+import { calloutTypeHints } from '../callouts/callout-baseline.js';
 import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import type { FeishuBlock, TextElement } from '../feishu/types.js';
@@ -18,6 +19,7 @@ import {
 } from '../receipts/pull-receipt.js';
 import { hashText, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import { applyPullTransformForProfile } from '../transform/zilliz-pull.js';
+import { remoteSemanticDocument } from '../semantic/remote-document.js';
 
 export type RunPullResult = {
   mode: 'write';
@@ -51,10 +53,24 @@ export async function runPull(input: {
     markdown: remote.markdown,
     callouts: input.callouts ?? DEFAULT_CALLOUT_CONFIG
   });
-  const normalized = canonicalizeRemoteCalloutMarkdown({
-    markdown: hierarchy.markdown,
-    config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
-  });
+  const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
+  let normalized: ReturnType<typeof canonicalizeRemoteCalloutMarkdown>;
+  try {
+    normalized = canonicalizeRemoteCalloutMarkdown({
+      markdown: hierarchy.markdown,
+      config: callouts,
+      normalizeParagraphPayload: true
+    });
+  } catch (error) {
+    if (!isUnidentifiedCalloutTitleError(error) || !hierarchy.calloutTypeHints) throw error;
+    normalized = canonicalizeRemoteCalloutMarkdown({
+      markdown: hierarchy.markdown,
+      config: callouts,
+      typeHints: hierarchy.calloutTypeHints,
+      normalizeParagraphPayload: true
+    });
+    normalized.warnings.unshift('remote Callout types were resolved from Docx block metadata');
+  }
   const codeCanonical = canonicalizeFencedCodeLanguages(
     normalized.markdown,
     input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG
@@ -100,12 +116,20 @@ export async function runPull(input: {
   return result;
 }
 
+function isUnidentifiedCalloutTitleError(error: unknown): boolean {
+  return error instanceof Error && /^Cannot identify remote Callout type from title /.test(error.message);
+}
+
 async function repairNestedHierarchyFromBlocks(input: {
   adapter: FeishuAdapter;
   target: PublishReceiptTarget;
   markdown: string;
   callouts: CalloutConfig;
-}): Promise<{ markdown: string; warnings: string[] }> {
+}): Promise<{
+  markdown: string;
+  warnings: string[];
+  calloutTypeHints?: ReturnType<typeof calloutTypeHints>;
+}> {
   if (!input.adapter.fetchDocBlocks) return { markdown: input.markdown, warnings: [] };
   const documentId = input.target.kind === 'docx'
     ? input.target.token
@@ -114,6 +138,7 @@ async function repairNestedHierarchyFromBlocks(input: {
       : undefined;
   if (!documentId) return { markdown: input.markdown, warnings: [] };
   const blocks = await input.adapter.fetchDocBlocks({ doc: documentId });
+  const typeHints = calloutTypeHints(remoteSemanticDocument(blocks.blocks, documentId, input.callouts));
   const page = findPageBlock(blocks.blocks, documentId);
   const direct = renderableDirectChildBlocks(blocks.blocks, page);
   let markdown = input.markdown;
@@ -157,7 +182,8 @@ async function repairNestedHierarchyFromBlocks(input: {
   }
   return {
     markdown,
-    warnings: repaired ? ['reconstructed nested list hierarchy from Docx block API'] : []
+    warnings: repaired ? ['reconstructed nested list hierarchy from Docx block API'] : [],
+    calloutTypeHints: typeHints
   };
 }
 

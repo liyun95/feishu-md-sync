@@ -2,6 +2,14 @@
 
 `feishu-md-sync` uses the official `lark-cli` for Feishu IO. Authenticate `lark-cli` first, then use `.env` only for repository-local CLI defaults.
 
+By default, workspace behavior is loaded from `feishu-md-sync.config.json` in the current directory. To use an explicit external read-only config without copying it into the source repository, set `FEISHU_MD_SYNC_CONFIG` to an absolute path or a path relative to the current directory:
+
+```bash
+export FEISHU_MD_SYNC_CONFIG=/path/to/feishu-md-sync.config.json
+```
+
+This changes only config discovery. Link resolvers remain read-only and the normal command safety gates still apply.
+
 ## Default Local Setup
 
 For local interactive use, let the official CLI handle authentication:
@@ -84,7 +92,11 @@ Use `defaultDialect` when a workspace consistently publishes one authoring forma
         "urlField": "Docs",
         "placementTypeField": "Placement Type",
         "referenceField": "Ref Target Doc",
-        "acceptedPlacementTypes": ["canonical", "ref"]
+        "acceptedPlacementTypes": ["canonical", "ref"],
+        "slugAliases": {
+          "inverted": "inverted-index-type",
+          "bitmap": "bitmap-index-type"
+        }
       }
     },
     "milvus-authoring": {
@@ -96,6 +108,8 @@ Use `defaultDialect` when a workspace consistently publishes one authoring forma
 ```
 
 The Base resolver is strictly read-only. It lists tables and records through the official `lark-cli`, but publish never creates or edits Base records. By default, `canonical` and `ref` rows are eligible mappings; `section` and `link` rows are ignored. Two different eligible Feishu URLs for the same slug are ambiguous and block the complete publish.
+
+Use `slugAliases` when a local authoring filename differs from the canonical `Slug` stored in Base. Alias resolution is local and read-only: the resolver first tries the requested slug directly, then looks up its configured canonical slug without changing Base records.
 
 Mappings are cached for one hour under:
 

@@ -21,6 +21,18 @@ Use `bot` for CI and app-token based live tests when the bot has document access
 
 In GitHub Actions, prefer test-specific secrets such as `LARK_TEST_APP_ID` and `LARK_TEST_APP_SECRET`, then map them to `LARK_APP_ID` and `LARK_APP_SECRET` only inside the `lark-cli` setup step.
 
+## `FEISHU_MD_SYNC_CONFIG`
+
+Optional explicit path to the sync configuration file. Absolute paths are used directly; relative paths are resolved from the current directory.
+
+Use it when the source repository must stay unchanged but status, diff, publish, or baseline adoption still needs a shared read-only dialect/link-resolver configuration:
+
+```bash
+export FEISHU_MD_SYNC_CONFIG=/path/to/read-only/feishu-md-sync.config.json
+```
+
+When unset, the CLI reads `feishu-md-sync.config.json` from the current directory.
+
 ## `VITEPRESS_BASE`
 
 Docs build base path used by VitePress.

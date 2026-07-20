@@ -52,6 +52,7 @@ The Skill uses the CLI's JSON plans and error contract. It never automatically e
 | Check local/remote state | `feishu-md-sync status` |
 | Inspect publish diff | `feishu-md-sync diff` |
 | Merge remote edits into local Markdown | `feishu-md-sync merge` |
+| Establish an explicit local-only publish baseline | `feishu-md-sync baseline adopt` |
 
 ## Common Flow
 
@@ -85,6 +86,21 @@ feishu-md-sync publish ./doc.md --target DocToken --write
 
 When the merge already makes the publish draft match Feishu, the final write is a no-op remote update that refreshes the local receipt and merge base.
 
+To adopt intentional history that predates the receipt, review an explicit L0/L1/R0 baseline without writing Feishu:
+
+```bash
+feishu-md-sync baseline adopt ./doc.md --target DocToken --git-ref HEAD --format json
+```
+
+Then use the exact reviewed fingerprint to atomically write only local receipt files:
+
+```bash
+feishu-md-sync baseline adopt ./doc.md --target DocToken --git-ref HEAD \
+  --apply --confirm-baseline-adoption <fingerprint> --format json
+```
+
+The command accepts `--local-baseline <file>` instead of `--git-ref <ref>`. It never writes Feishu or Base.
+
 Create a new document under a Drive folder or Wiki parent:
 
 ```bash
@@ -106,6 +122,7 @@ Use `--profile zilliz` when local Markdown uses Milvus wording but the Feishu do
 ## Safety Model
 
 - Remote writes require `publish --write`.
+- Local baseline adoption requires exactly one explicit L0 source plus `--apply --confirm-baseline-adoption <fingerprint>`.
 - The first write to an existing untracked document also requires `--confirm-untracked-remote`.
 - Block-patch updates or deletions that may affect comments, anchors, or block identity require `--confirm-collaboration-risk`.
 - Reconstructable HTML tables support row additions and updates keyed by a unique first column. The first implementation replaces only the matched table block and uses the same collaboration-risk confirmation.
@@ -114,6 +131,7 @@ Use `--profile zilliz` when local Markdown uses Milvus wording but the Feishu do
 - Unsupported or conflicting scoped changes return `strategy: blocked`; `auto` never falls back to whole-document replacement.
 - Whole-document replacement requires `--strategy document-replace --confirm-destructive`.
 - `status` and `diff` are read-only; `merge` writes only local files and supports `--abort`.
+- Publish receipt and sidecar hashes are integrity checked; do not edit them manually.
 
 ## Editable Whiteboard Assets
 

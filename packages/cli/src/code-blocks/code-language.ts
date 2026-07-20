@@ -61,6 +61,7 @@ const LANGUAGE_IDS = {
 } as const;
 
 const BUILT_IN_ALIASES: Record<string, string> = {
+  'plain text': 'plaintext',
   text: 'plaintext',
   txt: 'plaintext',
   conf: 'plaintext',
