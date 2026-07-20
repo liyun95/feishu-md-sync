@@ -13,6 +13,7 @@ export type CalloutCreateOperation = {
   locator: SemanticLocator;
   parentBlockId: string;
   insertAfterBlockId: string;
+  afterLocator?: SemanticLocator;
   desiredCallout: SemanticCallout;
 };
 
@@ -166,11 +167,20 @@ export function planCalloutChanges(input: {
 
       if (!localCurrent) continue;
       if (!localBase) {
-        if (!remoteCurrent) {
+        const matchingRemote = matchingRemoteAddition(input.localCurrent, input.remoteCurrent, localCurrent);
+        if (matchingRemote.ambiguous) {
+          blockers.push(correspondenceBlocker(
+            localCurrent.locator,
+            'remote Callout addition correspondence is ambiguous'
+          ));
+          continue;
+        }
+        const recoveredRemote = remoteCurrent ?? matchingRemote.callout;
+        if (!recoveredRemote) {
           operations.push(createOperation(input.parentBlockId, input.localCurrent, input.remoteCurrent, localCurrent));
           continue;
         }
-        if (calloutContentHash(localCurrent) !== calloutContentHash(remoteCurrent)) {
+        if (calloutContentHash(localCurrent) !== calloutContentHash(recoveredRemote)) {
           blockers.push(conflictBlocker(localCurrent.locator, 'local and remote added different Callouts'));
         }
         continue;
@@ -243,6 +253,23 @@ export function planCalloutChanges(input: {
     requiresCollaborationRiskConfirmation,
     requiresUntrackedRemoteConfirmation: adoptedUntracked
   };
+}
+
+function matchingRemoteAddition(
+  local: SemanticDocument,
+  remote: SemanticDocument,
+  desired: SemanticCallout
+): { callout?: SemanticCallout; ambiguous: boolean } {
+  const candidates = callouts(remote).filter((candidate) => {
+    return sameCalloutType(desired, candidate) &&
+      managedTitleMatches(desired, candidate) &&
+      calloutContentHash(desired) === calloutContentHash(candidate) &&
+      (locatorKey(desired.locator) === locatorKey(candidate.locator) ||
+        adjacencyMatches(local, remote, desired, candidate));
+  });
+  return candidates.length === 1
+    ? { callout: candidates[0], ambiguous: false }
+    : { ambiguous: candidates.length > 1 };
 }
 
 export function calloutContentHash(callout: SemanticCallout): string {
@@ -425,11 +452,13 @@ function createOperation(
   remote: SemanticDocument,
   desiredCallout: SemanticCallout
 ): CalloutCreateOperation {
+  const anchor = insertionAnchor(parentBlockId, local, remote, desiredCallout);
   return {
     kind: 'callout-create',
     locator: desiredCallout.locator,
     parentBlockId,
-    insertAfterBlockId: insertionAnchor(parentBlockId, local, remote, desiredCallout),
+    insertAfterBlockId: anchor.blockId,
+    afterLocator: anchor.locator,
     desiredCallout
   };
 }
@@ -439,16 +468,16 @@ function insertionAnchor(
   local: SemanticDocument,
   remote: SemanticDocument,
   desired: SemanticCallout
-): string {
+): { blockId: string; locator?: SemanticLocator } {
   const index = local.nodes.indexOf(desired);
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const localNode = local.nodes[cursor];
     if (!localNode) continue;
     const remoteNode = remote.nodes.find((candidate) => locatorKey(candidate.locator) === locatorKey(localNode.locator));
     const blockId = remoteNode ? nodeBlockId(remoteNode) : undefined;
-    if (blockId) return blockId;
+    if (blockId) return { blockId, locator: localNode.locator };
   }
-  return parentBlockId;
+  return { blockId: parentBlockId };
 }
 
 function adjacencyMatches(

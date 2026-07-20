@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import {
   DEFAULT_CODE_BLOCK_CONFIG,
   type CodeBlockConfig
@@ -83,7 +83,10 @@ export function resolveCodeBlockConfig(config: SyncConfig): CodeBlockConfig {
 }
 
 export async function loadSyncConfig(input: LoadSyncConfigInput): Promise<SyncConfig> {
-  const path = join(input.cwd, 'feishu-md-sync.config.json');
+  const configuredPath = process.env.FEISHU_MD_SYNC_CONFIG?.trim();
+  const path = configuredPath
+    ? resolvePath(input.cwd, configuredPath)
+    : join(input.cwd, 'feishu-md-sync.config.json');
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
@@ -148,7 +151,8 @@ function parseLinkResolver(
     'urlField',
     'placementTypeField',
     'referenceField',
-    'acceptedPlacementTypes'
+    'acceptedPlacementTypes',
+    'slugAliases'
   ], label);
   if (value.type !== 'lark-base') {
     throw new Error(`${label}.type must be lark-base.`);
@@ -171,8 +175,20 @@ function parseLinkResolver(
       `${label}.placementTypeField`
     ),
     referenceField: parseOptionalNonEmptyString(value.referenceField, `${label}.referenceField`),
-    acceptedPlacementTypes
+    acceptedPlacementTypes,
+    slugAliases: parseStringRecord(value.slugAliases, `${label}.slugAliases`)
   };
+}
+
+function parseStringRecord(value: unknown, label: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`${label} must be a JSON object.`);
+  const result: Record<string, string> = {};
+  for (const [source, target] of Object.entries(value)) {
+    if (source.trim() === '') throw new Error(`${label} keys must be non-empty strings.`);
+    result[source] = parseRequiredNonEmptyString(target, `${label}.${source}`);
+  }
+  return result;
 }
 
 function assertOnlyKeys(value: Record<string, unknown>, allowed: string[], label: string): void {

@@ -17,6 +17,7 @@ import type {
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import { applyPublishTransformForProfile } from './profile-transform.js';
 import type { ZdocComponentInventory } from '../zdoc/types.js';
+import { parseLeadingFrontmatter } from '../dialects/frontmatter.js';
 
 export type PublishContext = {
   localSource: string;
@@ -25,6 +26,7 @@ export type PublishContext = {
   dialectDraftHash: string;
   publishDraft: string;
   publishDraftHash: string;
+  documentTitle?: string;
   dialectWarnings: DialectDiagnostic[];
   dialectBlockers: DialectDiagnostic[];
   dialectDependencies: DialectDependency[];
@@ -61,6 +63,10 @@ export async function buildPublishContext(input: {
     linkResolver: resolver.resolver
   });
   const transform = applyPublishTransformForProfile(dialectResult.markdown, input.profile);
+  const sourceFrontmatter = parseLeadingFrontmatter(localSource);
+  const documentTitle = typeof sourceFrontmatter.data.title === 'string'
+    ? sourceFrontmatter.data.title.trim()
+    : undefined;
   const resolvedLinks = [...dialectResult.resolvedLinks].sort((left, right) => {
     return stableStringify(left).localeCompare(stableStringify(right));
   });
@@ -71,6 +77,7 @@ export async function buildPublishContext(input: {
     dialectDraftHash: hashText(dialectResult.markdown),
     publishDraft: transform.markdown,
     publishDraftHash: hashText(transform.markdown),
+    ...(documentTitle ? { documentTitle } : {}),
     dialectWarnings: uniqueDiagnostics([
       ...resolver.warnings,
       ...dialectResult.warnings

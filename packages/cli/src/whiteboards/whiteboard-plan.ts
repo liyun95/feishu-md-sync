@@ -162,7 +162,7 @@ function planUntrackedAsset(input: {
     return;
   }
   const remote = candidates[0];
-  const placementFingerprint = fingerprintFor(input.input.localDocument, input.asset.locator);
+  const placementFingerprint = whiteboardPlacementFingerprint(input.input.localDocument, input.asset.locator);
   const localCorrespondenceFingerprint = correspondenceFingerprintFor(input.input.localDocument, input.asset.locator);
   const remoteCorrespondenceFingerprint = correspondenceFingerprintFor(input.input.remoteDocument, remote.locator);
   if (localCorrespondenceFingerprint !== remoteCorrespondenceFingerprint) {
@@ -260,7 +260,7 @@ function planTrackedAsset(input: {
 
   const localChanged = input.asset.svgHash !== input.receipt.svgHash;
   const remoteChanged = remoteState.hash !== input.receipt.remoteStateHash;
-  const placementFingerprint = fingerprintFor(input.input.localDocument, input.asset.locator);
+  const placementFingerprint = whiteboardPlacementFingerprint(input.input.localDocument, input.asset.locator);
   if (!localChanged && !remoteChanged) {
     input.assets.push({
       assetKey: input.asset.assetKey,
@@ -351,7 +351,10 @@ function sameLocator(left: SemanticLocator, right: SemanticLocator): boolean {
     left.sectionPath.every((part, index) => part === right.sectionPath[index]);
 }
 
-function fingerprintFor(document: SemanticDocument, locator: SemanticLocator): string {
+export function whiteboardPlacementFingerprint(
+  document: SemanticDocument,
+  locator: SemanticLocator
+): string {
   const index = document.nodes.findIndex((node) => sameLocator(node.locator, locator));
   const previous = index > 0 ? identityFor(document.nodes[index - 1]) : undefined;
   const next = index >= 0 && index < document.nodes.length - 1 ? identityFor(document.nodes[index + 1]) : undefined;

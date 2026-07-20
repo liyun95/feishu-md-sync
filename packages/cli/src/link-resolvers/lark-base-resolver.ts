@@ -59,6 +59,7 @@ export function createLarkBaseDocumentLinkResolver(input: {
   entries: BaseLinkEntry[];
   source: LinkResolutionSource;
   warnings?: DialectDiagnostic[];
+  slugAliases?: Record<string, string>;
 }): DocumentLinkResolver {
   const bySlug = new Map<string, BaseLinkEntry[]>();
   for (const entry of input.entries) {
@@ -66,10 +67,18 @@ export function createLarkBaseDocumentLinkResolver(input: {
     candidates.push(entry);
     bySlug.set(entry.slug, candidates);
   }
+  const aliases = new Map(Object.entries(input.slugAliases ?? {}).flatMap(([source, target]) => {
+    const normalizedSource = normalizeDocumentSlug(source);
+    const normalizedTarget = normalizeDocumentSlug(target);
+    return normalizedSource && normalizedTarget ? [[normalizedSource, normalizedTarget]] : [];
+  }));
   return {
     async resolve(request) {
       const slug = normalizeDocumentSlug(request.slug);
-      const candidates = slug ? bySlug.get(slug) ?? [] : [];
+      const lookupSlug = slug && (bySlug.get(slug)?.length ?? 0) > 0
+        ? slug
+        : slug ? aliases.get(slug) ?? slug : undefined;
+      const candidates = lookupSlug ? bySlug.get(lookupSlug) ?? [] : [];
       const urls = [...new Set(candidates.map(({ url }) => url))];
       if (urls.length > 1) {
         return {

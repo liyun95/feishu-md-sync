@@ -1,6 +1,6 @@
 # Receipts
 
-Receipts are written only after successful remote writes or explicit pull snapshot requests. They are ignored by git.
+Receipts are written only after successful remote writes, explicit local-only baseline adoption, or explicit pull snapshot requests. They are ignored by git.
 
 New-core receipt locations:
 
@@ -14,9 +14,17 @@ New-core receipt locations:
 
 `publish` receipts are target-oriented. They record the last successful local Markdown to Feishu write and are used to detect remote drift before later block-patch writes.
 
+`baseline adopt` can establish the same receipt model without a Feishu write when the user explicitly selects L0 and reviews the intentional L0/R0 divergence. In that flow, the local and publish snapshots come from L0, while the raw and semantic remote baselines come from the current R0. L1 is inspected only to prove that the next publish can plan the intended L0 to L1 delta safely.
+
 Current publishes write version 4 receipts for ordinary documents and version 5 receipts when protected Zdoc resources are present. Version 4 records the selected source dialect, dialect dependencies, stable document-link mappings, tracked Whiteboard assets, and an exact sidecar snapshot of the final publish draft. Version 5 adds protected Supademo component identity, ISV block identity and shape, and placement fingerprints. Older versions remain readable; versions 1 through 3 are interpreted as `gfm`.
 
 The exact publish-draft snapshot matters when the local source depends on `Variables.json`, fragments, profile transformation, or a changing Base mapping. Later scoped planning compares against what was actually published rather than trying to reconstruct the old draft from current dependencies.
+
+Baseline adoption uses content-addressed sidecar names and writes the receipt last. Existing version 4/5 sidecars, Whiteboard entries, and version 5 protected-resource mappings must pass hash and remote-identity verification before they can be preserved. A failed sidecar transaction leaves the previous receipt valid. Manual receipt or sidecar edits fail integrity checks and are not an escape hatch.
+
+Tracked version 4/5 block-patch writes also create local recovery checkpoints after every remotely verified operation. A checkpoint advances only the remote Markdown hash, remote revision, and remote semantic sidecar; it preserves the original local and publish baselines so the next planner still computes the unapplied remainder of the same local delta. The final successful publish replaces the checkpoint with the normal completed receipt.
+
+If a later operation fails, JSON errors report `recoveryCheckpointWritten`; `recoveryCheckpointRevision` is present only when a recovery checkpoint actually exists. Rerun `status`, `diff`, and publish dry-run before any retry. A checkpoint never proves an operation whose mutation or readback was ambiguous, and it never bypasses remote-drift, correspondence, collaboration-risk, or destructive-write gates.
 
 Stored data includes:
 

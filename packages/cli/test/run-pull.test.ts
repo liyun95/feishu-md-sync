@@ -85,6 +85,78 @@ describe('runPull', () => {
     );
   });
 
+  it('normalizes paragraph-wrapped Callout payloads without dropping the body', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-callout-paragraphs-'));
+    const output = join(dir, 'doc.remote.md');
+    const remoteMarkdown = '<callout emoji="📘"><p>Notes</p>' +
+      '<p>In this example, the JSON field allows null values with <code>nullable=True</code>. ' +
+      'For details, refer to <cite doc-id="nullable" title="Nullable Fields"></cite>.</p></callout>';
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '1365' }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPull({
+      cwd: dir,
+      target: { kind: 'wiki', token: 'wiki_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter
+    });
+
+    await expect(readFile(output, 'utf8')).resolves.toBe(
+      '<div class="alert note">\n\n' +
+      'In this example, the JSON field allows null values with <code>nullable=True</code>. ' +
+      'For details, refer to <cite doc-id="nullable" title="Nullable Fields"></cite>.\n\n' +
+      '</div>'
+    );
+    expect(result.warnings).toContain(
+      'remote Callout 1 used paragraph-wrapped title/body compatibility normalization'
+    );
+  });
+
+  it('uses a Docx block type hint for a paragraph-wrapped custom Callout title', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-callout-hint-'));
+    const output = join(dir, 'doc.remote.md');
+    const adapter: FeishuAdapter = {
+      resolveDocumentId: async () => 'doc_token',
+      fetchDocMarkdown: async () => ({
+        markdown: '<callout><p>Team convention</p><p>Keep this body wrapped.</p></callout>'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+        {
+          block_id: 'callout1',
+          block_type: 19,
+          callout: { emoji_id: '📘' },
+          children: ['title1', 'body1']
+        },
+        pullTextBlock('title1', 'Team convention'),
+        pullTextBlock('body1', 'Keep this body wrapped.')
+      ] }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPull({
+      cwd: dir,
+      target: { kind: 'wiki', token: 'wiki_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter
+    });
+
+    await expect(readFile(output, 'utf8')).resolves.toBe(
+      '<div class="alert note">\n\nKeep this body wrapped.\n\n</div>'
+    );
+    expect(result.warnings).toContain('remote Callout types were resolved from Docx block metadata');
+  });
+
   it('fails closed when a remote Callout title cannot be identified', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-pull-callout-'));
     const output = join(dir, 'doc.remote.md');
@@ -105,6 +177,35 @@ describe('runPull', () => {
       writeReceipt: false,
       adapter
     })).rejects.toThrow('Cannot identify remote Callout type from title "Team convention".');
+  });
+
+  it('fails closed when Docx block metadata also cannot identify the Callout type', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-pull-callout-unidentified-'));
+    const output = join(dir, 'doc.remote.md');
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: '<callout><p>Team convention</p><p>Keep this body wrapped.</p></callout>'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['callout1'] },
+        { block_id: 'callout1', block_type: 19, callout: {}, children: ['title1', 'body1'] },
+        pullTextBlock('title1', 'Team convention'),
+        pullTextBlock('body1', 'Keep this body wrapped.')
+      ] }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await expect(runPull({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' },
+      outputPath: output,
+      profile: 'none',
+      overwrite: false,
+      writeReceipt: false,
+      adapter
+    })).rejects.toThrow('Cannot identify remote Callout type from title "Team convention".');
+    await expect(readFile(output, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('writes a profile-transformed remote snapshot and verifies the local file', async () => {
@@ -208,3 +309,13 @@ describe('runPull', () => {
     });
   });
 });
+
+function pullTextBlock(blockId: string, content: string) {
+  return {
+    block_id: blockId,
+    block_type: 2,
+    text: {
+      elements: [{ text_run: { content, text_element_style: {} } }]
+    }
+  };
+}

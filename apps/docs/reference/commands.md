@@ -119,6 +119,41 @@ Use load-time CPU adaptation.
 
 Use `alert warning` for warnings. The body is locally managed; the existing remote title, emoji, colors, and Callout container are preserved. Creating a new Callout uses the configured title and the built-in note or warning presentation. Changing `note` to `warning`, or changing unsupported body content, returns a blocked plan.
 
+## `baseline adopt`
+
+```bash
+feishu-md-sync baseline adopt <markdown-file> --target <docx-or-wiki> \
+  (--local-baseline <file> | --git-ref <ref>) [options]
+```
+
+This command establishes a publish receipt for an existing, intentionally divergent local/remote pair without changing Feishu. It models:
+
+- L0: the explicitly selected local file or the source file at the selected Git ref
+- L1: the current workspace file
+- R0: the current Feishu revision, Markdown snapshot, blocks, Code metadata, and semantic document
+
+Options:
+
+- `--target <url-or-token>` - existing docx or Wiki document.
+- `--local-baseline <file>` - explicit L0 Markdown file.
+- `--git-ref <ref>` - Git commit/ref containing the source file at L0.
+- `--profile <profile>` - `zilliz`, `milvus`, or `none`.
+- `--dialect <dialect>` - `gfm`, `zdoc-authoring`, or `milvus-authoring`.
+- `--apply` - atomically write only the local receipt and sidecars.
+- `--confirm-baseline-adoption <fingerprint>` - confirm the exact reviewed L0/L1/R0 state.
+- `--format <format>` - `pretty` or `json`.
+
+The default dry-run reports source and publish hashes for L0 and L1, R0 revision and hashes, an L0/R0 divergence summary, the prospective L0 to L1 scoped operations, protected resources, tracked Whiteboards, blockers, and `safeToAdopt`. Public-site link fallback, ambiguous correspondence, remote Code metadata gaps, changed protected resources, or changed tracked Whiteboards block adoption.
+
+After review:
+
+```bash
+feishu-md-sync baseline adopt ./doc.md --target DocToken --git-ref HEAD \
+  --apply --confirm-baseline-adoption <fingerprint> --format json
+```
+
+`--apply` has no remote-write meaning. The command exposes no `--write`, destructive replacement, collaboration-risk, or untracked-remote confirmation option. Before committing the receipt, it refetches R0 and refuses the adoption if the revision or Markdown hash changed. Never create or edit receipt JSON or sidecars by hand.
+
 ## Profiles
 
 Omit `--profile` to use the configured default. In a fresh setup, the default profile is `none`.
@@ -166,7 +201,7 @@ feishu-md-sync pull --target DocToken --output doc.remote.md
 
 `pull` uses `lark-cli docs +fetch --doc-format markdown` for the remote export. The custom layer handles target parsing, profile filtering, overwrite protection, local write verification, and optional receipt writing.
 
-Recognized Feishu Callouts are written as canonical `<div class="alert note|warning">` HTML without the presentation title. An unrecognized title fails closed; configure the workspace title before pulling a localized or previously customized untracked Callout.
+Recognized Feishu Callouts are written as canonical `<div class="alert note|warning">` HTML without the presentation title. The pull path also normalizes a Feishu export variant that wraps the title and body in consecutive `<p>` elements, and reports this compatibility normalization in `warnings`. If a custom title is not recognizable, pull may resolve its type from the native Docx Callout metadata; it still fails closed when neither the configured title nor block metadata identifies a type.
 
 ## `status`
 
@@ -253,7 +288,7 @@ remote content
 >>>>>>> REMOTE
 ```
 
-Remote Callouts are canonicalized before the line merge. As with `pull`, target-based merge fails closed when an untracked custom presentation title cannot be recognized from workspace configuration.
+Remote Callouts are canonicalized before the line merge. Target-based merge fails closed when an untracked custom presentation title cannot be recognized from workspace configuration, and it never infers a type from title substrings.
 
 Automatic merge is supported only for `gfm`. With `zdoc-authoring` or `milvus-authoring`, `merge` returns `state: blocked` before fetching remote content or modifying the local source. `merge --abort` remains available regardless of the configured dialect.
 

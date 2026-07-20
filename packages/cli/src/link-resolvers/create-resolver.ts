@@ -42,7 +42,7 @@ export async function createDocumentLinkResolver(input: {
   if (cache && cache.resolverFingerprint !== resolverFingerprint(input.config)) cache = undefined;
 
   if (cache && isFreshLinkResolverCache({ cache, now })) {
-    return resolverResult({ cache, cachePath: cachePath!, source: 'fresh-cache' });
+    return resolverResult({ cache, cachePath: cachePath!, source: 'fresh-cache', config: input.config });
   }
 
   try {
@@ -66,7 +66,7 @@ export async function createDocumentLinkResolver(input: {
       entries
     };
     await writeLinkResolverCache({ path: cachePath, cache: refreshed });
-    return resolverResult({ cache: refreshed, cachePath, source: 'live-base' });
+    return resolverResult({ cache: refreshed, cachePath, source: 'live-base', config: input.config });
   } catch (error) {
     if (cache && cachePath) {
       const warning = staleCacheWarning(cache, error);
@@ -74,6 +74,7 @@ export async function createDocumentLinkResolver(input: {
         cache,
         cachePath,
         source: 'stale-cache',
+        config: input.config,
         warnings: [warning]
       });
     }
@@ -92,6 +93,7 @@ function resolverResult(input: {
   cache: LarkBaseLinkCache;
   cachePath: string;
   source: 'live-base' | 'fresh-cache' | 'stale-cache';
+  config: LarkBaseLinkResolverConfig;
   warnings?: DialectDiagnostic[];
 }): {
   resolver: DocumentLinkResolver;
@@ -103,7 +105,8 @@ function resolverResult(input: {
     resolver: createLarkBaseDocumentLinkResolver({
       entries: input.cache.entries,
       source: input.source,
-      warnings
+      warnings,
+      slugAliases: input.config.slugAliases
     }),
     dependencies: [
       {

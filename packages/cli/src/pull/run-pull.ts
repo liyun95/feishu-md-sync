@@ -5,6 +5,7 @@ import {
   type CodeBlockConfig
 } from '../code-blocks/code-language.js';
 import { canonicalizeFencedCodeLanguages } from '../code-blocks/code-markdown.js';
+import { calloutTypeHints } from '../callouts/callout-baseline.js';
 import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
@@ -15,6 +16,7 @@ import {
 } from '../receipts/pull-receipt.js';
 import { hashText, type PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import { applyPullTransformForProfile } from '../transform/zilliz-pull.js';
+import { remoteSemanticDocument } from '../semantic/remote-document.js';
 
 export type RunPullResult = {
   mode: 'write';
@@ -42,10 +44,28 @@ export async function runPull(input: {
   await assertPullOutputWritable(input.outputPath, input.overwrite);
 
   const remote = await input.adapter.fetchDocMarkdown({ doc: input.target.token });
-  const normalized = canonicalizeRemoteCalloutMarkdown({
-    markdown: remote.markdown,
-    config: input.callouts ?? DEFAULT_CALLOUT_CONFIG
-  });
+  const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
+  let normalized: ReturnType<typeof canonicalizeRemoteCalloutMarkdown>;
+  try {
+    normalized = canonicalizeRemoteCalloutMarkdown({
+      markdown: remote.markdown,
+      config: callouts,
+      normalizeParagraphPayload: true
+    });
+  } catch (error) {
+    if (!isUnidentifiedCalloutTitleError(error) || !input.adapter.fetchDocBlocks) throw error;
+    const documentId = input.adapter.resolveDocumentId
+      ? await input.adapter.resolveDocumentId({ target: input.target })
+      : input.target.token;
+    const remoteBlocks = await input.adapter.fetchDocBlocks({ doc: documentId });
+    normalized = canonicalizeRemoteCalloutMarkdown({
+      markdown: remote.markdown,
+      config: callouts,
+      typeHints: calloutTypeHints(remoteSemanticDocument(remoteBlocks.blocks, documentId, callouts)),
+      normalizeParagraphPayload: true
+    });
+    normalized.warnings.unshift('remote Callout types were resolved from Docx block metadata');
+  }
   const codeCanonical = canonicalizeFencedCodeLanguages(
     normalized.markdown,
     input.codeBlocks ?? DEFAULT_CODE_BLOCK_CONFIG
@@ -89,6 +109,10 @@ export async function runPull(input: {
   }
 
   return result;
+}
+
+function isUnidentifiedCalloutTitleError(error: unknown): boolean {
+  return error instanceof Error && /^Cannot identify remote Callout type from title /.test(error.message);
 }
 
 async function assertPullOutputWritable(outputPath: string, overwrite: boolean): Promise<void> {

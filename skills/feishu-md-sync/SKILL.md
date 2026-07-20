@@ -41,6 +41,8 @@ test -n "$FMS" && test -x "$FMS"
 command -v lark-cli
 ```
 
+When the user supplies an external read-only sync config, set `FEISHU_MD_SYNC_CONFIG` to that exact file before every related status, diff, baseline, and publish command. Do not copy the config into the source repository or silently substitute another config.
+
 For PATH-based stable use, require `feishu-md-sync >=0.4.0 <0.5.0`. Stop and give the matching npm upgrade command when the version is outside this range or cannot be parsed.
 
 `FEISHU_MD_SYNC_BIN` explicitly selects an unreleased development build. If its package version is outside the stable range, continue only when all of these probes succeed:
@@ -52,10 +54,11 @@ For PATH-based stable use, require `feishu-md-sync >=0.4.0 <0.5.0`. Stop and giv
 "$FMS" diff --help
 "$FMS" pull --help
 "$FMS" merge --help
+"$FMS" baseline adopt --help
 "$FMS" doctor auth --help
 ```
 
-Require the top-level commands `publish`, `status`, `diff`, `pull`, `merge`, and `doctor`. Require every option used by this Skill: publish `--target`, `--profile`, `--dialect`, `--write`, `--create`, `--strategy`, `--confirm-destructive`, `--confirm-collaboration-risk`, `--confirm-untracked-remote`, `--sync-whiteboards`, `--confirm-remote-whiteboard-overwrite`, and `--format`; status and diff `--target`, `--profile`, `--dialect`, `--sync-whiteboards`, and `--format`; pull `--target`, `--output`, `--profile`, `--overwrite`, and `--format`; merge `--target`, `--profile`, `--dialect`, `--check`, `--abort`, and `--format`; doctor auth `--format`. Do not search arbitrary worktrees or guess another build.
+Require the top-level commands `publish`, `status`, `diff`, `pull`, `merge`, `baseline`, and `doctor`. Require every option used by this Skill: publish `--target`, `--profile`, `--dialect`, `--write`, `--create`, `--strategy`, `--confirm-destructive`, `--confirm-collaboration-risk`, `--confirm-untracked-remote`, `--sync-whiteboards`, `--confirm-remote-whiteboard-overwrite`, and `--format`; baseline adopt `--target`, `--profile`, `--dialect`, `--local-baseline`, `--git-ref`, `--apply`, `--confirm-baseline-adoption`, and `--format`; status and diff `--target`, `--profile`, `--dialect`, `--sync-whiteboards`, and `--format`; pull `--target`, `--output`, `--profile`, `--overwrite`, and `--format`; merge `--target`, `--profile`, `--dialect`, `--check`, `--abort`, and `--format`; doctor auth `--format`. Do not search arbitrary worktrees or guess another build.
 
 ## Check Authentication
 
@@ -107,6 +110,39 @@ Interpret the dry-run plan before writing:
 
 After approval, repeat the reviewed publish command with `--write` and only the confirmation flags the user approved. Never add a `--confirm-*` flag merely because a failed command lists it.
 
+## Adopt An Intentional Existing Baseline
+
+Use this workflow only when the user explicitly identifies an L0 source and wants to allow known L0/R0 history while publishing only the later L0 to L1 change. Never infer L0, use L1 as the baseline, or edit receipt/sidecar files manually.
+
+Run one JSON dry-run using either an explicit file or Git ref:
+
+```bash
+"$FMS" baseline adopt <markdown-file> --target <target> \
+  --git-ref <ref> --dialect <dialect> --profile <profile> --format json
+
+"$FMS" baseline adopt <markdown-file> --target <target> \
+  --local-baseline <baseline-file> --dialect <dialect> --profile <profile> --format json
+```
+
+Inspect all of the following:
+
+- L0 and L1 source, dialect-draft, and publish-draft hashes;
+- R0 document ID, revision, Markdown hash, and semantic hash;
+- the existing L0/R0 divergence summary;
+- the prospective L0 to L1 scoped operations and blockers;
+- protected Supademo mappings and tracked Whiteboards;
+- `safeToAdopt` and the exact `confirmationFingerprint`.
+
+Stop when `safeToAdopt` is false. Baseline adoption does not allow public-site fallback, unresolved or ambiguous links, missing remote Code metadata, ambiguous correspondence, changed protected resources, or unverifiable/changed tracked Whiteboards. No confirmation can bypass these blockers.
+
+After presenting the reviewed state, wait for explicit approval. Then repeat only the reviewed command with:
+
+```bash
+--apply --confirm-baseline-adoption <exact-fingerprint>
+```
+
+This is a local receipt transaction, not a Feishu write. Do not add `--write`, `--confirm-untracked-remote`, `--confirm-collaboration-risk`, or `--confirm-destructive`. The command must refetch R0 before committing and fail if its revision or hash changed. After a successful adoption, run ordinary status, diff, and publish dry-run to verify that the plan contains only the intended L0 to L1 delta. Never proceed to `publish --write` without the normal publish review and user authorization.
+
 ## Create A Document
 
 For a Drive folder or Wiki parent target:
@@ -151,6 +187,8 @@ Pull to an independent snapshot unless the user explicitly requested an overwrit
 
 Do not replace canonical local Markdown by default. Use `--overwrite` only for an output path the user has approved. A pull receipt is independent of the publish receipt.
 
+Inspect pull `warnings` for Callout compatibility normalization. A paragraph-wrapped Feishu Callout export may be normalized when its title and body boundaries are structurally unambiguous. For an unrecognized custom title, the CLI may use native Docx Callout metadata; if neither the configured title nor block metadata identifies the type, keep the failure closed and do not invent a note or warning type.
+
 ## Merge Remote Changes
 
 Automatic merge is available only for `gfm`. Zdoc and Milvus authoring sources contain source-only syntax that Feishu cannot reconstruct completely; for `zdoc-authoring` and `milvus-authoring`, pull an independent snapshot and reconcile the canonical source manually.
@@ -189,6 +227,8 @@ Branch on exit code plus `error.type`, `error.subtype`, `retryable`, and declare
 - Exit `5`: inspect verification or internal failure; do not claim success.
 - Exit `10`: present the risk and wait for explicit approval. Never automatically retry with `requiredFlags`.
 - Exit `1` with a complete stdout result: handle a blocked plan or merge conflict as a domain outcome.
+
+For `verification/partial_write`, inspect `partialWrite.completedOperations`, `failedOperation`, `pendingOperations`, the structured underlying `cause`, and the recovery-checkpoint fields. Never retry the failed write automatically. When `recoveryCheckpointWritten` is true, rerun status, diff, and publish dry-run against `recoveryCheckpointRevision`; the receipt preserves the original local delta baseline while advancing only the verified remote prefix. Treat `recoveryCheckpointRevision` as meaningful only when `recoveryCheckpointWritten=true`; an older receipt revision is not a recovery checkpoint. When no checkpoint exists, keep the workflow stopped and use explicit local-only baseline repair only after proving that every remote change belongs to the failed command. A recovered remainder still requires fresh review and every normal confirmation gate.
 
 ## Verify Completion
 

@@ -348,6 +348,32 @@ describe('LarkCliAdapter', () => {
     ]);
   });
 
+  it('returns the document revision reported by block mutations', async () => {
+    const adapter = new LarkCliAdapter({
+      identity: 'bot',
+      exec: async () => ({
+        stdout: JSON.stringify({
+          ok: true,
+          data: { document: { revision_id: 2269 } }
+        }),
+        stderr: ''
+      })
+    });
+
+    await expect(adapter.replaceBlock({
+      doc: 'doc_token',
+      blockId: 'table1',
+      content: '<table><tr><td>Value</td></tr></table>',
+      format: 'xml'
+    })).resolves.toEqual({ revision: '2269' });
+    await expect(adapter.insertBlocksAfter({
+      doc: 'doc_token',
+      blockId: 'p1',
+      content: 'New paragraph.',
+      format: 'markdown'
+    })).resolves.toEqual({ revision: '2269' });
+  });
+
   it('inserts Callout XML through stdin', async () => {
     const calls: Array<{ args: string[]; stdin?: string }> = [];
     const adapter = new LarkCliAdapter({

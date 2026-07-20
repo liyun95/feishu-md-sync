@@ -123,6 +123,36 @@ describe('Code block planning', () => {
     expect(deletion.operations).toContainEqual(expect.objectContaining({ kind: 'code-delete' }));
   });
 
+  it('preserves an allowed baseline divergence when an unchanged local Code block is absent remotely', () => {
+    const localOnly = code('Legacy', 0, 'local-only\n', 'python');
+
+    const plan = planCodeBlockChanges({
+      localBase: document(localOnly),
+      localCurrent: document(localOnly),
+      remoteBase: document(),
+      remoteCurrent: document(),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
+  });
+
+  it('blocks when a locally changed Code block has no R0 correspondence', () => {
+    const localBase = code('Legacy', 0, 'old\n', 'python');
+    const localCurrent = code('Legacy', 0, 'new\n', 'python');
+
+    expect(planCodeBlockChanges({
+      localBase: document(localBase),
+      localCurrent: document(localCurrent),
+      remoteBase: document(),
+      remoteCurrent: document(),
+      tracked: true
+    }).blockers).toContainEqual(expect.objectContaining({
+      code: 'code-correspondence-ambiguous'
+    }));
+  });
+
   it('preserves identity when adopting an untracked reordered Code sequence', () => {
     const local = document(
       code('Build', 0, 'b\n', 'bash'),
@@ -167,6 +197,22 @@ describe('Code block planning', () => {
       kind: 'code-update',
       remoteBlockId: 'r1'
     }));
+  });
+
+  it('adopts repeated untracked Code blocks by exact locator when their fingerprints are duplicated', () => {
+    const local = document(
+      code('Build', 0, '// java', 'java'),
+      code('Search', 0, '// java', 'java')
+    );
+    const remote = document(
+      code('Build', 0, '// java', 'java', { remoteBlockId: 'r1' }),
+      code('Search', 0, '// java', 'java', { remoteBlockId: 'r2' })
+    );
+
+    const plan = planCodeBlockChanges({ localCurrent: local, remoteCurrent: remote, tracked: false });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([]);
   });
 
   it('uses section reconcile for a moved and rewritten block', () => {

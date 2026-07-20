@@ -142,7 +142,7 @@ The CLI does not create SVGs, render SVG to PNG, or upload PNG bytes. Ordinary i
 - Feishu to Markdown export is best-effort.
 - Unsupported Feishu block types may not round-trip through Markdown.
 - Nested Code blocks are not first-class publish scopes in the first version.
-- Untracked custom Callout titles require workspace configuration for `pull` and target-based `merge`.
+- Pull may resolve an untracked custom Callout title from native Docx Callout metadata; target-based merge still requires a configured or otherwise recognizable presentation title. Pull accepts Feishu's paragraph-wrapped Callout export shape only when the complete payload is a sequence of top-level `<p>` elements; malformed or ambiguous payloads still fail closed.
 - PNG rendering and upload are outside the Whiteboard sync feature.
 - Paragraph wrapping may not round-trip byte-for-byte.
 - The merge algorithm is deterministic and line-based, not semantic Markdown merge.

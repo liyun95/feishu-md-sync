@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeCliFailure } from '../src/core/cli-failure.js';
+import { CliFailure, normalizeCliFailure } from '../src/core/cli-failure.js';
 import { PartialWriteError } from '../src/publish/partial-write-error.js';
 
 describe('PartialWriteError', () => {
@@ -52,6 +52,32 @@ describe('PartialWriteError', () => {
           documentId: 'doc_created',
           url: 'https://example.feishu.cn/docx/doc_created'
         }
+      }
+    });
+  });
+
+  it('preserves the structured underlying failure and recovery checkpoint in CLI JSON', () => {
+    const error = new PartialWriteError({
+      completedOperations: [{ kind: 'update' }],
+      failedOperation: { kind: 'create' },
+      recoveryCheckpointWritten: true,
+      recoveryCheckpointRevision: '2264',
+      cause: new CliFailure({
+        type: 'network',
+        subtype: 'rate_limited',
+        message: 'Too many requests',
+        retryable: true
+      })
+    });
+
+    expect(normalizeCliFailure(error).details.partialWrite).toMatchObject({
+      receiptWritten: false,
+      recoveryCheckpointWritten: true,
+      recoveryCheckpointRevision: '2264',
+      cause: {
+        type: 'network',
+        subtype: 'rate_limited',
+        retryable: true
       }
     });
   });

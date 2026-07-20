@@ -26,7 +26,10 @@ export function resolverFingerprint(config: LarkBaseLinkResolverConfig): string 
     urlField: config.urlField,
     placementTypeField: config.placementTypeField,
     referenceField: config.referenceField,
-    acceptedPlacementTypes: [...config.acceptedPlacementTypes].sort()
+    acceptedPlacementTypes: [...config.acceptedPlacementTypes].sort(),
+    slugAliases: Object.fromEntries(
+      Object.entries(config.slugAliases ?? {}).sort(([left], [right]) => left.localeCompare(right))
+    )
   }));
 }
 

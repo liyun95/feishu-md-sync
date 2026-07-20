@@ -7,7 +7,7 @@ type CliResult = {
   status: number | null;
 };
 
-const visibleCommands = ['publish', 'status', 'pull', 'diff', 'merge', 'doctor'];
+const visibleCommands = ['publish', 'status', 'pull', 'diff', 'merge', 'baseline', 'doctor'];
 const retiredCommands = ['sync', 'push', 'publish-new', 'workflow', 'harness', 'multisdk', 'reference', 'release', 'code-blocks', 'review-draft'];
 
 function runCli(args: string[]): Promise<CliResult> {
@@ -69,6 +69,19 @@ describe('CLI help surface', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('--dialect <dialect>');
+  });
+
+  it('documents the explicit local-only baseline adoption workflow', async () => {
+    const result = await runCli(['baseline', 'adopt', '--help']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: feishu-md-sync baseline adopt');
+    expect(result.stdout).toContain('--local-baseline <file>');
+    expect(result.stdout).toContain('--git-ref <ref>');
+    expect(result.stdout).toContain('--apply');
+    expect(result.stdout).toContain('--confirm-baseline-adoption <fingerprint>');
+    expect(result.stdout).not.toContain('--write');
+    expect(result.stdout).not.toContain('--confirm-destructive');
   });
 
 });

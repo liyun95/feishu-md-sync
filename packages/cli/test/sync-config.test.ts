@@ -27,6 +27,36 @@ describe('sync config', () => {
     })).toBe('none');
   });
 
+  it('loads an explicit read-only config path from FEISHU_MD_SYNC_CONFIG', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'fms-config-'));
+    const configDir = await mkdtemp(join(tmpdir(), 'fms-external-config-'));
+    const configPath = join(configDir, 'milvus.json');
+    await writeFile(configPath, JSON.stringify({
+      defaultDialect: 'milvus-authoring',
+      dialects: {
+        'milvus-authoring': {
+          sourceRoot: '/tmp/milvus-docs'
+        }
+      }
+    }), 'utf8');
+    const previous = process.env.FEISHU_MD_SYNC_CONFIG;
+    process.env.FEISHU_MD_SYNC_CONFIG = configPath;
+
+    try {
+      await expect(loadSyncConfig({ cwd })).resolves.toMatchObject({
+        defaultDialect: 'milvus-authoring',
+        dialects: {
+          'milvus-authoring': {
+            sourceRoot: '/tmp/milvus-docs'
+          }
+        }
+      });
+    } finally {
+      if (previous === undefined) delete process.env.FEISHU_MD_SYNC_CONFIG;
+      else process.env.FEISHU_MD_SYNC_CONFIG = previous;
+    }
+  });
+
   it('loads defaultProfile from feishu-md-sync.config.json', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-config-'));
     await writeFile(join(dir, 'feishu-md-sync.config.json'), JSON.stringify({
@@ -137,7 +167,11 @@ describe('sync config', () => {
             urlField: 'Docs',
             placementTypeField: 'Placement Type',
             referenceField: 'Ref Target Doc',
-            acceptedPlacementTypes: ['canonical', 'ref']
+            acceptedPlacementTypes: ['canonical', 'ref'],
+            slugAliases: {
+              inverted: 'inverted-index-type',
+              bitmap: 'bitmap-index-type'
+            }
           }
         }
       }
@@ -149,7 +183,14 @@ describe('sync config', () => {
     expect(resolveDialect({ cliDialect: 'gfm', config })).toBe('gfm');
     expect(resolveDialectConfig(config, 'zdoc-authoring')).toMatchObject({
       publicSiteBaseUrl: 'https://docs.zilliz.com/docs',
-      linkResolver: { type: 'lark-base', keyField: 'Slug' }
+      linkResolver: {
+        type: 'lark-base',
+        keyField: 'Slug',
+        slugAliases: {
+          inverted: 'inverted-index-type',
+          bitmap: 'bitmap-index-type'
+        }
+      }
     });
   });
 

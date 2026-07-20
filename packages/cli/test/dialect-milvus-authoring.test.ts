@@ -48,6 +48,50 @@ describe('milvus-authoring dialect', () => {
     expect(result.markdown).toContain('{{ query }}');
     expect(result.blockers).toEqual([]);
   });
+
+  it('removes multipleCode language selectors while preserving their Code blocks', async () => {
+    const result = await preprocessMilvusText([
+      '<div class="multipleCode">',
+      '  <a href="#python">Python</a>',
+      '  <a href="#java">Java</a>',
+      '</div>',
+      '',
+      '```python',
+      'print(1)',
+      '```',
+      ''
+    ].join('\n'));
+
+    expect(result.markdown).not.toContain('multipleCode');
+    expect(result.markdown).not.toContain('href="#python"');
+    expect(result.markdown).toContain('```python\nprint(1)\n```');
+    expect(result.blockers).toEqual([]);
+  });
+
+  it('dedents fenced Code blocks nested under Milvus list items', async () => {
+    const result = await preprocessMilvusText([
+      '1. Flatten the object:',
+      '',
+      '    ```json',
+      '    {"category": "electronics"}',
+      '    ```',
+      '',
+      '    The flattened value is then represented as:',
+      '',
+      '    ```plaintext',
+      '    ("category", Text, "electronics")',
+      '    ```',
+      '',
+      '1. Continue.',
+      ''
+    ].join('\n'));
+
+    expect(result.markdown).toContain('1. Flatten the object:\n\n```json\n{"category": "electronics"}\n```');
+    expect(result.markdown).not.toContain('    ```json');
+    expect(result.markdown).toContain('```plaintext\n("category", Text, "electronics")\n```');
+    expect(result.markdown).not.toContain('    ```plaintext');
+    expect(result.blockers).toEqual([]);
+  });
 });
 
 async function preprocessMilvusFixture(name: string) {
