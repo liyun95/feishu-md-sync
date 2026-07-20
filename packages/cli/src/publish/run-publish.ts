@@ -89,6 +89,7 @@ export type RunPublishResult = {
 };
 
 const TABLE_READBACK_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
+const CHECKPOINT_READ_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 const WHITEBOARD_APPLYING_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 
 export type PublishAnalysis = {
@@ -249,57 +250,63 @@ export async function runPublish(input: {
           completedOperations: PublishWriteOperationSummary[],
           verifiedOperations: ScopedPatchOperation[]
         ): Promise<void> => {
-          const remoteBefore = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({
-            doc: analysis.resolvedDocumentId
-          }));
-          const remoteBlocks = await withRateLimitRetry(() => input.adapter.fetchDocBlocks!({
-            doc: analysis.resolvedDocumentId
-          }));
-          const remoteCodeMetadata = await fetchRemoteCodeMetadata(
-            input.adapter,
-            analysis.resolvedDocumentId,
-            remoteBlocks.blocks
-          );
-          const remoteSemantic = applyTrackedCalloutTypes(
-            remoteSemanticDocument(
-              remoteBlocks.blocks,
+          const checkpointState = await withCheckpointReadRetry(async () => {
+            const remoteBefore = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({
+              doc: analysis.resolvedDocumentId
+            }));
+            const remoteBlocks = await withRateLimitRetry(() => input.adapter.fetchDocBlocks!({
+              doc: analysis.resolvedDocumentId
+            }));
+            const remoteCodeMetadata = await fetchRemoteCodeMetadata(
+              input.adapter,
               analysis.resolvedDocumentId,
-              callouts,
-              remoteCodeMetadata
-            ),
-            analysis.localCurrent
-          );
-          verifyCheckpointOperations({
-            operations: verifiedOperations,
-            remoteBlocks: remoteBlocks.blocks,
-            remoteSemantic,
-            documentId: analysis.resolvedDocumentId,
-            callouts
+              remoteBlocks.blocks
+            );
+            const remoteSemantic = applyTrackedCalloutTypes(
+              remoteSemanticDocument(
+                remoteBlocks.blocks,
+                analysis.resolvedDocumentId,
+                callouts,
+                remoteCodeMetadata
+              ),
+              analysis.localCurrent
+            );
+            verifyCheckpointOperations({
+              operations: verifiedOperations,
+              remoteBlocks: remoteBlocks.blocks,
+              remoteSemantic,
+              documentId: analysis.resolvedDocumentId,
+              callouts
+            });
+            assertCheckpointHasNoUnrelatedChanges(
+              analysis.remoteCurrent,
+              remoteSemantic,
+              verifiedOperations
+            );
+            const remoteRaw = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({
+              doc: analysis.resolvedDocumentId
+            }));
+            if (remoteBefore.revision !== remoteRaw.revision ||
+              hashText(remoteBefore.markdown) !== hashText(remoteRaw.markdown)) {
+              throw new Error('Remote changed while recording the partial-write recovery checkpoint.');
+            }
+            return {
+              remoteRaw,
+              remoteSemantic,
+              canonicalRemote: canonicalizeRemoteCalloutMarkdown({
+                markdown: remoteRaw.markdown,
+                config: callouts,
+                typeHints: calloutTypeHints(remoteSemantic)
+              }).markdown
+            };
           });
-          assertCheckpointHasNoUnrelatedChanges(
-            analysis.remoteCurrent,
-            remoteSemantic,
-            verifiedOperations
-          );
-          const remoteRaw = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({
-            doc: analysis.resolvedDocumentId
-          }));
-          if (remoteBefore.revision !== remoteRaw.revision ||
-            hashText(remoteBefore.markdown) !== hashText(remoteRaw.markdown)) {
-            throw new Error('Remote changed while recording the partial-write recovery checkpoint.');
-          }
-          const canonicalRemote = canonicalizeRemoteCalloutMarkdown({
-            markdown: remoteRaw.markdown,
-            config: callouts,
-            typeHints: calloutTypeHints(remoteSemantic)
-          }).markdown;
           const updatedAt = new Date().toISOString();
           await writePublishRemoteCheckpoint({
             cwd: input.cwd,
             receipt: analysis.receipt as Extract<PublishReceipt, { version: 4 | 5 }>,
-            remoteMarkdown: canonicalRemote,
-            remoteRevision: remoteRaw.revision,
-            remoteSemantic,
+            remoteMarkdown: checkpointState.canonicalRemote,
+            remoteRevision: checkpointState.remoteRaw.revision,
+            remoteSemantic: checkpointState.remoteSemantic,
             checkpoint: {
               planFingerprint: semanticHash({
                 documentId: analysis.resolvedDocumentId,
@@ -310,12 +317,14 @@ export async function runPublish(input: {
                 operations: plan.scopedPatch?.operations.map(summarizeScopedOperation) ?? []
               }),
               completedOperations,
-              ...(remoteRaw.revision ? { remoteRevision: remoteRaw.revision } : {}),
+              ...(checkpointState.remoteRaw.revision
+                ? { remoteRevision: checkpointState.remoteRaw.revision }
+                : {}),
               updatedAt
             }
           });
           recoveryCheckpoint.written = true;
-          recoveryCheckpoint.revision = remoteRaw.revision;
+          recoveryCheckpoint.revision = checkpointState.remoteRaw.revision;
         }
       : undefined;
     let completedOperations = await applyScopedOperations({
@@ -1549,16 +1558,60 @@ function verifyCheckpointTextUpdate(
   }
 }
 
-function assertCheckpointHasNoUnrelatedChanges(
+export function assertCheckpointHasNoUnrelatedChanges(
   baseline: SemanticDocument | undefined,
   current: SemanticDocument,
   operations: ScopedPatchOperation[]
 ): void {
   if (!baseline) throw new Error('Partial-write recovery checkpoint requires a remote semantic baseline.');
-  const allowed = new Set(operations.map((operation) => locatorKey(operation.locator)));
-  const outside = (document: SemanticDocument): unknown => stripExecutionMetadata({
-    nodes: document.nodes.filter((node) => !allowed.has(locatorKey(node.locator)))
+  const allowedLocators = new Set(operations.flatMap((operation) => {
+    if ((operation.kind === 'code-move' || operation.kind === 'code-delete') && operation.remoteBlockId) {
+      return [];
+    }
+    if (operation.kind === 'code-section-reconcile') return [];
+    return [operation.locator].map(locatorKey);
+  }));
+  const allowedBlockIds = new Set(operations.flatMap((operation) => {
+    const direct = 'remoteBlockId' in operation && operation.remoteBlockId
+      ? [operation.remoteBlockId]
+      : [];
+    const deleted = 'blockIds' in operation ? operation.blockIds : [];
+    const reconciled = operation.kind === 'code-section-reconcile'
+      ? operation.remoteCodes.flatMap((code) => code.remoteBlockId ? [code.remoteBlockId] : [])
+      : [];
+    return [...direct, ...deleted, ...reconciled];
+  }));
+  const reconciledCodeSections = operations.flatMap((operation) => {
+    return operation.kind === 'code-section-reconcile' ? operation.sectionPaths : [];
   });
+  const structurallyChangedCodeSections = operations.flatMap((operation) => {
+    if (operation.kind === 'code-move') {
+      return [operation.sourceLocator.sectionPath, operation.locator.sectionPath];
+    }
+    if (operation.kind === 'code-create') return [operation.locator.sectionPath];
+    if (operation.kind === 'code-delete') return [operation.sourceLocator.sectionPath];
+    return [];
+  });
+  const outside = (document: SemanticDocument): unknown => {
+    const codeOrdinals = new Map<string, number>();
+    const nodes = document.nodes.filter((node) => {
+      if (allowedLocators.has(locatorKey(node.locator))) return false;
+      if (node.remoteBlockId && allowedBlockIds.has(node.remoteBlockId)) return false;
+      if (node.kind === 'code' && reconciledCodeSections.some((sectionPath) => {
+        return sameSectionPath(node.locator.sectionPath, sectionPath);
+      })) return false;
+      return true;
+    }).map((node) => {
+      if (node.kind !== 'code' || !structurallyChangedCodeSections.some((sectionPath) => {
+        return sameSectionPath(node.locator.sectionPath, sectionPath);
+      })) return node;
+      const sectionKey = JSON.stringify(node.locator.sectionPath);
+      const ordinal = codeOrdinals.get(sectionKey) ?? 0;
+      codeOrdinals.set(sectionKey, ordinal + 1);
+      return { ...node, locator: { ...node.locator, ordinal } };
+    });
+    return stripExecutionMetadata({ nodes });
+  };
   if (semanticHash(outside(baseline)) !== semanticHash(outside(current))) {
     throw new Error('Remote changed outside the verified partial-write scopes; recovery checkpoint was not advanced.');
   }
@@ -1872,6 +1925,29 @@ export async function withRateLimitRetry<T>(operation: () => Promise<T>): Promis
       await delay(delayMs);
     }
   }
+}
+
+async function withCheckpointReadRetry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = CHECKPOINT_READ_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isCheckpointReadTransientError(error)) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isCheckpointReadTransientError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as {
+    code?: unknown;
+    details?: { providerCode?: unknown };
+    cause?: unknown;
+  };
+  if (record.code === 12330102 || record.details?.providerCode === 12330102) return true;
+  return record.cause !== undefined && isCheckpointReadTransientError(record.cause);
 }
 
 function isRateLimitError(error: unknown): boolean {

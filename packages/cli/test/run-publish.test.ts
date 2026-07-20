@@ -17,16 +17,72 @@ import {
 } from '../src/receipts/publish-receipt.js';
 import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
 import { writePublishBaselineBundle } from '../src/receipts/publish-baseline-bundle.js';
-import { runPublish, textCreatePlacementMatches } from '../src/publish/run-publish.js';
+import {
+  assertCheckpointHasNoUnrelatedChanges,
+  runPublish,
+  textCreatePlacementMatches
+} from '../src/publish/run-publish.js';
+import type { ScopedPatchOperation } from '../src/publish/scoped-patch-plan.js';
 import { runStatus } from '../src/status/run-status.js';
 import { runDiff } from '../src/diff/run-diff.js';
 import { normalizeCliFailure } from '../src/core/cli-failure.js';
 import { semanticHash } from '../src/semantic/normalize.js';
 import { canonicalizeMarkdownSemantics } from '../src/semantic/markdown-equivalence.js';
 import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
+import type { SemanticCodeBlock, SemanticDocument } from '../src/semantic/types.js';
 import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runPublish', () => {
+  it('treats a moved Code block as the same verified checkpoint scope', () => {
+    const buildLocator = { sectionPath: ['Build'], kind: 'code' as const, ordinal: 0 };
+    const searchLocator = { sectionPath: ['Search'], kind: 'code' as const, ordinal: 0 };
+    const baselineCode: SemanticCodeBlock = {
+      kind: 'code',
+      locator: buildLocator,
+      content: 'print(1)\n',
+      sourceLanguage: 'python',
+      resolvedLanguage: 'python',
+      remoteBlockId: 'code-1',
+      issues: []
+    };
+    const currentCode: SemanticCodeBlock = { ...baselineCode, locator: searchLocator };
+    const stationaryCode: SemanticCodeBlock = {
+      ...baselineCode,
+      locator: searchLocator,
+      content: 'print(2)\n',
+      remoteBlockId: 'code-2'
+    };
+    const shiftedStationaryCode: SemanticCodeBlock = {
+      ...stationaryCode,
+      locator: { ...searchLocator, ordinal: 1 }
+    };
+    const stableText = {
+      kind: 'text' as const,
+      locator: { sectionPath: [], kind: 'text' as const, ordinal: 0 },
+      blockType: 2,
+      markdown: 'Stable.',
+      remoteBlockId: 'p1'
+    };
+    const baseline: SemanticDocument = { nodes: [baselineCode, stationaryCode, stableText] };
+    const current: SemanticDocument = { nodes: [currentCode, shiftedStationaryCode, stableText] };
+    const operation: Extract<ScopedPatchOperation, { kind: 'code-move' }> = {
+      kind: 'code-move',
+      locator: searchLocator,
+      sourceLocator: buildLocator,
+      remoteBlockId: 'code-1',
+      desiredCode: currentCode
+    };
+
+    expect(() => assertCheckpointHasNoUnrelatedChanges(baseline, current, [operation])).not.toThrow();
+    expect(() => assertCheckpointHasNoUnrelatedChanges(baseline, {
+      nodes: [
+        currentCode,
+        { ...shiftedStationaryCode, content: 'print("teammate")\n' },
+        stableText
+      ]
+    }, [operation])).toThrow('Remote changed outside the verified partial-write scopes');
+  });
+
   it('checks text creation placement against cross-kind direct-child order', () => {
     const misplaced = [
       { block_id: 'doc', block_type: 1, children: ['p1', 'p2', 'code1'] },
@@ -768,17 +824,30 @@ Next text.`, 'utf8');
     const updatedTables = new Set<string>();
     let revision = 1;
     let failCreate = true;
+    let checkpointApplyingReads = 1;
     const adapter: FeishuAdapter = {
-      fetchDocMarkdown: async () => ({
-        markdown: partialCheckpointMarkdown({
-          paragraphs,
-          calloutBody,
-          includeNewTail: false,
-          includeNewCallout: false,
-          updatedTables
-        }),
-        revision: String(revision)
-      }),
+      fetchDocMarkdown: async () => {
+        if (revision > 1 && checkpointApplyingReads > 0) {
+          checkpointApplyingReads -= 1;
+          throw new CliFailure({
+            type: 'internal',
+            subtype: 'unknown',
+            message: 'An error occurred during processing. Check the input and retry',
+            retryable: false,
+            providerCode: 12330102
+          });
+        }
+        return {
+          markdown: partialCheckpointMarkdown({
+            paragraphs,
+            calloutBody,
+            includeNewTail: false,
+            includeNewCallout: false,
+            updatedTables
+          }),
+          revision: String(revision)
+        };
+      },
       fetchDocBlocks: async () => ({
         blocks: partialCheckpointBlocks({
           paragraphs,
@@ -850,6 +919,7 @@ Next text.`, 'utf8');
       recoveryCheckpointRevision: '11'
     });
     expect(revision).toBe(11);
+    expect(checkpointApplyingReads).toBe(0);
     const checkpoint = await readPublishReceipt({ cwd: dir, target });
     expect(checkpoint).toMatchObject({
       version: 4,
