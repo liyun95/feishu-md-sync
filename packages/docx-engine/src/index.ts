@@ -8,6 +8,7 @@ export const ENGINE_CAPABILITIES = [
 ] as const;
 
 export { canonicalHash } from './hash.js';
+export { calloutToXml, tableToXml, toProviderBlock, toProviderTree } from './codec.js';
 export {
   createDocumentSnapshot,
   type CreateDocumentSnapshotInput,
