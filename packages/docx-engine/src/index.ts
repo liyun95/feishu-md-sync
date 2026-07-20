@@ -9,6 +9,16 @@ export const ENGINE_CAPABILITIES = [
 
 export { canonicalHash } from './hash.js';
 export {
+  LarkCliProviderError,
+  LarkCliTransport,
+  type LarkCliErrorEnvelope,
+  type LarkCliExecInput,
+  type LarkCliExecResult,
+  type LarkCliExecutor,
+  type LarkCliIdentity,
+  type LarkCliProviderErrorDetails,
+} from './lark-cli-transport.js';
+export {
   PartialMutationError,
   type ApplyMutationInput,
   type AssessRecoveryInput,
@@ -29,3 +39,14 @@ export {
   type SnapshotNode,
   type VerifiedOperationEvidence,
 } from './model.js';
+export type {
+  CreateChildrenInput,
+  CreatedChildrenResult,
+  CreateDocumentInput,
+  CreatedDocumentResult,
+  DocxTransport,
+  OverwriteWhiteboardInput,
+  ProviderBlock,
+  ProviderMutationInput,
+  ProviderMutationResult,
+} from './transport.js';
