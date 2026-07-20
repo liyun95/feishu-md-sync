@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
 import { CliFailure, type CliFailureType } from '../core/cli-failure.js';
 import type { FeishuBlock } from '../feishu/types.js';
+import { normalizeMarkdownLinkUrl } from '../markdown/links.js';
 import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type {
   CreatedDocument,
+  CreatedChildBlocks,
   CreatedWhiteboard,
   FeishuAdapter,
   RemoteBaseRecord,
@@ -262,6 +264,27 @@ export class LarkCliAdapter implements FeishuAdapter {
       format: input.format,
       stdin: input.format === 'xml' ? input.content : undefined
     });
+  }
+
+  async createChildBlocks(input: {
+    doc: string;
+    parentBlockId: string;
+    index?: number;
+    blocks: FeishuBlock[];
+    clientToken: string;
+  }): Promise<CreatedChildBlocks> {
+    const parsed = parseLarkCliJson(await this.exec(withIdentity([
+      'api',
+      'POST',
+      `/open-apis/docx/v1/documents/${input.doc}/blocks/${input.parentBlockId}/children`,
+      '--params',
+      JSON.stringify({ document_revision_id: -1, client_token: input.clientToken }),
+      '--data',
+      JSON.stringify({ index: input.index ?? -1, children: encodeProviderLinkUrls(input.blocks) }),
+      '--format',
+      'json'
+    ], this.identity)));
+    return createdChildBlocksFromData(parsed.data);
   }
 
   async deleteBlocks(input: { doc: string; blockIds: string[] }): Promise<void> {
@@ -532,6 +555,7 @@ function parseLarkCliJson(result: LarkCliExecResult): { ok?: boolean; data?: unk
 type LarkCliErrorEnvelope = {
   type?: string;
   subtype?: string;
+  code?: number;
   message?: string;
   hint?: string;
   retryable?: boolean;
@@ -558,6 +582,7 @@ function larkCliFailure(error: LarkCliErrorEnvelope | undefined): CliFailure {
     hint: error?.hint,
     requiredFlags: error?.type === 'confirmation_required' ? ['--yes'] : undefined,
     retryable: error?.retryable === true,
+    ...(typeof error?.code === 'number' ? { providerCode: error.code } : {}),
     missingScopes: error?.missing_scopes,
     consoleUrl: error?.console_url
   });
@@ -674,20 +699,39 @@ function whiteboardRawFromData(data: unknown): unknown {
   } else if (typeof data === 'string') {
     raw = parseEmbeddedJson(data);
   } else if (!data || typeof data !== 'object') {
-    throw new Error('lark-cli whiteboard +query did not return raw node state.');
+    throw whiteboardRawNotReadyFailure();
   } else {
     const record = data as Record<string, unknown>;
-    if ('raw' in record) raw = record.raw;
+    if ('raw' in record) {
+      if (record.raw === undefined || record.raw === null) throw whiteboardRawNotReadyFailure();
+      raw = record.raw;
+    }
     else if (typeof record.content === 'string') raw = parseEmbeddedJson(record.content);
-    else raw = data;
+    else if ('nodes' in record || Object.keys(record).length > 0) raw = data;
+    else throw whiteboardRawNotReadyFailure();
   }
-  const hasNodeState = Array.isArray(raw)
-    ? raw.length > 0
-    : Boolean(raw && typeof raw === 'object' && Array.isArray((raw as { nodes?: unknown }).nodes));
-  if (!hasNodeState) {
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) throw whiteboardRawNotReadyFailure();
+    return raw;
+  }
+  if (!raw || typeof raw !== 'object' || !('nodes' in raw)) {
     throw new Error('lark-cli whiteboard +query did not return raw node state.');
   }
+  const nodes = (raw as { nodes?: unknown }).nodes;
+  if (!Array.isArray(nodes)) {
+    throw new Error('lark-cli whiteboard +query did not return raw node state.');
+  }
+  if (nodes.length === 0) throw whiteboardRawNotReadyFailure();
   return raw;
+}
+
+function whiteboardRawNotReadyFailure(): CliFailure {
+  return new CliFailure({
+    type: 'verification',
+    subtype: 'whiteboard_raw_not_ready',
+    message: 'lark-cli whiteboard +query succeeded before raw node state was ready.',
+    retryable: false
+  });
 }
 
 function parseEmbeddedJson(value: string): unknown {
@@ -707,6 +751,42 @@ function blockPageFromData(data: unknown): { items: FeishuBlock[]; hasMore: bool
   const hasMore = record.has_more === true;
   const pageToken = typeof record.page_token === 'string' ? record.page_token : undefined;
   return { items, hasMore, pageToken };
+}
+
+function createdChildBlocksFromData(data: unknown): CreatedChildBlocks {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('lark-cli Docx children create did not return structured data.');
+  }
+  const record = data as Record<string, unknown>;
+  const blocks = Array.isArray(record.children) ? record.children.filter(isFeishuBlock) : [];
+  if (blocks.length === 0 || blocks.length !== (record.children as unknown[] | undefined)?.length ||
+    blocks.some((block) => typeof block.block_id !== 'string')) {
+    throw new Error('lark-cli Docx children create did not return created block identities.');
+  }
+  const revision = typeof record.document_revision_id === 'string' || typeof record.document_revision_id === 'number'
+    ? String(record.document_revision_id)
+    : undefined;
+  const clientToken = typeof record.client_token === 'string' ? record.client_token : undefined;
+  return {
+    blocks,
+    ...(revision ? { revision } : {}),
+    ...(clientToken ? { clientToken } : {})
+  };
+}
+
+function encodeProviderLinkUrls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(encodeProviderLinkUrls);
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.entries(record).map(([key, child]) => {
+    if (key === 'link' && child && typeof child === 'object' && !Array.isArray(child)) {
+      const link = child as Record<string, unknown>;
+      if (typeof link.url === 'string') {
+        return [key, { ...link, url: encodeURIComponent(normalizeMarkdownLinkUrl(link.url)) }];
+      }
+    }
+    return [key, encodeProviderLinkUrls(child)];
+  }));
 }
 
 function isFeishuBlock(value: unknown): value is FeishuBlock {

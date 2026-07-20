@@ -56,6 +56,9 @@ export type ZdocRoundTripItemCode =
   | 'supademo-changed'
   | 'supademo-removed'
   | 'admonition-transform'
+  | 'round-trip-loss-repair'
+  | 'round-trip-loss-drift'
+  | 'round-trip-loss-ambiguous'
   | 'metadata-ignored'
   | 'component-unsupported';
 

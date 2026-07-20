@@ -2,7 +2,6 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
 import { gfm } from 'micromark-extension-gfm';
 import { visit } from 'unist-util-visit';
-import { isProtectedOffset, protectedCodeRanges } from './source-lines.js';
 
 export type MarkdownDocumentLink = {
   url: string;
@@ -19,13 +18,12 @@ export function markdownDocumentLinks(markdown: string): MarkdownDocumentLink[] 
     extensions: [gfm()],
     mdastExtensions: [gfmFromMarkdown()]
   });
-  const ranges = protectedCodeRanges(markdown);
   const links: MarkdownDocumentLink[] = [];
 
   visit(tree, 'link', (node) => {
     const startOffset = node.position?.start.offset;
     const endOffset = node.position?.end.offset;
-    if (startOffset === undefined || endOffset === undefined || isProtectedOffset(startOffset, ranges)) return;
+    if (startOffset === undefined || endOffset === undefined) return;
     const destination = destinationRange(markdown.slice(startOffset, endOffset), startOffset);
     if (!destination) return;
     const rawUrl = markdown.slice(destination.startOffset, destination.endOffset);

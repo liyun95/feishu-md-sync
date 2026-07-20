@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { planScopedPatch } from '../src/publish/scoped-patch-plan.js';
 import { localSemanticDocument } from '../src/semantic/local-document.js';
+import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
 import type {
   SemanticAssetNode,
   SemanticCell,
@@ -288,6 +289,40 @@ describe('scoped patch plan', () => {
     }));
   });
 
+  it('fails closed when a recorded table loss has no unique stable sequence anchor', () => {
+    const localBase = document(
+      sectionText('A.', ['Index params'], 0),
+      table([row('ef', 'Accuracy trade-off.')], false),
+      sectionText('B.', ['Index params'], 1)
+    );
+    const localCurrent = document(...localBase.nodes);
+    const remoteBase = document(
+      sectionText('B.', ['Index params'], 0),
+      sectionText('B.', ['Index params'], 1),
+      sectionText('B.', ['Index params'], 2)
+    );
+    const remoteCurrent = document(
+      sectionText('B.', ['Index params'], 0, 'b0'),
+      sectionText('B.', ['Index params'], 1, 'b1'),
+      sectionText('B.', ['Index params'], 2, 'b2')
+    );
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent,
+      remoteBase,
+      remoteCurrent,
+      tracked: true
+    });
+
+    expect(plan.safeToWrite).toBe(false);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-ambiguous',
+      message: expect.stringContaining('baseline divergence is ambiguous')
+    }));
+  });
+
   it('leaves resource asset slots to the Whiteboard planner', () => {
     const local = document(asset('image'));
     const remote = document(asset('whiteboard', 'wb1', 'wb_token'));
@@ -413,6 +448,479 @@ describe('scoped patch plan', () => {
     }));
   });
 
+  it('plans a parent-aware nested list repair instead of preserving flat root siblings', () => {
+    const localCurrent = localSemanticDocument(`# Before you start
+
+- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+    1. Nested ordered.
+`);
+    const remoteCurrent = remoteize(localSemanticDocument(`# Before you start
+
+- **Parent**
+
+Child paragraph.
+
+- Nested bullet.
+
+1. Nested ordered.
+`));
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localCurrent,
+      remoteCurrent,
+      tracked: false
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({
+        kind: 'create',
+        parentBlockId: 'page',
+        insertAfterBlockId: 'block-0',
+        desiredMarkdown: expect.stringContaining('    Child paragraph.'),
+        desiredBlocks: [expect.objectContaining({ blockType: 12 })]
+      }),
+      expect.objectContaining({
+        kind: 'delete',
+        parentBlockId: 'page',
+        blockIds: ['block-1', 'block-2', 'block-3', 'block-4']
+      })
+    ]);
+  });
+
+  it('updates a nested child paragraph through its stable parent and block IDs', () => {
+    const baseline = `- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+`;
+    const desired = `- **Parent**
+
+    Updated child paragraph.
+
+    - Nested bullet.
+`;
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: localSemanticDocument(baseline),
+      localCurrent: localSemanticDocument(desired),
+      remoteBase: localSemanticDocument(baseline),
+      remoteCurrent: nestedRemoteDocument('Child paragraph.'),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([expect.objectContaining({
+      kind: 'update',
+      parentBlockId: 'parent',
+      remoteBlockId: 'child',
+      locator: { sectionPath: [], kind: 'text', ordinal: 0, textPath: [0] },
+      desiredMarkdown: 'Updated child paragraph.'
+    })]);
+  });
+
+  it('deletes a nested list child through its stable parent ID', () => {
+    const baseline = `- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+`;
+    const desired = `- **Parent**
+
+    Child paragraph.
+`;
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: localSemanticDocument(baseline),
+      localCurrent: localSemanticDocument(desired),
+      remoteBase: localSemanticDocument(baseline),
+      remoteCurrent: nestedRemoteDocument('Child paragraph.'),
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(plan.operations).toEqual([expect.objectContaining({
+      kind: 'delete',
+      parentBlockId: 'parent',
+      blockIds: ['nested'],
+      locator: { sectionPath: [], kind: 'text', ordinal: 0, textPath: [1] }
+    })]);
+  });
+
+  it('blocks recorded hierarchy repair after local or remote drift', () => {
+    const baseline = localSemanticDocument(`- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+`);
+    const changedLocal = localSemanticDocument(`- **Parent**
+
+    Locally changed paragraph.
+
+    - Nested bullet.
+`);
+    const flatBaseline = remoteize(localSemanticDocument(`- **Parent**
+
+Child paragraph.
+
+- Nested bullet.
+`));
+    const flatRemoteDrift = remoteize(localSemanticDocument(`- **Parent**
+
+Teammate changed paragraph.
+
+- Nested bullet.
+`));
+
+    const localDrift = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: baseline,
+      localCurrent: changedLocal,
+      remoteBase: flatBaseline,
+      remoteCurrent: flatBaseline,
+      tracked: true
+    });
+    const remoteDrift = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: baseline,
+      localCurrent: baseline,
+      remoteBase: flatBaseline,
+      remoteCurrent: flatRemoteDrift,
+      tracked: true
+    });
+
+    expect(localDrift.blockers).toContainEqual(expect.objectContaining({ code: 'round-trip-loss-ambiguous' }));
+    expect(remoteDrift.blockers).toContainEqual(expect.objectContaining({ code: 'round-trip-loss-ambiguous' }));
+    expect(localDrift.safeToWrite).toBe(false);
+    expect(remoteDrift.safeToWrite).toBe(false);
+  });
+
+  it('repairs consecutive recorded hierarchy groups after consuming each flat descendant sequence', () => {
+    const nested = localSemanticDocument(`# Before you start
+
+Intro.
+
+- **First requirement**
+
+    First detail.
+
+    Second detail.
+
+- **Second requirement**
+
+    Second intro.
+
+    - Nested one.
+    - Nested two.
+    1. Nested ordered.
+
+    Second follow-up.
+
+    Second conclusion.
+
+- **Third requirement**
+
+    Third detail.
+`);
+    const flat = remoteize(localSemanticDocument(`# Before you start
+
+Intro.
+
+- **First requirement**
+
+First detail.
+
+Second detail.
+
+- **Second requirement**
+
+Second intro.
+
+- Nested one.
+
+- Nested two.
+
+1. Nested ordered.
+
+Second follow-up.
+
+Second conclusion.
+
+- **Third requirement**
+
+Third detail.
+`));
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: nested,
+      localCurrent: nested,
+      remoteBase: flat,
+      remoteCurrent: flat,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.roundTripLosses).toEqual([
+      expect.objectContaining({
+        action: 'repair-text-hierarchy',
+        locator: { sectionPath: ['Before you start'], kind: 'text', ordinal: 2 }
+      }),
+      expect.objectContaining({
+        action: 'repair-text-hierarchy',
+        locator: { sectionPath: ['Before you start'], kind: 'text', ordinal: 3 }
+      }),
+      expect.objectContaining({
+        action: 'repair-text-hierarchy',
+        locator: { sectionPath: ['Before you start'], kind: 'text', ordinal: 4 }
+      })
+    ]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({
+        kind: 'create',
+        parentBlockId: 'page',
+        insertAfterBlockId: 'block-1',
+        desiredBlocks: [
+          expect.objectContaining({ markdown: expect.stringContaining('First detail.') }),
+          expect.objectContaining({ markdown: expect.stringContaining('Nested ordered.') }),
+          expect.objectContaining({ markdown: expect.stringContaining('Third detail.') })
+        ]
+      }),
+      expect.objectContaining({
+        kind: 'delete',
+        parentBlockId: 'page',
+        blockIds: Array.from({ length: 12 }, (_, index) => `block-${index + 2}`)
+      })
+    ]);
+  });
+
+  it('blocks consecutive recorded hierarchy repair when a consumed descendant drifts', () => {
+    const nested = localSemanticDocument(`- **First**
+
+    First detail.
+
+- **Second**
+
+    Second detail.
+
+    - Nested requirement.
+
+- **Third**
+
+    Third detail.
+`);
+    const flatBaseline = remoteize(localSemanticDocument(`- **First**
+
+First detail.
+
+- **Second**
+
+Second detail.
+
+- Nested requirement.
+
+- **Third**
+
+Third detail.
+`));
+    const flatDrift = remoteize(localSemanticDocument(`- **First**
+
+First detail.
+
+- **Second**
+
+Teammate changed detail.
+
+- Nested requirement.
+
+- **Third**
+
+Third detail.
+`));
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: nested,
+      localCurrent: nested,
+      remoteBase: flatBaseline,
+      remoteCurrent: flatDrift,
+      tracked: true
+    });
+
+    expect(plan.safeToWrite).toBe(false);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-ambiguous'
+    }));
+    expect(plan.roundTripLosses).not.toContainEqual(expect.objectContaining({
+      action: 'repair-text-hierarchy'
+    }));
+  });
+
+  it('recovers the observed malformed Markdown tree create before the unchanged flat baseline', () => {
+    const nested = localSemanticDocument(`# Before you start
+
+Intro.
+
+- **First requirement**
+
+    First detail.
+
+    Second detail.
+
+- **Second requirement**
+
+    Second intro.
+
+    - Nested one.
+    - Nested two.
+    - Nested three.
+
+    Second follow-up.
+
+    Second conclusion.
+
+- **Third requirement**
+
+    Third detail.
+
+# After
+`);
+    const flat = remoteize(localSemanticDocument(`# Before you start
+
+Intro.
+
+- **First requirement**
+
+First detail.
+
+Second detail.
+
+- **Second requirement**
+
+Second intro.
+
+- Nested one.
+
+- Nested two.
+
+- Nested three.
+
+Second follow-up.
+
+Second conclusion.
+
+- **Third requirement**
+
+Third detail.
+
+# After
+`));
+    const malformed = remoteizeWithChildIds(localSemanticDocument(`# Before you start
+
+Intro.
+
+- **First requirement**First detail.Second detail.
+
+- **Second requirement**Second intro.
+
+    - Nested one.
+
+    - Nested two.
+
+    - Nested three.
+
+- **Third requirement**Third detail.
+
+- **First requirement**
+
+First detail.
+
+Second detail.
+
+- **Second requirement**
+
+Second intro.
+
+- Nested one.
+
+- Nested two.
+
+- Nested three.
+
+Second follow-up.
+
+Second conclusion.
+
+- **Third requirement**
+
+Third detail.
+
+# After
+`));
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: nested,
+      localCurrent: nested,
+      remoteBase: flat,
+      remoteCurrent: malformed,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.roundTripLosses.filter((loss) => loss.action === 'repair-text-hierarchy')).toHaveLength(3);
+    expect(plan.warnings).toContain('recovering exact malformed scoped create at ["Before you start"]');
+    expect(plan.operations).toEqual([
+      expect.objectContaining({
+        kind: 'create',
+        insertAfterBlockId: 'tree-2',
+        desiredBlocks: expect.arrayContaining([
+          expect.objectContaining({ markdown: expect.stringContaining('Second conclusion.') })
+        ])
+      }),
+      expect.objectContaining({
+        kind: 'delete',
+        recovery: expect.objectContaining({
+          expectedDescendantBlockIds: ['tree-5', 'tree-6', 'tree-7']
+        })
+      })
+    ]);
+
+    const drifted = {
+      nodes: malformed.nodes.map((node) => {
+        if (node.kind !== 'text' || !node.markdown.includes('Second requirement')) return node;
+        return {
+          ...node,
+          markdown: node.markdown.replace('Nested two.', 'Teammate changed nested two.'),
+          children: node.children?.map((child) => child.markdown.includes('Nested two.')
+            ? { ...child, markdown: child.markdown.replace('Nested two.', 'Teammate changed nested two.') }
+            : child)
+        };
+      })
+    };
+    const driftedPlan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase: nested,
+      localCurrent: nested,
+      remoteBase: flat,
+      remoteCurrent: drifted,
+      tracked: true
+    });
+    expect(driftedPlan.safeToWrite).toBe(false);
+    expect(driftedPlan.warnings).not.toContain('recovering exact malformed scoped create at ["Before you start"]');
+    expect(driftedPlan.blockers).toContainEqual(expect.objectContaining({ code: 'round-trip-loss-ambiguous' }));
+  });
+
   it('leaves unchanged headings to the Code reconciler when Code blocks cross them', () => {
     const localBase = document(
       heading('Build', 'h1'),
@@ -445,6 +953,32 @@ describe('scoped patch plan', () => {
     expect(plan.blockers).toEqual([]);
     expect(plan.operations).toContainEqual(expect.objectContaining({ kind: 'code-section-reconcile' }));
     expect(plan.operations.some((operation) => operation.kind === 'update' || operation.kind === 'create' || operation.kind === 'delete')).toBe(false);
+  });
+
+  it('leaves a tracked Code-only deletion to the Code planner', () => {
+    const localBase = document(
+      heading('Build'),
+      code('echo old', 'bash', undefined, ['Build'])
+    );
+    const localCurrent = document(heading('Build'));
+    const remoteBase = document(
+      heading('Build', 'heading-1'),
+      code('echo old', 'bash', 'code-1', ['Build'])
+    );
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent,
+      remoteBase,
+      remoteCurrent: remoteBase,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toEqual([
+      expect.objectContaining({ kind: 'code-delete', remoteBlockId: 'code-1' })
+    ]);
   });
 
   it('fails closed for an untracked indented fenced Code scope', () => {
@@ -577,6 +1111,59 @@ describe('scoped patch plan', () => {
     expect(plan.warnings).toContain('preserving remote standalone include boundary blocks');
   });
 
+  it('does not misattribute a post-replacement update to an unchanged later section', () => {
+    const localBase = document(
+      sectionText('## Before you start', ['Before you start'], 0, undefined, 4),
+      sectionText('- Old requirement one.', ['Before you start'], 1, undefined, 12),
+      sectionText('- Old requirement two.', ['Before you start'], 2, undefined, 12),
+      sectionText('## Define schema fields', ['Define schema fields'], 0, undefined, 4),
+      sectionText('- A primary field that uniquely identifies each entity.', ['Define schema fields'], 1, undefined, 12),
+      sectionText('## Finish', ['Finish'], 0, undefined, 4),
+      sectionText('Old finish text.', ['Finish'], 1)
+    );
+    const localCurrent = document(
+      sectionText('## Before you start', ['Before you start'], 0, undefined, 4),
+      sectionText('- **Requirement one**', ['Before you start'], 1, undefined, 12),
+      sectionText('Requirement one details.', ['Before you start'], 2),
+      sectionText('- **Requirement two**', ['Before you start'], 3, undefined, 12),
+      sectionText('Requirement two details.', ['Before you start'], 4),
+      sectionText('## Define schema fields', ['Define schema fields'], 0, undefined, 4),
+      sectionText('- A primary field that uniquely identifies each entity.', ['Define schema fields'], 1, undefined, 12),
+      sectionText('## Finish', ['Finish'], 0, undefined, 4),
+      sectionText('New finish text.', ['Finish'], 1)
+    );
+    const remoteBase = document(
+      sectionText('## Before you start', ['Before you start'], 0, 'before', 4),
+      sectionText('- Old requirement one.', ['Before you start'], 1, 'old-1', 12),
+      sectionText('- Old requirement two.', ['Before you start'], 2, 'old-2', 12),
+      sectionText('## Define schema fields', ['Define schema fields'], 0, 'define', 4),
+      sectionText('- A primary field that uniquely identifies each entity.', ['Define schema fields'], 1, 'primary', 12),
+      sectionText('## Finish', ['Finish'], 0, 'finish', 4),
+      sectionText('Old finish text.', ['Finish'], 1, 'finish-text')
+    );
+
+    const plan = planScopedPatch({
+      parentBlockId: 'page',
+      localBase,
+      localCurrent,
+      remoteBase,
+      remoteCurrent: remoteBase,
+      tracked: true
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.operations).toContainEqual(expect.objectContaining({
+      kind: 'update',
+      remoteBlockId: 'finish-text',
+      locator: { sectionPath: ['Finish'], kind: 'text', ordinal: 1 },
+      desiredMarkdown: 'New finish text.'
+    }));
+    expect(plan.operations).not.toContainEqual(expect.objectContaining({
+      kind: 'update',
+      locator: { sectionPath: ['Define schema fields'], kind: 'text', ordinal: 1 }
+    }));
+  });
+
   it('plans Procedures token creation without ordinary text operations', () => {
     const localCurrent = localSemanticDocument(
       'Intro.\n\n<Procedures>\n\n1. Step.\n\n</Procedures>\n\nAfter.'
@@ -649,8 +1236,53 @@ function remoteize(document: SemanticDocument): SemanticDocument {
   };
 }
 
+function remoteizeWithChildIds(document: SemanticDocument): SemanticDocument {
+  let id = 0;
+  const withChildren = (children: SemanticTextBlock['children']): SemanticTextBlock['children'] => {
+    return children?.map((child) => ({
+      ...child,
+      remoteBlockId: `tree-${id += 1}`,
+      ...(child.children ? { children: withChildren(child.children) } : {})
+    }));
+  };
+  return {
+    nodes: document.nodes.map((node) => {
+      const remoteBlockId = `tree-${id += 1}`;
+      return node.kind === 'text'
+        ? {
+            ...node,
+            remoteBlockId,
+            ...(node.children ? { children: withChildren(node.children) } : {})
+          }
+        : { ...node, remoteBlockId };
+    })
+  };
+}
+
 function document(...nodes: SemanticDocument['nodes']): SemanticDocument {
   return { nodes };
+}
+
+function nestedRemoteDocument(childText: string): SemanticDocument {
+  return remoteSemanticDocument([
+    { block_id: 'page', block_type: 1, children: ['parent'] },
+    {
+      block_id: 'parent',
+      block_type: 12,
+      children: ['child', 'nested'],
+      bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: { bold: true } } }] }
+    },
+    {
+      block_id: 'child',
+      block_type: 2,
+      text: { elements: [{ text_run: { content: childText, text_element_style: {} } }] }
+    },
+    {
+      block_id: 'nested',
+      block_type: 12,
+      bullet: { elements: [{ text_run: { content: 'Nested bullet.', text_element_style: {} } }] }
+    }
+  ], 'page');
 }
 
 function text(markdown: string, ordinal: number, remoteBlockId?: string): SemanticTextBlock {
@@ -658,6 +1290,22 @@ function text(markdown: string, ordinal: number, remoteBlockId?: string): Semant
     kind: 'text',
     locator: { sectionPath: [], kind: 'text', ordinal },
     blockType: 2,
+    markdown,
+    remoteBlockId
+  };
+}
+
+function sectionText(
+  markdown: string,
+  sectionPath: string[],
+  ordinal: number,
+  remoteBlockId?: string,
+  blockType = 2
+): SemanticTextBlock {
+  return {
+    kind: 'text',
+    locator: { sectionPath, kind: 'text', ordinal },
+    blockType,
     markdown,
     remoteBlockId
   };

@@ -199,7 +199,7 @@ Pull a reviewable remote snapshot:
 feishu-md-sync pull --target DocToken --output doc.remote.md
 ```
 
-`pull` uses `lark-cli docs +fetch --doc-format markdown` for the remote export. The custom layer handles target parsing, profile filtering, overwrite protection, local write verification, and optional receipt writing.
+`pull` uses `lark-cli docs +fetch --doc-format markdown` as the remote export and also reads the native Docx block tree when available. Native child paragraphs and nested list blocks are used to repair the known lossy list serialization in the Markdown export. The repair requires one exact correspondence between the native tree and either the correct or known lossy Markdown representation; ambiguous correspondence fails closed. Other Markdown, Callouts, and resource representations continue to come from the official export. The custom layer also handles target parsing, profile filtering, overwrite protection, local write verification, and optional receipt writing.
 
 Recognized Feishu Callouts are written as canonical `<div class="alert note|warning">` HTML without the presentation title. The pull path also normalizes a Feishu export variant that wraps the title and body in consecutive `<p>` elements, and reports this compatibility normalization in `warnings`. If a custom title is not recognizable, pull may resolve its type from the native Docx Callout metadata; it still fails closed when neither the configured title nor block metadata identifies a type.
 
@@ -255,7 +255,7 @@ Child changes in the same Callout are compared independently. A teammate edit to
 
 Code blocks are reported under `scoped.codeBlocks` with content, language, movement, and section-reconcile summaries. Pretty output uses forms such as `code[python]: Build index [0]` and `code-section: Search [0] [reconcile]`.
 
-With `--sync-whiteboards`, output includes each asset key, state (`clean`, `local-changed`, `remote-changed`, `conflict`, `untracked`, or `missing`), and recommended action.
+With `--sync-whiteboards`, output includes each asset key, state (`clean`, `local-changed`, `remote-changed`, `conflict`, `untracked`, or `missing`), and recommended action. Ordinary `zdoc-authoring` status, diff, and publish output also includes receipt-tracked direct SVG assets with the action `preserve tracked whiteboard`, plus the protected block ID and Whiteboard token in JSON output.
 
 ## `merge`
 

@@ -26,6 +26,10 @@ When the canonical Zdoc source is published to a Feishu authoring archive, use `
 
 Inspect `zdocRoundTrip` in status, diff, and publish dry-run output. Stop when `safeToPublish` is false, a Procedures boundary is invalid, or a Supademo resource is missing, ambiguous, changed, or locally removed after adoption. A proposed Supademo adoption records and protects the existing ISV block; it does not recreate or replace it. A Procedures move requires review of the affected block ID and collaboration-risk confirmation.
 
+Also inspect receipt-recorded round-trip loss items. A repairable local-only table may plan an anchored native `table-create`, and a repairable remote-only duplicate paragraph may plan a delete. Review both operations and require collaboration-risk confirmation for the delete. After a partial write, an already-created native table may be preserved only when its locator, complete semantic content, and both baseline anchors still match exactly; this does not authorize another table creation. Any local drift, remote drift, ambiguous baseline divergence, or changed table anchor blocks the publish.
+
+When a previous scoped create failed readback without writing a receipt, accept recovery only when the dry-run explicitly reports the exact completed-create prefix, an exact flattened desired-tree preorder plus the unchanged baseline suffix, an exact staged direct-create prefix, or one or more exact structured malformed-create groups plus that unchanged suffix. The malformed signature must include every created root and descendant block ID; it covers Markdown or composite XML insertion merging leading child paragraphs into list text, retaining nested list children, and omitting later paragraphs. Nested recovery writes must use explicit Docx child-block creation under returned parent IDs, with deterministic idempotency tokens and batch readback; do not review or authorize another composite Markdown/XML tree insertion. Review every partial/malformed/flat/suffix root scheduled for deletion. Confirm that resolved Feishu links are present in the desired child-block payload, and retain collaboration-risk and asset-specific Whiteboard confirmations. Any extra remote block, changed content/order/parent/child identity, local drift, or preflight anchor drift blocks recovery.
+
 ## Resolve The CLI
 
 Treat the executable as one path, never as a shell fragment.
@@ -105,6 +109,7 @@ Interpret the dry-run plan before writing:
 - `requiresUntrackedRemoteConfirmation`: explain that the workspace is adopting an existing untracked document and wait for explicit confirmation.
 - `requiresCollaborationRiskConfirmation`: summarize the affected blocks and collaboration risk, then wait for explicit confirmation.
 - `requiredRemoteWhiteboardOverwrites`: show each exact asset key and wait for asset-specific confirmation.
+- A mixed text sequence may be reported as anchored creates plus deletes when unique unchanged section anchors bound the replacement. Show the affected blocks and require `--confirm-collaboration-risk`; duplicate or reordered anchors remain blockers.
 - `blocked`, an overlapping scope conflict, or a remote change in the same managed scope: do not write. Recommend conflict resolution or pull/merge.
 - `document-replace`: never select it automatically. Run it only after a document-replace dry-run and separate explicit approval.
 
@@ -171,6 +176,10 @@ Do not infer Whiteboard intent from a sibling SVG. Enable it only when the user 
 
 A remotely changed Whiteboard must stop the workflow until the user approves the exact normalized PNG asset key. Never substitute a broad confirmation for asset-specific review.
 
+During a confirmed Whiteboard update, the CLI may retry Feishu's structured `providerCode=4003101` document-applying error with the same idempotency token. The Lark CLI adapter preserves this upstream code separately from the process exit code. Post-update readback may also retry the structured `whiteboard_raw_not_ready` subtype when a successful query envelope arrives before raw nodes are populated, including an explicitly empty `nodes` array or empty top-level raw array. Ordinary status/query calls do not retry it. A missing or non-array `nodes` field, invalid embedded JSON, and other malformed raw data are not treated as transient. Retries are bounded. Any other provider code, message-only error, malformed result, or retry exhaustion is a partial-write stop; do not assume pending deletes ran and do not retry by adding new confirmation flags.
+
+Tracked `zdoc-authoring` Whiteboard protection is not content synchronization. Without `--sync-whiteboards`, inspect the Whiteboard plan for `preserve tracked whiteboard`; require the receipt SVG path, normalized PNG asset key, block ID, token, and canonical placement to match. This protection may allow surrounding scoped text or structure writes, but it never grants board overwrite authority. A changed direct SVG, missing receipt, or identity mismatch blocks. To update a tracked direct SVG, require both explicit `--sync-whiteboards` intent and `--confirm-remote-whiteboard-overwrite <exact-asset-key>` after review.
+
 After a Whiteboard write, preserve the opt-in during final Whiteboard-aware status verification:
 
 ```bash
@@ -188,6 +197,8 @@ Pull to an independent snapshot unless the user explicitly requested an overwrit
 Do not replace canonical local Markdown by default. Use `--overwrite` only for an output path the user has approved. A pull receipt is independent of the publish receipt.
 
 Inspect pull `warnings` for Callout compatibility normalization. A paragraph-wrapped Feishu Callout export may be normalized when its title and body boundaries are structurally unambiguous. For an unrecognized custom title, the CLI may use native Docx Callout metadata; if neither the configured title nor block metadata identifies the type, keep the failure closed and do not invent a note or warning type.
+
+Pull reconstructs native nested list child paragraphs from the Docx block tree instead of trusting the official Markdown renderer for that hierarchy. If pull reports that the native tree cannot be uniquely matched to the fetched Markdown, stop and review the remote structure; do not copy the lossy snapshot over canonical source or bypass the blocker.
 
 ## Merge Remote Changes
 

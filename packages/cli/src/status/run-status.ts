@@ -26,7 +26,7 @@ import type { SemanticLocator } from '../semantic/types.js';
 import { remoteSemanticDocument } from '../semantic/remote-document.js';
 import type { WhiteboardAssetPlan, WhiteboardPlanBlocker } from '../whiteboards/whiteboard-plan.js';
 import { summarizeCalloutChanges, type CalloutChangeSummary } from '../callouts/callout-summary.js';
-import type { ScopedPatchBlocker } from '../publish/scoped-patch-plan.js';
+import type { ScopedPatchBlocker, ScopedPatchPlan } from '../publish/scoped-patch-plan.js';
 import { summarizeCodeBlockChanges, type CodeBlockChangeSummary } from '../code-blocks/code-summary.js';
 import { DEFAULT_CODE_BLOCK_CONFIG, type CodeBlockConfig } from '../code-blocks/code-language.js';
 import { canonicalizeFencedCodeLanguages } from '../code-blocks/code-markdown.js';
@@ -139,14 +139,15 @@ export async function runStatus(input: {
     });
     const scopeSummary = analysis.plan.scopedPatch?.scopeSummary ?? emptyScopeSummary();
     const withWhiteboards = statusWithWhiteboards(result, analysis.plan.whiteboards?.assets ?? []);
-    const recommendation = withWhiteboards.state === 'diverged' && scopeSummary.overlappingConflicts.length === 0
+    const withScopes = statusWithScopedSemanticMismatch(withWhiteboards, analysis.plan.scopedPatch);
+    const recommendation = withScopes.state === 'diverged' && scopeSummary.overlappingConflicts.length === 0
       ? {
         action: 'publish-dry-run' as const,
         reason: 'local and remote changes are in disjoint scopes'
       }
-      : withWhiteboards.recommendation;
+      : withScopes.recommendation;
     return {
-      ...withWhiteboards,
+      ...withScopes,
       ...(analysis.plan.zdocRoundTrip ? { zdocRoundTrip: analysis.plan.zdocRoundTrip } : {}),
       whiteboardBlockers: analysis.plan.whiteboards?.blockers ?? [],
       callouts: summarizeCalloutChanges({
@@ -168,6 +169,25 @@ export async function runStatus(input: {
     if (input.syncWhiteboards) throw error;
     return result;
   }
+}
+
+function statusWithScopedSemanticMismatch(
+  status: PublishStatusResult,
+  scopedPatch: ScopedPatchPlan | undefined
+): PublishStatusResult {
+  const hasManagedMismatch = Boolean(scopedPatch && scopedPatch.scopeSummary.localChanged.length > 0 &&
+    (scopedPatch.operations.length > 0 || scopedPatch.blockers.length > 0));
+  if (!status.hasReceipt || status.state !== 'clean' || !hasManagedMismatch) return status;
+  return {
+    ...status,
+    state: 'local-changed',
+    localChanged: true,
+    contentMatchesRemote: false,
+    recommendation: {
+      action: 'publish-dry-run',
+      reason: 'managed semantic structure differs from the canonical publish draft'
+    }
+  };
 }
 
 export async function loadPublishStatusContext(input: {

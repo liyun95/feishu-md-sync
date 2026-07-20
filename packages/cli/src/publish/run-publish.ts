@@ -15,6 +15,7 @@ import { canonicalizeRemoteCalloutMarkdown } from '../callouts/callout-markdown.
 import { calloutTypeForEmojiId } from '../callouts/callout-presentation.js';
 import { DEFAULT_CALLOUT_CONFIG, type CalloutConfig } from '../config/sync-config.js';
 import { canonicalMarkdown } from '../core/markdown-canonical.js';
+import type { FeishuBlock } from '../feishu/types.js';
 import type { PublishProfileName } from '../profiles/publish-profile.js';
 import type { DialectName } from '../dialects/types.js';
 import type { DialectWorkspaceConfig } from '../link-resolvers/types.js';
@@ -39,6 +40,8 @@ import { readRemoteSemanticSnapshot, writeRemoteSemanticSnapshot } from '../rece
 import { writePublishRemoteCheckpoint } from '../receipts/publish-baseline-bundle.js';
 import { localSemanticDocument } from '../semantic/local-document.js';
 import { remoteSemanticDocument } from '../semantic/remote-document.js';
+import { markdownToFeishuBlocks } from '../markdown/blocks.js';
+import { feishuBlocksToMarkdown } from '../markdown/from-blocks.js';
 import { semanticHash, stripExecutionMetadata } from '../semantic/normalize.js';
 import type {
   SemanticCodeBlock,
@@ -46,7 +49,8 @@ import type {
   SemanticLocator,
   SemanticNode,
   SemanticTable,
-  SemanticTextBlock
+  SemanticTextBlock,
+  SemanticTextChild
 } from '../semantic/types.js';
 import { discoverLocalWhiteboardAssets, normalizeAssetKey, type LocalWhiteboardAsset } from '../whiteboards/local-assets.js';
 import { verifyWhiteboardReadback, whiteboardRemoteStateHash } from '../whiteboards/remote-state.js';
@@ -55,7 +59,11 @@ import {
   type WhiteboardOperation,
   type WhiteboardPlan
 } from '../whiteboards/whiteboard-plan.js';
-import { findPageBlock, renderableDirectChildBlocks } from './block-state.js';
+import {
+  findPageBlock,
+  renderableDirectChildBlocks,
+  resolvedChildBlocks
+} from './block-state.js';
 import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
 import type { CalloutOperation } from './callout-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
@@ -80,8 +88,8 @@ export type RunPublishResult = {
   };
 };
 
-const WHITEBOARD_READBACK_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 const TABLE_READBACK_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
+const WHITEBOARD_APPLYING_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 
 export type PublishAnalysis = {
   plan: PublishPlan;
@@ -222,6 +230,12 @@ export async function runPublish(input: {
     if (!analysis.localCurrent) throw new Error('block-patch write is missing local semantic state');
     const phases = partitionScopedOperations(plan.scopedPatch.operations);
     const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
+    await verifyScopedRecoveryPreflight({
+      adapter: input.adapter,
+      doc: analysis.resolvedDocumentId,
+      operations: plan.scopedPatch.operations,
+      callouts
+    });
     const existingCheckpoint = analysis.receipt?.version === 4 || analysis.receipt?.version === 5
       ? analysis.receipt.partialWriteCheckpoint
       : undefined;
@@ -481,6 +495,8 @@ export async function analyzeExistingPublish(input: {
   const callouts = input.callouts ?? DEFAULT_CALLOUT_CONFIG;
   const remoteRaw = await withRateLimitRetry(() => input.adapter.fetchDocMarkdown({ doc: resolvedDocumentId }));
   const receipt = await readPublishReceipt({ cwd: input.cwd, target: input.target });
+  const requiresTrackedWhiteboardProtection = publishContext.dialect === 'zdoc-authoring' &&
+    whiteboardEntries(receipt).length > 0;
 
   if (input.strategy === 'document-replace') {
     const normalized = canonicalizeRemoteCalloutMarkdown({ markdown: remoteRaw.markdown, config: callouts });
@@ -520,7 +536,7 @@ export async function analyzeExistingPublish(input: {
       remote.markdown,
       publishContext.documentTitle
     );
-    const whiteboards = input.syncWhiteboards
+    const whiteboards = input.syncWhiteboards || requiresTrackedWhiteboardProtection
       ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', 'Whiteboard planning requires Docx block reads.')
       : undefined;
     return {
@@ -558,7 +574,7 @@ export async function analyzeExistingPublish(input: {
       publishContext.documentTitle
     );
     const message = error instanceof Error ? error.message : String(error);
-    const whiteboards = input.syncWhiteboards
+    const whiteboards = input.syncWhiteboards || requiresTrackedWhiteboardProtection
       ? blockedWhiteboardPlan('whiteboard-adapter-unavailable', `Whiteboard planning requires Docx block reads: ${message}`)
       : undefined;
     return {
@@ -649,7 +665,12 @@ export async function analyzeExistingPublish(input: {
   const zdocRoundTrip = publishContext.zdoc
     ? buildZdocReport(publishContext.zdoc.inventory, scopedPatch, protectedResources)
     : undefined;
-  const whiteboardAnalysis: { plan?: WhiteboardPlan; assets?: LocalWhiteboardAsset[] } = input.syncWhiteboards
+  const whiteboardIntent = input.syncWhiteboards
+    ? 'sync' as const
+    : publishContext.dialect === 'zdoc-authoring'
+      ? 'protect' as const
+      : undefined;
+  const whiteboardAnalysis: { plan?: WhiteboardPlan; assets?: LocalWhiteboardAsset[] } = whiteboardIntent
     ? await analyzeWhiteboards({
       file: input.file,
       localSource,
@@ -657,6 +678,7 @@ export async function analyzeExistingPublish(input: {
       remoteCurrent,
       receipt,
       adapter: input.adapter,
+      intent: whiteboardIntent,
       confirmedRemoteWhiteboardOverwrites: input.confirmedRemoteWhiteboardOverwrites ?? []
     })
     : {};
@@ -697,9 +719,11 @@ async function analyzeWhiteboards(input: {
   remoteCurrent: SemanticDocument;
   receipt: PublishReceipt | undefined;
   adapter: FeishuAdapter;
+  intent: 'sync' | 'protect';
   confirmedRemoteWhiteboardOverwrites: string[];
 }): Promise<{ plan: WhiteboardPlan; assets: LocalWhiteboardAsset[] }> {
-  if (!input.adapter.queryWhiteboard || !input.adapter.updateWhiteboard || !input.adapter.replaceImageWithWhiteboard) {
+  if (input.intent === 'sync' &&
+    (!input.adapter.queryWhiteboard || !input.adapter.updateWhiteboard || !input.adapter.replaceImageWithWhiteboard)) {
     return {
       plan: blockedWhiteboardPlan(
         'whiteboard-adapter-unavailable',
@@ -714,7 +738,8 @@ async function analyzeWhiteboards(input: {
     sourcePath: input.file,
     markdown: input.localSource,
     document: input.localCurrent,
-    tracked
+    tracked,
+    includeDirectSvg: true
   });
   const localLocators = new Set(discovery.assets.map((asset) => locatorKey(asset.locator)));
   const tokens = new Set([
@@ -730,9 +755,9 @@ async function analyzeWhiteboards(input: {
   ]);
   const remoteStates = new Map<string, { hash: string }>();
   const queryBlockers: Array<{ code: string; assetKey: string; message: string }> = [];
-  for (const token of tokens) {
+  for (const token of input.intent === 'sync' ? tokens : []) {
     try {
-      const remote = await input.adapter.queryWhiteboard({ whiteboardToken: token });
+      const remote = await input.adapter.queryWhiteboard!({ whiteboardToken: token });
       remoteStates.set(token, { hash: whiteboardRemoteStateHash(remote.raw) });
     } catch (error) {
       const related = tracked.find((entry) => entry.whiteboardToken === token)?.assetKey ?? '<untracked-whiteboard>';
@@ -746,6 +771,7 @@ async function analyzeWhiteboards(input: {
 
   return {
     plan: planWhiteboardPublish({
+      intent: input.intent,
       localDocument: input.localCurrent,
       remoteDocument: input.remoteCurrent,
       localAssets: discovery.assets,
@@ -1085,6 +1111,7 @@ function blockedScopedPatch(message: string): ScopedPatchPlan {
     operations: [],
     blockers: [{ code: 'remote-scope-conflict', message }],
     warnings: [],
+    roundTripLosses: [],
     requiresCollaborationRiskConfirmation: false,
     scopeSummary: {
       localChanged: [],
@@ -1102,6 +1129,7 @@ function buildZdocReport(
 ) {
   return buildZdocRoundTripReport({
     inventory,
+    roundTripLosses: scopedPatch.roundTripLosses,
     procedures: {
       operations: scopedPatch.operations.filter((operation) =>
         operation.kind === 'authoring-token-create' ||
@@ -1146,7 +1174,7 @@ export function partitionScopedOperations(operations: ScopedPatchOperation[]): {
       result.deletes.push({ ...operation, phase: 'delete' });
     } else if (operation.kind === 'code-move' || operation.kind === 'authoring-token-move') {
       result.moves.push(operation);
-    } else if (operation.kind === 'table-replace') result.tables.push(operation);
+    } else if (operation.kind === 'table-replace' || operation.kind === 'table-create') result.tables.push(operation);
     else result.deletes.push(operation);
   }
   return result;
@@ -1177,6 +1205,7 @@ async function applyScopedOperations(input: {
     let appliedOperation: ScopedPatchOperation = operation;
     let mutationCompleted = false;
     let mutationRevision: string | undefined;
+    let textUpdateReadback: TextUpdateReadbackExpectation | undefined;
     try {
       if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
         operation.kind === 'code-move' || operation.kind === 'code-delete' ||
@@ -1187,6 +1216,12 @@ async function applyScopedOperations(input: {
           operation: operation as CodeBlockOperation
         });
       } else if (operation.kind === 'update') {
+        const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
+        verifyTextOperationParent(operation, before.blocks);
+        textUpdateReadback = textUpdateReadbackExpectation(operation, before.blocks);
+        if (operation.recoveryExpectedRemoteMarkdown) {
+          verifyRecoveryUpdatePreflight(operation, before.blocks, input.doc, input.callouts);
+        }
         const result = await input.adapter.replaceBlock({
           doc: input.doc,
           blockId: operation.remoteBlockId,
@@ -1203,14 +1238,33 @@ async function applyScopedOperations(input: {
           callouts: input.callouts
         });
         appliedOperation = { ...operation, insertAfterBlockId };
-        const result = await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: insertAfterBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-        mutationRevision = result?.revision;
+        const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
+        verifyTextOperationParent(appliedOperation, before.blocks);
+        const desiredTrees = markdownToFeishuBlocks(operation.desiredMarkdown);
+        const structured = desiredTrees.some((block) => childBlockObjects(block).length > 0);
+        if (structured) {
+          await createStructuredTextTrees({
+            adapter: input.adapter,
+            doc: input.doc,
+            operation: appliedOperation,
+            desiredTrees,
+            beforeBlocks: before.blocks
+          });
+        } else {
+          const result = await input.adapter.insertBlocksAfter({
+            doc: input.doc,
+            blockId: insertAfterBlockId,
+            content: operation.desiredMarkdown,
+            format: 'markdown'
+          });
+          mutationRevision = result?.revision;
+        }
       } else if (operation.kind === 'delete') {
+        const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
+        verifyTextOperationParent(operation, before.blocks);
+        if (operation.recovery) {
+          verifyRecoveryDeletePreflight(operation, before.blocks, input.doc, input.callouts);
+        }
         await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
       } else if (operation.kind === 'table-replace') {
         const result = await input.adapter.replaceBlock({
@@ -1220,6 +1274,15 @@ async function applyScopedOperations(input: {
           format: 'xml'
         });
         mutationRevision = result?.revision;
+      } else if (operation.kind === 'table-create') {
+        const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
+        verifyTableCreateAnchors(operation, before.blocks, input.doc);
+        await input.adapter.insertBlocksAfter({
+          doc: input.doc,
+          blockId: operation.insertAfterBlockId,
+          content: renderTableXml(operation.desiredTable),
+          format: 'xml'
+        });
       } else if (operation.kind === 'callout-create') {
         const insertAfterBlockId = await resolveCurrentInsertionAnchor({
           adapter: input.adapter,
@@ -1295,7 +1358,8 @@ async function applyScopedOperations(input: {
           doc: input.doc,
           operation: appliedOperation,
           callouts: input.callouts,
-          mutationRevision
+          mutationRevision,
+          textUpdateReadback
         });
       }
       completed.push(summary);
@@ -1370,6 +1434,7 @@ async function verifyScopedOperationReadback(input: {
   operation: ScopedPatchOperation;
   callouts: CalloutConfig;
   mutationRevision?: string;
+  textUpdateReadback?: TextUpdateReadbackExpectation;
 }): Promise<void> {
   const retryDelays = input.operation.kind === 'table-replace'
     ? TABLE_READBACK_RETRY_DELAYS_MS
@@ -1386,7 +1451,13 @@ async function verifyScopedOperationReadback(input: {
         }
       }
       const blocks = await withRateLimitRetry(() => input.adapter.fetchDocBlocks!({ doc: input.doc }));
-      verifyOperation(input.operation, blocks.blocks, input.doc, input.callouts);
+      verifyOperation(
+        input.operation,
+        blocks.blocks,
+        input.doc,
+        input.callouts,
+        input.textUpdateReadback
+      );
       return;
     } catch (error) {
       const delayMs = retryDelays[attempt];
@@ -1428,6 +1499,10 @@ function verifyCheckpointOperations(input: {
       verifyCodeOperation(operation, input.remoteSemantic);
       continue;
     }
+    if (operation.kind === 'update') {
+      verifyCheckpointTextUpdate(operation, input.remoteSemantic);
+      continue;
+    }
     let currentOperation = operation;
     if ((operation.kind === 'create' || operation.kind === 'callout-create') && operation.afterLocator) {
       const anchor = input.remoteSemantic.nodes.find((node) => sameLocator(node.locator, operation.afterLocator!));
@@ -1442,6 +1517,35 @@ function verifyCheckpointOperations(input: {
       input.documentId,
       input.callouts
     );
+  }
+}
+
+function verifyCheckpointTextUpdate(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' }>,
+  remote: SemanticDocument
+): void {
+  const path = operation.locator.textPath ?? [];
+  const root = remote.nodes.find((node): node is SemanticTextBlock => {
+    return node.kind === 'text' &&
+      JSON.stringify(node.locator.sectionPath) === JSON.stringify(operation.locator.sectionPath) &&
+      node.locator.ordinal === operation.locator.ordinal;
+  });
+  if (!root) throw new Error('scoped readback verification failed: checkpoint text locator is missing');
+  let target: SemanticTextBlock | SemanticTextChild = root;
+  let parentBlockId: string | undefined;
+  for (const index of path) {
+    parentBlockId = target.remoteBlockId;
+    const children = target.children;
+    const child = children?.[index];
+    if (!child) throw new Error('scoped readback verification failed: checkpoint text path is missing');
+    target = child;
+  }
+  if (path.length > 0 && parentBlockId !== operation.parentBlockId) {
+    throw new Error('scoped readback verification failed: checkpoint text parent changed');
+  }
+  if (!target.remoteBlockId ||
+    canonicalMarkdown(target.markdown) !== canonicalMarkdown(operation.desiredMarkdown)) {
+    throw new Error('scoped readback verification failed: remote text differs from desired text');
   }
 }
 
@@ -1474,6 +1578,25 @@ async function resolveCurrentInsertionAnchor(input: {
     throw new Error(`create anchor correspondence is no longer resolvable at ${locatorKey(input.afterLocator)}`);
   }
   return anchor.remoteBlockId;
+}
+
+async function verifyScopedRecoveryPreflight(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operations: ScopedPatchOperation[];
+  callouts: CalloutConfig;
+}): Promise<void> {
+  const recoveries = input.operations.filter((operation): operation is Extract<ScopedPatchOperation, { kind: 'delete' }> => {
+    return operation.kind === 'delete' && Boolean(operation.recovery?.preCreatePrecedingBlockId);
+  });
+  if (recoveries.length === 0) return;
+  if (!input.adapter.fetchDocBlocks) {
+    throw new Error('Configured Feishu adapter cannot preflight partial-create recovery.');
+  }
+  const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
+  for (const recovery of recoveries) {
+    verifyRecoveryDeletePreCreate(recovery, before.blocks, input.doc, input.callouts);
+  }
 }
 
 function readbackFailureSummary(operation: ScopedPatchOperation): PublishWriteOperationSummary {
@@ -1935,14 +2058,17 @@ async function applyWhiteboardPlan(input: {
       } else {
         blockId = operation.blockId;
         whiteboardToken = operation.whiteboardToken;
-        await updateWhiteboard({
-          whiteboardToken,
-          svg: asset.svgSource,
-          idempotencyToken: `fms-${semanticHash({
+        await updateWhiteboardWithApplyingRetry({
+          updateWhiteboard,
+          request: {
             whiteboardToken,
-            svgHash: asset.svgHash,
-            remoteStateHash: operation.remoteStateHash
-          }).slice(0, 32)}`
+            svg: asset.svgSource,
+            idempotencyToken: `fms-${semanticHash({
+              whiteboardToken,
+              svgHash: asset.svgHash,
+              remoteStateHash: operation.remoteStateHash
+            }).slice(0, 32)}`
+          }
         });
       }
 
@@ -1979,6 +2105,30 @@ async function applyWhiteboardPlan(input: {
   };
 }
 
+async function updateWhiteboardWithApplyingRetry(input: {
+  updateWhiteboard: (input: {
+    whiteboardToken: string;
+    svg: string;
+    idempotencyToken: string;
+  }) => Promise<void>;
+  request: {
+    whiteboardToken: string;
+    svg: string;
+    idempotencyToken: string;
+  };
+}): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await input.updateWhiteboard(input.request);
+      return;
+    } catch (error) {
+      const delayMs = WHITEBOARD_APPLYING_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isWhiteboardApplyingError(error)) throw error;
+      await delay(delayMs);
+    }
+  }
+}
+
 async function queryWhiteboardReadback(input: {
   queryWhiteboard: (input: { whiteboardToken: string }) => Promise<RemoteWhiteboard>;
   whiteboardToken: string;
@@ -1987,17 +2137,35 @@ async function queryWhiteboardReadback(input: {
     try {
       return await input.queryWhiteboard({ whiteboardToken: input.whiteboardToken });
     } catch (error) {
-      const delayMs = WHITEBOARD_READBACK_RETRY_DELAYS_MS[attempt];
-      if (delayMs === undefined || !isWhiteboardApplyingError(error)) throw error;
+      const delayMs = WHITEBOARD_APPLYING_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isWhiteboardReadbackTransientError(error)) throw error;
       await delay(delayMs);
     }
   }
 }
 
+function isWhiteboardReadbackTransientError(error: unknown): boolean {
+  return isWhiteboardApplyingError(error) || isWhiteboardRawNotReadyError(error);
+}
+
+function isWhiteboardRawNotReadyError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as {
+    details?: { subtype?: unknown };
+    cause?: unknown;
+  };
+  if (record.details?.subtype === 'whiteboard_raw_not_ready') return true;
+  return record.cause !== undefined && isWhiteboardRawNotReadyError(record.cause);
+}
+
 function isWhiteboardApplyingError(error: unknown): boolean {
   if (error && typeof error === 'object') {
-    const record = error as { code?: unknown; cause?: unknown };
-    if (record.code === 4003101) return true;
+    const record = error as {
+      code?: unknown;
+      details?: { providerCode?: unknown };
+      cause?: unknown;
+    };
+    if (record.code === 4003101 || record.details?.providerCode === 4003101) return true;
     if (record.cause !== undefined && isWhiteboardApplyingError(record.cause)) return true;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -2043,7 +2211,8 @@ function verifyOperation(
   operation: ScopedPatchOperation,
   blocks: import('../feishu/types.js').FeishuBlock[],
   documentId: string,
-  callouts: CalloutConfig
+  callouts: CalloutConfig,
+  textUpdateReadback?: TextUpdateReadbackExpectation
 ): void {
   if (operation.kind === 'delete' || operation.kind === 'callout-child-delete' ||
     operation.kind === 'callout-delete' || operation.kind === 'code-delete' ||
@@ -2061,12 +2230,29 @@ function verifyOperation(
   }
 
   const remote = remoteSemanticDocument(blocks, documentId, callouts);
-  if (operation.kind === 'table-replace') {
+  if (operation.kind === 'table-replace' || operation.kind === 'table-create') {
     const match = findCorrespondingRemoteTable(operation.desiredTable, remote);
     if (!match.table) throw new Error(`scoped readback verification failed: ${match.blocker}`);
     const diff = diffCorrespondingTable(match.table, operation.desiredTable);
     if (diff.blockers.length > 0 || diff.additions.length > 0 || diff.updates.length > 0) {
       throw new Error('scoped readback verification failed: remote table differs from desired table');
+    }
+    if (operation.kind === 'table-create') {
+      if (!match.table.remoteBlockId) {
+        throw new Error('scoped readback verification failed: created table block ID is missing');
+      }
+      const page = findPageBlock(blocks, documentId);
+      const direct = renderableDirectChildBlocks(blocks, page);
+      const anchorIndex = operation.insertAfterBlockId === page.block_id
+        ? -1
+        : direct.findIndex((block) => block.block_id === operation.insertAfterBlockId);
+      const tableIndex = direct.findIndex((block) => block.block_id === match.table?.remoteBlockId);
+      if ((operation.insertAfterBlockId !== page.block_id && anchorIndex < 0) || tableIndex !== anchorIndex + 1) {
+        throw new Error('scoped readback verification failed: created table placement differs from desired order');
+      }
+      if (operation.insertBeforeBlockId && direct[tableIndex + 1]?.block_id !== operation.insertBeforeBlockId) {
+        throw new Error('scoped readback verification failed: created table following anchor differs from desired order');
+      }
     }
     return;
   }
@@ -2090,23 +2276,434 @@ function verifyOperation(
     throw new Error('Callout readback verification is not configured.');
   }
 
-  const candidates = remote.nodes.filter((node): node is SemanticTextBlock => {
-    return node.kind === 'text' && sameLocator(node.locator, operation.locator);
-  });
-  const matched = candidates.find((node) => {
-    return canonicalMarkdown(node.markdown) === canonicalMarkdown(operation.desiredMarkdown);
-  });
-  if (!matched) {
+  if (operation.kind === 'create') {
+    verifyTextCreateOperation(operation, blocks);
+    return;
+  }
+  verifyTextUpdateReadback(operation, blocks, textUpdateReadback);
+}
+
+type TextUpdateReadbackExpectation = {
+  parentBlockId: string;
+  index: number;
+  siblingIds: string[];
+  blockType: number;
+};
+
+function textUpdateReadbackExpectation(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[]
+): TextUpdateReadbackExpectation {
+  const siblings = resolvedChildBlocks(blocks, operation.parentBlockId);
+  const siblingIds = siblings.flatMap((block) => block.block_id ? [block.block_id] : []);
+  const index = siblingIds.indexOf(operation.remoteBlockId);
+  const source = siblings[index];
+  if (siblingIds.length !== siblings.length || index < 0 || !source) {
+    throw new Error('scoped write preflight failed: text update slot cannot be verified');
+  }
+  return {
+    parentBlockId: operation.parentBlockId,
+    index,
+    siblingIds,
+    blockType: source.block_type
+  };
+}
+
+function verifyTextUpdateReadback(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  expected: TextUpdateReadbackExpectation | undefined
+): void {
+  if (!expected || expected.parentBlockId !== operation.parentBlockId) {
+    throw new Error('scoped readback verification failed: text update slot is missing');
+  }
+  const siblings = resolvedChildBlocks(blocks, expected.parentBlockId);
+  const siblingIds = siblings.flatMap((block) => block.block_id ? [block.block_id] : []);
+  const matched = siblings[expected.index];
+  const stableSiblingsMatch = siblingIds.length === expected.siblingIds.length &&
+    siblingIds.length === siblings.length && expected.siblingIds.every((blockId, index) => {
+      return index === expected.index || siblingIds[index] === blockId;
+    });
+  if (!stableSiblingsMatch || !matched?.block_id || matched.block_type !== expected.blockType ||
+    canonicalMarkdown(feishuBlocksToMarkdown([matched]).trim()) !== canonicalMarkdown(operation.desiredMarkdown)) {
     throw new Error('scoped readback verification failed: remote text differs from desired text');
   }
-  if (operation.kind === 'create' && (!matched.remoteBlockId || !textCreatePlacementMatches(
-    blocks,
-    documentId,
-    matched.remoteBlockId,
-    operation.insertAfterBlockId
-  ))) {
+}
+
+function verifyTextOperationParent(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' | 'create' | 'delete' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[]
+): void {
+  const siblings = resolvedChildBlocks(blocks, operation.parentBlockId);
+  const siblingIds = siblings.flatMap((block) => block.block_id ? [block.block_id] : []);
+  if (operation.kind === 'update') {
+    if (!siblingIds.includes(operation.remoteBlockId)) {
+      throw new Error('scoped write preflight failed: text block parent changed');
+    }
+    return;
+  }
+  if (operation.kind === 'create') {
+    if (operation.insertAfterBlockId !== operation.parentBlockId &&
+      !siblingIds.includes(operation.insertAfterBlockId)) {
+      throw new Error('scoped write preflight failed: create anchor parent changed');
+    }
+    return;
+  }
+  const indexes = operation.blockIds.map((blockId) => siblingIds.indexOf(blockId));
+  if (indexes.some((index) => index < 0) || indexes.some((index, offset) => {
+    return offset > 0 && index !== indexes[offset - 1]! + 1;
+  })) {
+    throw new Error('scoped write preflight failed: delete block parent or adjacency changed');
+  }
+}
+
+function verifyTableCreateAnchors(
+  operation: Extract<ScopedPatchOperation, { kind: 'table-create' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  documentId: string
+): void {
+  const page = findPageBlock(blocks, documentId);
+  const direct = renderableDirectChildBlocks(blocks, page);
+  const anchorIndex = operation.insertAfterBlockId === page.block_id
+    ? -1
+    : direct.findIndex((block) => block.block_id === operation.insertAfterBlockId);
+  if (operation.insertAfterBlockId !== page.block_id && anchorIndex < 0) {
+    throw new Error('table-create preflight failed: preceding anchor is missing');
+  }
+  const following = direct[anchorIndex + 1]?.block_id;
+  if (operation.insertBeforeBlockId ? following !== operation.insertBeforeBlockId : following !== undefined) {
+    throw new Error('table-create preflight failed: adjacent anchors no longer match the reviewed plan');
+  }
+}
+
+function verifyRecoveryUpdatePreflight(
+  operation: Extract<ScopedPatchOperation, { kind: 'update' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  documentId: string,
+  callouts: CalloutConfig
+): void {
+  const expected = operation.recoveryExpectedRemoteMarkdown;
+  const remote = remoteSemanticDocument(blocks, documentId, callouts);
+  const matched = remote.nodes.find((node): node is SemanticTextBlock => {
+    return node.kind === 'text' && node.remoteBlockId === operation.remoteBlockId;
+  });
+  if (!expected || !matched || canonicalMarkdown(matched.markdown) !== canonicalMarkdown(expected)) {
+    throw new Error('partial-create recovery preflight failed: update source no longer matches reviewed remote text');
+  }
+}
+
+function verifyRecoveryDeletePreflight(
+  operation: Extract<ScopedPatchOperation, { kind: 'delete' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  documentId: string,
+  callouts: CalloutConfig
+): void {
+  const recovery = operation.recovery;
+  if (!recovery) return;
+  const remote = remoteSemanticDocument(blocks, documentId, callouts);
+  const remoteById = new Map(remote.nodes.flatMap((node) => node.remoteBlockId ? [[node.remoteBlockId, node] as const] : []));
+  for (const expected of recovery.expectedBlocks) {
+    const node = remoteById.get(expected.blockId);
+    if (node?.kind !== 'text' || node.blockType !== expected.blockType ||
+      canonicalMarkdown(node.markdown) !== canonicalMarkdown(expected.markdown)) {
+      throw new Error('partial-create recovery preflight failed: baseline suffix content changed');
+    }
+  }
+  verifyRecoveryDescendantIds(recovery, blocks);
+  const page = findPageBlock(blocks, documentId);
+  const direct = renderableDirectChildBlocks(blocks, page);
+  const directIds = direct
+    .flatMap((block) => block.block_id ? [block.block_id] : []);
+  const expectedIds = recovery.expectedBlocks.map((block) => block.blockId);
+  if (recovery.precedingDesiredMarkdown) {
+    const firstIndex = directIds.indexOf(expectedIds[0] ?? '');
+    const previous = firstIndex > 0 ? direct[firstIndex - 1] : undefined;
+    const actualIds = directIds.slice(firstIndex, firstIndex + expectedIds.length);
+    const following = directIds[firstIndex + expectedIds.length];
+    if (firstIndex < 0 || !previous ||
+      canonicalMarkdown(feishuBlocksToMarkdown([previous]).trim()) !== canonicalMarkdown(recovery.precedingDesiredMarkdown) ||
+      actualIds.length !== expectedIds.length || actualIds.some((blockId, index) => blockId !== expectedIds[index]) ||
+      (recovery.followingBlockId ? following !== recovery.followingBlockId : following !== undefined)) {
+      throw new Error('partial-create recovery preflight failed: flattened sequence anchors changed');
+    }
+    return;
+  }
+  if (!recovery.precedingBlockId) {
+    throw new Error('partial-create recovery preflight failed: preceding anchor is missing');
+  }
+  const precedingIndex = directIds.indexOf(recovery.precedingBlockId);
+  const actualIds = directIds.slice(precedingIndex + 1, precedingIndex + 1 + expectedIds.length);
+  const following = directIds[precedingIndex + 1 + expectedIds.length];
+  if (precedingIndex < 0 || actualIds.length !== expectedIds.length ||
+    actualIds.some((blockId, index) => blockId !== expectedIds[index]) ||
+    (recovery.followingBlockId ? following !== recovery.followingBlockId : following !== undefined)) {
+    throw new Error('partial-create recovery preflight failed: baseline suffix anchors changed');
+  }
+}
+
+function verifyRecoveryDeletePreCreate(
+  operation: Extract<ScopedPatchOperation, { kind: 'delete' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[],
+  documentId: string,
+  callouts: CalloutConfig
+): void {
+  const recovery = operation.recovery;
+  const precedingBlockId = recovery?.preCreatePrecedingBlockId;
+  if (!recovery || !precedingBlockId) return;
+  const remote = remoteSemanticDocument(blocks, documentId, callouts);
+  const remoteById = new Map(remote.nodes.flatMap((node) => node.remoteBlockId ? [[node.remoteBlockId, node] as const] : []));
+  for (const expected of recovery.expectedBlocks) {
+    const node = remoteById.get(expected.blockId);
+    if (node?.kind !== 'text' || node.blockType !== expected.blockType ||
+      canonicalMarkdown(node.markdown) !== canonicalMarkdown(expected.markdown)) {
+      throw new Error('partial-create recovery preflight failed: flattened sequence content changed');
+    }
+  }
+  verifyRecoveryDescendantIds(recovery, blocks);
+  const page = findPageBlock(blocks, documentId);
+  const directIds = renderableDirectChildBlocks(blocks, page)
+    .flatMap((block) => block.block_id ? [block.block_id] : []);
+  const precedingIndex = directIds.indexOf(precedingBlockId);
+  const expectedIds = recovery.expectedBlocks.map((block) => block.blockId);
+  const actualIds = directIds.slice(precedingIndex + 1, precedingIndex + 1 + expectedIds.length);
+  const following = directIds[precedingIndex + 1 + expectedIds.length];
+  if (precedingIndex < 0 || actualIds.length !== expectedIds.length ||
+    actualIds.some((blockId, index) => blockId !== expectedIds[index]) ||
+    (recovery.followingBlockId ? following !== recovery.followingBlockId : following !== undefined)) {
+    throw new Error('partial-create recovery preflight failed: flattened sequence anchors changed');
+  }
+}
+
+function verifyRecoveryDescendantIds(
+  recovery: NonNullable<Extract<ScopedPatchOperation, { kind: 'delete' }>['recovery']>,
+  blocks: import('../feishu/types.js').FeishuBlock[]
+): void {
+  if (!recovery.expectedDescendantBlockIds) return;
+  const descendants: string[] = [];
+  const seen = new Set<string>();
+  const visit = (blockId: string): void => {
+    for (const child of resolvedChildBlocks(blocks, blockId)) {
+      if (!child.block_id || seen.has(child.block_id)) {
+        throw new Error('partial-create recovery preflight failed: malformed tree child identity changed');
+      }
+      seen.add(child.block_id);
+      descendants.push(child.block_id);
+      visit(child.block_id);
+    }
+  };
+  for (const root of recovery.expectedBlocks) visit(root.blockId);
+  if (descendants.length !== recovery.expectedDescendantBlockIds.length ||
+    descendants.some((blockId, index) => blockId !== recovery.expectedDescendantBlockIds?.[index])) {
+    throw new Error('partial-create recovery preflight failed: malformed tree child identity changed');
+  }
+}
+
+function verifyTextCreateOperation(
+  operation: Extract<ScopedPatchOperation, { kind: 'create' }>,
+  blocks: import('../feishu/types.js').FeishuBlock[]
+): void {
+  const siblings = resolvedChildBlocks(blocks, operation.parentBlockId);
+  const anchorIsParent = operation.insertAfterBlockId === operation.parentBlockId;
+  const anchorIndex = anchorIsParent
+    ? -1
+    : siblings.findIndex((block) => block.block_id === operation.insertAfterBlockId);
+  if (!anchorIsParent && anchorIndex < 0) {
+    throw new Error('scoped readback verification failed: create anchor is missing');
+  }
+  const created = siblings.slice(anchorIndex + 1, anchorIndex + 1 + operation.desiredBlocks.length);
+  if (created.length !== operation.desiredBlocks.length || created.some((block, index) => {
+    const desired = operation.desiredBlocks[index];
+    return !desired || block.block_type !== desired.blockType ||
+      canonicalMarkdown(feishuBlocksToMarkdown([block]).trim()) !== canonicalMarkdown(desired.markdown);
+  })) {
+    throw new Error('scoped readback verification failed: created text sequence differs from desired text');
+  }
+  if (created.some((block) => !block.block_id)) {
     throw new Error('scoped readback verification failed: remote text placement differs from desired order');
   }
+}
+
+async function createStructuredTextTrees(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: Extract<ScopedPatchOperation, { kind: 'create' }>;
+  desiredTrees: FeishuBlock[];
+  beforeBlocks: FeishuBlock[];
+}): Promise<void> {
+  const createChildBlocks = input.adapter.createChildBlocks?.bind(input.adapter);
+  if (!createChildBlocks || !input.adapter.fetchDocBlocks) {
+    throw new Error('Configured Feishu adapter does not support explicit nested text tree creation.');
+  }
+  const siblings = resolvedChildBlocks(input.beforeBlocks, input.operation.parentBlockId);
+  const anchorIsParent = input.operation.insertAfterBlockId === input.operation.parentBlockId;
+  const anchorIndex = anchorIsParent
+    ? -1
+    : siblings.findIndex((block) => block.block_id === input.operation.insertAfterBlockId);
+  if (!anchorIsParent && anchorIndex < 0) {
+    throw new Error('nested text tree create preflight failed: create anchor is missing');
+  }
+  const createdIds: string[] = [];
+  try {
+    const rootResult = await withRateLimitRetry(() => createChildBlocks({
+      doc: input.doc,
+      parentBlockId: input.operation.parentBlockId,
+      index: anchorIndex + 1,
+      blocks: input.desiredTrees.map(blockCreateShell),
+      clientToken: textTreeClientToken(input, 'roots')
+    }));
+    const roots = validateCreatedBlockBatch(rootResult.blocks, input.desiredTrees, input.operation.parentBlockId);
+    createdIds.push(...roots.map((block) => block.block_id!));
+    const expectedRootSiblingIds = siblings.map((block) => block.block_id);
+    if (expectedRootSiblingIds.some((blockId) => typeof blockId !== 'string')) {
+      throw new Error('nested text tree create preflight failed: sibling identity is missing');
+    }
+    expectedRootSiblingIds.splice(anchorIndex + 1, 0, ...roots.map((block) => block.block_id!));
+    verifyCreatedBlockBatch(
+      (await input.adapter.fetchDocBlocks({ doc: input.doc })).blocks,
+      input.operation.parentBlockId,
+      anchorIndex + 1,
+      roots,
+      input.desiredTrees,
+      expectedRootSiblingIds as string[]
+    );
+    for (const [index, desired] of input.desiredTrees.entries()) {
+      await createStructuredTextChildren({
+        ...input,
+        parentBlockId: roots[index]!.block_id!,
+        desiredParent: desired,
+        path: [index],
+        createdIds
+      });
+    }
+  } catch (error) {
+    if (error instanceof PartialWriteError) throw error;
+    if (createdIds.length === 0) throw error;
+    throw new PartialWriteError({
+      completedOperations: [{
+        kind: 'create',
+        locator: input.operation.locator,
+        parentBlockId: input.operation.parentBlockId,
+        blockIds: createdIds
+      }],
+      failedOperation: { kind: 'scoped-readback', locator: input.operation.locator },
+      cause: error
+    });
+  }
+}
+
+async function createStructuredTextChildren(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: Extract<ScopedPatchOperation, { kind: 'create' }>;
+  desiredTrees: FeishuBlock[];
+  beforeBlocks: FeishuBlock[];
+  parentBlockId: string;
+  desiredParent: FeishuBlock;
+  path: number[];
+  createdIds: string[];
+}): Promise<void> {
+  const desiredChildren = childBlockObjects(input.desiredParent);
+  if (desiredChildren.length === 0) return;
+  const createChildBlocks = input.adapter.createChildBlocks!.bind(input.adapter);
+  const result = await withRateLimitRetry(() => createChildBlocks({
+    doc: input.doc,
+    parentBlockId: input.parentBlockId,
+    index: 0,
+    blocks: desiredChildren.map(blockCreateShell),
+    clientToken: textTreeClientToken(input, input.path.join('.'))
+  }));
+  const created = validateCreatedBlockBatch(result.blocks, desiredChildren, input.parentBlockId);
+  input.createdIds.push(...created.map((block) => block.block_id!));
+  verifyCreatedBlockBatch(
+    (await input.adapter.fetchDocBlocks!({ doc: input.doc })).blocks,
+    input.parentBlockId,
+    0,
+    created,
+    desiredChildren,
+    created.map((block) => block.block_id!)
+  );
+  for (const [index, desired] of desiredChildren.entries()) {
+    await createStructuredTextChildren({
+      ...input,
+      parentBlockId: created[index]!.block_id!,
+      desiredParent: desired,
+      path: [...input.path, index]
+    });
+  }
+}
+
+function blockCreateShell(block: FeishuBlock): FeishuBlock {
+  const { block_id: _blockId, parent_id: _parentId, children: _children, ...shell } = block;
+  return shell as FeishuBlock;
+}
+
+function childBlockObjects(block: FeishuBlock): FeishuBlock[] {
+  return Array.isArray(block.children)
+    ? block.children.filter((child): child is FeishuBlock => {
+      return Boolean(child && typeof child === 'object' && !Array.isArray(child) && 'block_type' in child);
+    })
+    : [];
+}
+
+function validateCreatedBlockBatch(
+  created: FeishuBlock[],
+  desired: FeishuBlock[],
+  parentBlockId: string
+): FeishuBlock[] {
+  const ids = created.flatMap((block) => typeof block.block_id === 'string' ? [block.block_id] : []);
+  if (created.length !== desired.length || ids.length !== created.length || new Set(ids).size !== ids.length ||
+    created.some((block, index) => {
+      const expected = desired[index];
+      return !expected || block.block_type !== expected.block_type ||
+        (typeof block.parent_id === 'string' && block.parent_id !== parentBlockId) ||
+        canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(block)]).trim()) !==
+          canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(expected)]).trim());
+    })) {
+    throw new Error('nested text tree create did not return the expected block identities and content');
+  }
+  return created;
+}
+
+function verifyCreatedBlockBatch(
+  blocks: FeishuBlock[],
+  parentBlockId: string,
+  index: number,
+  created: FeishuBlock[],
+  desired: FeishuBlock[],
+  expectedSiblingIds: string[]
+): void {
+  const siblings = resolvedChildBlocks(blocks, parentBlockId);
+  const siblingIds = siblings.map((block) => block.block_id);
+  const actual = siblings.slice(index, index + desired.length);
+  if (siblingIds.length !== expectedSiblingIds.length ||
+    siblingIds.some((blockId, siblingIndex) => blockId !== expectedSiblingIds[siblingIndex]) ||
+    actual.length !== desired.length || actual.some((block, childIndex) => {
+    const expectedId = created[childIndex]?.block_id;
+    const expected = desired[childIndex];
+    return !expectedId || !expected || block.block_id !== expectedId || block.block_type !== expected.block_type ||
+      canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(block)]).trim()) !==
+        canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(expected)]).trim());
+  })) {
+    throw new Error('nested text tree create readback differs from the requested parent graph');
+  }
+}
+
+function textTreeClientToken(
+  input: Pick<Parameters<typeof createStructuredTextTrees>[0], 'doc' | 'operation' | 'desiredTrees'>,
+  phase: string
+): string {
+  const digest = hashText(JSON.stringify({
+    doc: input.doc,
+    locator: input.operation.locator,
+    parentBlockId: input.operation.parentBlockId,
+    insertAfterBlockId: input.operation.insertAfterBlockId,
+    desiredTrees: input.desiredTrees,
+    phase
+  })).slice(0, 32).split('');
+  digest[12] = '4';
+  digest[16] = '8';
+  const value = digest.join('');
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
 }
 
 export function textCreatePlacementMatches(

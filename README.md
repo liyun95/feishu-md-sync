@@ -172,6 +172,8 @@ feishu-md-sync publish article.md --target "$TARGET" --profile none --sync-white
 
 This feature does not render or upload the PNG, and images without a same-name SVG remain ordinary images. Remote Whiteboard edits fail closed. After review, overwrite one remotely changed asset explicitly with `--confirm-remote-whiteboard-overwrite assets/architecture.png`. SVG import preserves supported shapes, lines, paths, groups, symbols, and text as editable Whiteboard nodes where Feishu supports them; native smart-connector binding is not guaranteed.
 
+For a `zdoc-authoring` archive that already has a receipt-tracked native Whiteboard, the canonical source may reference the recorded SVG directly. Ordinary status, diff, and publish planning then verify the receipt block/token identity and report `preserve tracked whiteboard` without writing board content. A changed direct SVG blocks until the caller adds both `--sync-whiteboards` and the exact existing PNG receipt key through `--confirm-remote-whiteboard-overwrite`; direct SVG references never initialize an untracked Whiteboard.
+
 ## Develop
 
 Root scripts delegate to the CLI and docs workspaces:

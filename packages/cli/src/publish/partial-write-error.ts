@@ -20,6 +20,8 @@ export type PublishWriteOperationSummary = {
     | 'receipt-write';
   locator?: SemanticLocator;
   assetKey?: string;
+  blockIds?: string[];
+  parentBlockId?: string;
 };
 
 export class PartialWriteError extends Error {

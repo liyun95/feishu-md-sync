@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
+import type { FeishuBlock } from '../src/feishu/types.js';
+import { LarkCliAdapter } from '../src/adapters/lark-cli-adapter.js';
+import { CliFailure } from '../src/core/cli-failure.js';
 import { markdownToFeishuBlocks } from '../src/markdown/blocks.js';
 import { feishuBlocksToMarkdown } from '../src/markdown/from-blocks.js';
 import {
@@ -108,6 +111,7 @@ describe('runPublish', () => {
     expect(result.plan.requiresUntrackedRemoteConfirmation).toBe(true);
     expect(result.plan.scopedPatch?.operations).toEqual([{
       kind: 'update',
+      parentBlockId: 'page',
       remoteBlockId: 'p1',
       locator: { sectionPath: [], kind: 'text', ordinal: 0 },
       desiredMarkdown: 'Milvus stores vector data.'
@@ -1094,6 +1098,7 @@ Next text.`, 'utf8');
     expect(result.plan.strategy).toBe('block-patch');
     expect(result.plan.scopedPatch?.operations).toEqual([{
       kind: 'update',
+      parentBlockId: 'doc_token',
       remoteBlockId: 'p1',
       locator: { sectionPath: [], kind: 'text', ordinal: 0 },
       desiredMarkdown: 'Milvus stores vector data.'
@@ -1130,6 +1135,7 @@ Next text.`, 'utf8');
     expect(result.plan.strategy).toBe('block-patch');
     expect(result.plan.scopedPatch?.operations).toEqual([{
       kind: 'update',
+      parentBlockId: 'doc_token',
       remoteBlockId: 'p1',
       locator: { sectionPath: [], kind: 'text', ordinal: 0 },
       desiredMarkdown: 'Milvus stores vector data.'
@@ -1234,6 +1240,59 @@ Next text.`, 'utf8');
       profile: 'none',
       target: { kind: 'docx', token: 'doc_token' }
     });
+  });
+
+  it('accepts a text replacement with a new block ID when the exact parent slot and content match', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-text-replace-id-'));
+    const markdownPath = join(dir, 'doc.md');
+    const beforeMarkdown = 'Before.\n\nOld paragraph.\n\nAfter.';
+    const afterMarkdown = 'Before.\n\nNew paragraph.\n\nAfter.';
+    await writeFile(markdownPath, afterMarkdown, 'utf8');
+    let written = false;
+    const calls: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: written ? afterMarkdown : beforeMarkdown }),
+      fetchDocBlocks: async () => ({
+        blocks: written
+          ? [
+              { block_id: 'page', block_type: 1, children: ['before', 'replacement', 'after'] },
+              textBlock('before', 'Before.'),
+              textBlock('replacement', 'New paragraph.'),
+              textBlock('after', 'After.')
+            ]
+          : [
+              { block_id: 'page', block_type: 1, children: ['before', 'original', 'after'] },
+              textBlock('before', 'Before.'),
+              textBlock('original', 'Old paragraph.'),
+              textBlock('after', 'After.')
+            ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        calls.push(`replace:${blockId}:${content}`);
+        written = true;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(calls).toEqual(['replace:original:New paragraph.']);
   });
 
   it('writes a Code block body update through caption-preserving XML', async () => {
@@ -1390,6 +1449,676 @@ Next text.`, 'utf8');
 
     expect(result.plan.strategy).toBe('block-patch');
     expect(adapter.calls).toEqual(['insert-after:p1:Second paragraph.']);
+  });
+
+  it('repairs a receipt-recorded flat list as a nested scoped create with parent-aware readback', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-nested-list-repair-'));
+    const markdownPath = join(dir, 'doc.md');
+    const localMarkdown = nestedListMarkdown(true);
+    const flatMarkdown = nestedListMarkdown(false);
+    await writeFile(markdownPath, localMarkdown, 'utf8');
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd: dir, target, markdown: localMarkdown });
+    const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+      cwd: dir,
+      target,
+      document: remoteSemanticDocument(nestedListBlocks('flat'), 'doc_token')
+    });
+    await writePublishReceipt({
+      cwd: dir,
+      receipt: {
+        version: 3,
+        target,
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        localSourceHash: hashText(localMarkdown),
+        publishDraftHash: hashText(localMarkdown),
+        remoteSnapshotHash: hashText(flatMarkdown),
+        localBaseSnapshot,
+        remoteSemanticSnapshot,
+        updatedAt: '2026-07-17T00:00:00.000Z'
+      }
+    });
+    const initialBlocks = nestedListBlocks('flat');
+    const initialPage = initialBlocks[0]!;
+    const initialById = new Map(initialBlocks.flatMap((block) => {
+      return block.block_id ? [[block.block_id, block] as const] : [];
+    }));
+    let directBlocks = (initialPage.children as string[]).map((blockId) => initialById.get(blockId)!);
+    let descendants: FeishuBlock[] = [];
+    let final = false;
+    const counter = { value: 0 };
+    const creates: Array<{ parentBlockId: string; index?: number; count: number }> = [];
+    const deletes: string[][] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: final ? localMarkdown : flatMarkdown,
+        revision: final ? '3' : '2'
+      }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: directBlocks.map((block) => block.block_id!) },
+          ...directBlocks,
+          ...descendants
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {
+        throw new Error('nested repair must use explicit child creation');
+      },
+      createChildBlocks: async ({ parentBlockId, index, blocks }) => {
+        creates.push({ parentBlockId, index, count: blocks.length });
+        return {
+          blocks: createChildBlocksInMemory({
+            documentId: 'doc_token',
+            directBlocks,
+            descendants,
+            parentBlockId,
+            index,
+            blocks,
+            prefix: 'new',
+            counter
+          })
+        };
+      },
+      deleteBlocks: async ({ blockIds }) => {
+        deletes.push(blockIds);
+        const deleting = new Set(blockIds);
+        directBlocks = directBlocks.filter((block) => !block.block_id || !deleting.has(block.block_id));
+        descendants = descendants.filter((block) => !block.block_id || !deleting.has(block.block_id));
+        final = true;
+      },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(creates).toEqual([
+      { parentBlockId: 'doc_token', index: 1, count: 1 },
+      { parentBlockId: 'new-1', index: 0, count: 3 }
+    ]);
+    expect(deletes).toEqual([['old-parent', 'old-child', 'old-nested-bullet', 'old-nested-ordered']]);
+    await expect(readPublishReceipt({ cwd: dir, target })).resolves.toMatchObject({ version: 4 });
+  });
+
+  it('dry-runs exact recovery from the observed malformed nested create before the unchanged flat baseline', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: fixture.malformedMarkdown, revision: '38' }),
+        fetchDocBlocks: async () => ({ blocks: fixture.malformedBlocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(result.plan.zdocRoundTrip).toMatchObject({ safeToPublish: true });
+    expect(result.plan.whiteboards?.operations).toEqual([]);
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.scopedPatch?.warnings).toContain(
+      'recovering exact malformed scoped create at ["Before you start"]'
+    );
+    expect(result.plan.scopedPatch?.operations).toEqual([
+      expect.objectContaining({
+        kind: 'create',
+        insertAfterBlockId: 'baseline-2',
+        desiredBlocks: expect.arrayContaining([
+          expect.objectContaining({ markdown: expect.stringContaining('Second conclusion.') })
+        ])
+      }),
+      expect.objectContaining({
+        kind: 'delete',
+        blockIds: fixture.malformedRootIds.concat(fixture.oldFlatIds),
+        recovery: expect.objectContaining({
+          expectedDescendantBlockIds: fixture.malformedChildIds,
+          followingBlockId: 'baseline-15'
+        })
+      })
+    ]);
+  });
+
+  it('dry-runs revision 39 recovery from two exact malformed tree creates before the unchanged flat baseline', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const page = fixture.malformedBlocks[0]!;
+    const second = materializeTextBlockTrees(malformedHierarchyCreateMarkdown(), 'malformed2');
+    const existingDirectIds = page.children as string[];
+    const directIds = [
+      ...existingDirectIds.slice(0, 2),
+      ...second.roots.map((block) => block.block_id!),
+      ...existingDirectIds.slice(2)
+    ];
+    const revision39Blocks = [
+      { ...page, children: directIds },
+      ...fixture.malformedBlocks.slice(1),
+      ...second.roots,
+      ...second.descendants
+    ];
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({
+          markdown: multiHierarchyMarkdownWithMalformedAttempts(2),
+          revision: '39'
+        }),
+        fetchDocBlocks: async () => ({ blocks: revision39Blocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.scopedPatch?.warnings).toContain(
+      'recovering exact malformed scoped create at ["Before you start"]'
+    );
+    expect(result.plan.scopedPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'create', insertAfterBlockId: 'baseline-2' }),
+      expect.objectContaining({
+        kind: 'delete',
+        blockIds: [
+          ...second.roots.map((block) => block.block_id!),
+          ...fixture.malformedRootIds,
+          ...fixture.oldFlatIds
+        ],
+        recovery: expect.objectContaining({
+          expectedDescendantBlockIds: [
+            ...second.descendants.map((block) => block.block_id!),
+            ...fixture.malformedChildIds
+          ],
+          followingBlockId: 'baseline-15'
+        })
+      })
+    ]);
+  });
+
+  it('blocks revision 39 recovery when a child in either malformed create drifts', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const page = fixture.malformedBlocks[0]!;
+    const second = materializeTextBlockTrees(malformedHierarchyCreateMarkdown(), 'malformed2');
+    const driftedChild = second.descendants[1]!;
+    const existingDirectIds = page.children as string[];
+    const remoteBlocks = [
+      {
+        ...page,
+        children: [
+          ...existingDirectIds.slice(0, 2),
+          ...second.roots.map((block) => block.block_id!),
+          ...existingDirectIds.slice(2)
+        ]
+      },
+      ...fixture.malformedBlocks.slice(1),
+      ...second.roots,
+      ...second.descendants.map((block) => block === driftedChild
+        ? markdownBlock(block.block_id!, '- Teammate drift.')
+        : block)
+    ];
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: multiHierarchyMarkdownWithMalformedAttempts(2), revision: '39' }),
+        fetchDocBlocks: async () => ({ blocks: remoteBlocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.zdocRoundTrip?.safeToPublish).toBe(false);
+  });
+
+  it('recreates the observed malformed nested tree through explicit parent child writes before deleting old roots', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const initialPage = fixture.malformedBlocks[0]!;
+    const initialById = new Map(fixture.malformedBlocks.flatMap((block) => {
+      return block.block_id ? [[block.block_id, block] as const] : [];
+    }));
+    let directBlocks = (initialPage.children as string[]).map((blockId) => initialById.get(blockId)!);
+    const directIds = new Set(directBlocks.flatMap((block) => block.block_id ? [block.block_id] : []));
+    let descendants = fixture.malformedBlocks.filter((block) => {
+      return block.block_id && block.block_id !== 'doc_token' && !directIds.has(block.block_id);
+    });
+    let final = false;
+    const calls: string[] = [];
+    const desired = materializeTextBlockTrees(nestedHierarchyCreateMarkdown(), 'recovered');
+    const desiredById = new Map(desired.descendants.flatMap((block) => {
+      return block.block_id ? [[block.block_id, block] as const] : [];
+    }));
+    const desiredChildren = new Map(desired.roots.map((root) => [
+      root.block_id!,
+      ((root.children as string[] | undefined) ?? []).map((blockId) => desiredById.get(blockId)!)
+    ]));
+    const currentBlocks = () => [
+      { block_id: 'doc_token', block_type: 1, children: directBlocks.map((block) => block.block_id!) },
+      ...directBlocks,
+      ...descendants
+    ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: final ? fixture.nestedMarkdown : fixture.malformedMarkdown,
+        revision: final ? '39' : '38'
+      }),
+      fetchDocBlocks: async () => ({ blocks: currentBlocks() }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {
+        throw new Error('nested tree create must not use composite Markdown or XML insertion');
+      },
+      createChildBlocks: async ({ parentBlockId, index, blocks, clientToken }) => {
+        calls.push(`create:${parentBlockId}:${index}:${blocks.length}:${clientToken}`);
+        if (parentBlockId === 'doc_token') {
+          expect(index).toBe(2);
+          expect(blocks).toHaveLength(3);
+          expect(blocks.every((block) => !block.children)).toBe(true);
+          const anchorIndex = directBlocks.findIndex((block) => block.block_id === 'baseline-2');
+          if (anchorIndex < 0) throw new Error('malformed recovery anchor missing');
+          const created = desired.roots.map((root) => ({ ...root, parent_id: 'doc_token', children: undefined }));
+          directBlocks.splice(anchorIndex + 1, 0, ...created);
+          return { blocks: created };
+        }
+        const expected = desiredChildren.get(parentBlockId);
+        if (!expected) throw new Error(`unexpected tree parent ${parentBlockId}`);
+        expect(index).toBe(0);
+        expect(blocks).toHaveLength(expected.length);
+        expect(blocks.every((block) => !block.children)).toBe(true);
+        const parent = directBlocks.find((block) => block.block_id === parentBlockId);
+        if (!parent) throw new Error(`tree parent ${parentBlockId} is missing`);
+        const created = expected.map((block) => ({ ...block, parent_id: parentBlockId, children: undefined }));
+        parent.children = created.map((block) => block.block_id!);
+        descendants = [...descendants, ...created];
+        return { blocks: created };
+      },
+      deleteBlocks: async ({ blockIds }) => {
+        calls.push(`delete:${blockIds.join(',')}`);
+        expect(blockIds).toEqual(fixture.malformedRootIds.concat(fixture.oldFlatIds));
+        const deleting = new Set([...blockIds, ...fixture.malformedChildIds]);
+        directBlocks = directBlocks.filter((block) => !block.block_id || !deleting.has(block.block_id));
+        descendants = descendants.filter((block) => !block.block_id || !deleting.has(block.block_id));
+        final = true;
+      },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(calls).toHaveLength(5);
+    expect(calls[0]).toMatch(/^create:doc_token:2:3:/);
+    expect(calls[1]).toMatch(/^create:recovered-1:0:2:/);
+    expect(calls[2]).toMatch(/^create:recovered-4:0:6:/);
+    expect(calls[3]).toMatch(/^create:recovered-11:0:1:/);
+    expect(calls[4]).toBe(`delete:${fixture.malformedRootIds.concat(fixture.oldFlatIds).join(',')}`);
+    expect(new Set(calls.slice(0, 4).map((call) => call.split(':').at(-1))).size).toBe(4);
+    expect(directBlocks.map((block) => block.block_id)).toEqual([
+      'baseline-1', 'baseline-2', 'recovered-1', 'recovered-4', 'recovered-11', 'baseline-15', 'baseline-16'
+    ]);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: fixture.target })).resolves.toMatchObject({
+      version: 4,
+      remoteRevision: '39'
+    });
+  });
+
+  it('reports exact created root IDs and keeps deletes pending when staged child creation fails', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const initialPage = fixture.malformedBlocks[0]!;
+    const initialById = new Map(fixture.malformedBlocks.flatMap((block) => {
+      return block.block_id ? [[block.block_id, block] as const] : [];
+    }));
+    let directBlocks = (initialPage.children as string[]).map((blockId) => initialById.get(blockId)!);
+    const descendants = fixture.malformedBlocks.filter((block) => {
+      return block.block_id && block.block_id !== 'doc_token' && !directBlocks.includes(block);
+    });
+    const desired = materializeTextBlockTrees(nestedHierarchyCreateMarkdown(), 'partial');
+    let deletes = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: fixture.malformedMarkdown, revision: '38' }),
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: directBlocks.map((block) => block.block_id!) },
+          ...directBlocks,
+          ...descendants
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {
+        throw new Error('composite insertion is forbidden');
+      },
+      createChildBlocks: async ({ parentBlockId }) => {
+        if (parentBlockId !== 'doc_token') throw new Error('simulated child batch failure');
+        const roots = desired.roots.map((root) => ({ ...root, parent_id: 'doc_token', children: undefined }));
+        const anchorIndex = directBlocks.findIndex((block) => block.block_id === 'baseline-2');
+        directBlocks.splice(anchorIndex + 1, 0, ...roots);
+        return { blocks: roots };
+      },
+      deleteBlocks: async () => { deletes += 1; },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    })).rejects.toMatchObject({
+      completedOperations: [expect.objectContaining({
+        kind: 'create',
+        parentBlockId: 'doc_token',
+        blockIds: desired.roots.map((block) => block.block_id!)
+      })],
+      failedOperation: expect.objectContaining({ kind: 'scoped-readback' }),
+      pendingOperations: [expect.objectContaining({ kind: 'delete' })],
+      receiptWritten: false
+    });
+    expect(deletes).toBe(0);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: fixture.target })).resolves.toMatchObject({
+      version: 3
+    });
+  });
+
+  it('replans an exact staged-root partial create ahead of both revision 39 malformed sets', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const page = fixture.malformedBlocks[0]!;
+    const second = materializeTextBlockTrees(malformedHierarchyCreateMarkdown(), 'malformed2');
+    const partial = materializeTextBlockTrees(nestedHierarchyCreateMarkdown(), 'partial');
+    const partialRoots = partial.roots.map((root) => ({ ...root, parent_id: 'doc_token', children: undefined }));
+    const existingDirectIds = page.children as string[];
+    const directIds = [
+      ...existingDirectIds.slice(0, 2),
+      ...partialRoots.map((block) => block.block_id!),
+      ...second.roots.map((block) => block.block_id!),
+      ...existingDirectIds.slice(2)
+    ];
+    const remoteBlocks = [
+      { ...page, children: directIds },
+      ...fixture.malformedBlocks.slice(1),
+      ...partialRoots,
+      ...second.roots,
+      ...second.descendants
+    ];
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: multiHierarchyMarkdownWithMalformedAttempts(2), revision: '40' }),
+        fetchDocBlocks: async () => ({ blocks: remoteBlocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.scopedPatch?.operations).toEqual([
+      expect.objectContaining({ kind: 'create', insertAfterBlockId: 'baseline-2' }),
+      expect.objectContaining({
+        kind: 'delete',
+        blockIds: [
+          ...partialRoots.map((block) => block.block_id!),
+          ...second.roots.map((block) => block.block_id!),
+          ...fixture.malformedRootIds,
+          ...fixture.oldFlatIds
+        ],
+        recovery: expect.objectContaining({
+          expectedDescendantBlockIds: [
+            ...second.descendants.map((block) => block.block_id!),
+            ...fixture.malformedChildIds
+          ]
+        })
+      })
+    ]);
+  });
+
+  it('blocks staged-root recovery when one created root changed remotely', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const page = fixture.malformedBlocks[0]!;
+    const partial = materializeTextBlockTrees(nestedHierarchyCreateMarkdown(), 'partial');
+    const partialRoots = partial.roots.map((root, index) => index === 1
+      ? markdownBlock(root.block_id!, '- Teammate changed this root.')
+      : { ...root, parent_id: 'doc_token', children: undefined });
+    const existingDirectIds = page.children as string[];
+    const remoteBlocks = [
+      {
+        ...page,
+        children: [
+          ...existingDirectIds.slice(0, 2),
+          ...partialRoots.map((block) => block.block_id!),
+          ...existingDirectIds.slice(2)
+        ]
+      },
+      ...fixture.malformedBlocks.slice(1),
+      ...partialRoots
+    ];
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: fixture.malformedMarkdown, revision: '40' }),
+        fetchDocBlocks: async () => ({ blocks: remoteBlocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.zdocRoundTrip?.safeToPublish).toBe(false);
+  });
+
+  it('fails closed when a malformed nested create child drifts before recovery', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const drifted = fixture.malformedBlocks.map((block) => block.block_id === 'malformed-4'
+      ? markdownBlock('malformed-4', '- Teammate changed nested two.')
+      : block);
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({
+          markdown: fixture.malformedMarkdown.replace('Nested two.', 'Teammate changed nested two.'),
+          revision: '39'
+        }),
+        fetchDocBlocks: async () => ({ blocks: drifted }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.zdocRoundTrip).toMatchObject({ safeToPublish: false });
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-ambiguous',
+      severity: 'blocker'
+    }));
+  });
+
+  it('fails preflight before malformed recovery writes when a reviewed child ID changes', async () => {
+    const fixture = await createMalformedHierarchyRecoveryFixture();
+    const drifted = fixture.malformedBlocks.flatMap((block) => {
+      if (block.block_id === 'malformed-2') {
+        return [{
+          ...block,
+          children: (block.children as string[]).map((blockId) => {
+            return blockId === 'malformed-4' ? 'malformed-4b' : blockId;
+          })
+        }];
+      }
+      if (block.block_id === 'malformed-4') {
+        return [{ ...block, block_id: 'malformed-4b' }];
+      }
+      return [block];
+    });
+    let reads = 0;
+    let writes = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: fixture.malformedMarkdown, revision: '38' }),
+      fetchDocBlocks: async () => ({
+        blocks: (reads += 1) === 1 ? fixture.malformedBlocks : drifted
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => { writes += 1; },
+      insertBlocksAfter: async () => { writes += 1; },
+      deleteBlocks: async () => { writes += 1; },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: fixture.target,
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    })).rejects.toThrow('partial-create recovery preflight failed: malformed tree child identity changed');
+    expect(writes).toBe(0);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: fixture.target })).resolves.toMatchObject({
+      version: 3
+    });
+  });
+
+  it('updates and verifies a nested child without replacing its parent list block', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-nested-list-update-'));
+    const markdownPath = join(dir, 'doc.md');
+    const baseline = nestedChildMarkdown('Child paragraph.');
+    const desired = nestedChildMarkdown('Updated child paragraph.');
+    await writeFile(markdownPath, desired, 'utf8');
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd: dir, target, markdown: baseline });
+    const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+      cwd: dir,
+      target,
+      document: remoteSemanticDocument(nestedChildBlocks('Child paragraph.'), 'doc_token')
+    });
+    await writePublishReceipt({
+      cwd: dir,
+      receipt: {
+        version: 3,
+        target,
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        localSourceHash: hashText(baseline),
+        publishDraftHash: hashText(baseline),
+        remoteSnapshotHash: hashText(baseline),
+        localBaseSnapshot,
+        remoteSemanticSnapshot,
+        updatedAt: '2026-07-17T00:00:00.000Z'
+      }
+    });
+    let child = 'Child paragraph.';
+    const replacements: Array<{ blockId: string; content: string }> = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: nestedChildMarkdown(child), revision: child.startsWith('Updated') ? '3' : '2' }),
+      fetchDocBlocks: async () => ({ blocks: nestedChildBlocks(child) }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        replacements.push({ blockId, content });
+        child = content;
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(replacements).toEqual([{ blockId: 'child', content: 'Updated child paragraph.' }]);
+    expect(nestedChildBlocks(child)[1]).toMatchObject({ block_id: 'parent', children: ['child', 'nested'] });
+    await expect(readPublishReceipt({ cwd: dir, target })).resolves.toMatchObject({ version: 4 });
   });
 
   it('creates Procedures tokens without rewriting ordinary text', async () => {
@@ -2851,6 +3580,1398 @@ After.`, 'utf8');
     ]);
   });
 
+  it('preserves a tracked Whiteboard for an unchanged direct SVG during Zdoc text updates', async () => {
+    const fixture = await createTrackedDirectSvgFixture({
+      baselineText: 'Old surrounding text.',
+      currentText: 'Updated surrounding text.'
+    });
+    const adapter = trackedDirectSvgAdapter({ text: 'Old surrounding text.' });
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toContainEqual(expect.objectContaining({
+      kind: 'update',
+      desiredMarkdown: 'Updated surrounding text.'
+    }));
+    expect(result.plan.whiteboards?.operations).toEqual([]);
+    expect(result.plan.whiteboards?.assets).toEqual([expect.objectContaining({
+      assetKey: 'images/flow.png',
+      state: 'clean',
+      action: 'preserve tracked whiteboard',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    })]);
+  });
+
+  it('blocks a changed tracked direct SVG without explicit Whiteboard intent', async () => {
+    const fixture = await createTrackedDirectSvgFixture({
+      baselineText: 'Surrounding text.',
+      currentText: 'Surrounding text.',
+      currentSvg: '<svg viewBox="0 0 10 10"><text>Updated flow</text></svg>'
+    });
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: trackedDirectSvgAdapter({ text: 'Surrounding text.' })
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({
+      code: 'protected-whiteboard-local-changed',
+      assetKey: 'images/flow.png'
+    }));
+    expect(result.plan.whiteboards?.operations).toEqual([]);
+  });
+
+  it('requires Whiteboard opt-in and asset-specific confirmation to update a tracked direct SVG', async () => {
+    const fixture = await createTrackedDirectSvgFixture({
+      baselineText: 'Surrounding text.',
+      currentText: 'Surrounding text.',
+      currentSvg: '<svg viewBox="0 0 10 10"><text>Updated flow</text></svg>'
+    });
+    let updates = 0;
+    const adapter: FeishuAdapter = {
+      ...trackedDirectSvgAdapter({ text: 'Surrounding text.' }),
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Flow') }),
+      updateWhiteboard: async () => { updates += 1; }
+    };
+
+    const unconfirmed = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      adapter
+    });
+    expect(unconfirmed.plan.strategy).toBe('blocked');
+    expect(unconfirmed.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({
+      code: 'protected-whiteboard-overwrite-confirmation-required'
+    }));
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    })).rejects.toThrow('Scoped publish is blocked');
+    expect(updates).toBe(0);
+
+    const confirmed = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+    expect(confirmed.plan.strategy).toBe('block-patch');
+    expect(confirmed.plan.requiredRemoteWhiteboardOverwrites).toEqual(['images/flow.png']);
+    expect(confirmed.plan.whiteboards?.operations).toEqual([expect.objectContaining({
+      kind: 'whiteboard-update',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token',
+      reason: 'confirmed-protected-overwrite'
+    })]);
+  });
+
+  it('plans mixed text replacement with a confirmed protected Whiteboard update', async () => {
+    const fixture = await createMixedTextProtectedWhiteboardFixture();
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: fixture.remoteMarkdown, revision: '2' }),
+      fetchDocBlocks: async () => ({ blocks: fixture.remoteBlocks }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Flow') }),
+      updateWhiteboard: async () => {}
+    };
+
+    const protectedOnly = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+    expect(protectedOnly.plan.strategy).toBe('blocked');
+    expect(protectedOnly.plan.scopedPatch?.blockers).toEqual([]);
+    expect(protectedOnly.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({
+      code: 'protected-whiteboard-local-changed',
+      assetKey: 'images/flow.png'
+    }));
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'update',
+        remoteBlockId: 'intro',
+        desiredMarkdown: 'Intro [integration](https://example.feishu.cn/wiki/english).'
+      }),
+      expect.objectContaining({
+        kind: 'create',
+        insertAfterBlockId: 'before',
+        desiredMarkdown: expect.stringContaining('**Create credentials**')
+      }),
+      expect.objectContaining({
+        kind: 'delete',
+        blockIds: ['old-1', 'old-2', 'old-3', 'duplicate']
+      })
+    ]));
+    expect(result.plan.whiteboards?.operations).toEqual([expect.objectContaining({
+      kind: 'whiteboard-update',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    })]);
+    expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(result.plan.requiredRemoteWhiteboardOverwrites).toEqual(['images/flow.png']);
+  });
+
+  it('uses the dialect-resolved Feishu URL inside a mixed scoped create', async () => {
+    const fixture = await createMixedTextProtectedWhiteboardFixture({ relativeDetailsLink: true });
+    const resolvedUrl = 'https://example.feishu.cn/wiki/B1cSwfWcri4VJLkCR20cHIs6nCf';
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: fixture.remoteMarkdown, revision: '2' }),
+      fetchDocBlocks: async () => ({ blocks: fixture.remoteBlocks }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Flow') }),
+      updateWhiteboard: async () => {},
+      resolveBaseUrl: async () => ({ baseToken: 'base_token' }),
+      fetchBaseTables: async () => [{ id: 'tbl_docs', name: 'Docs' }],
+      fetchBaseRecords: async () => [{
+        recordId: 'rec1',
+        fields: {
+          Slug: 'integrate-with-model-providers',
+          Docs: `[Integrate with Model Providers](${resolvedUrl})`,
+          'Placement Type': ['canonical']
+        }
+      }],
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      dialect: 'zdoc-authoring',
+      dialectConfig: {
+        linkResolver: {
+          type: 'lark-base',
+          baseUrl: 'https://example.feishu.cn/base/base_token',
+          keyField: 'Slug',
+          urlField: 'Docs',
+          placementTypeField: 'Placement Type',
+          acceptedPlacementTypes: ['canonical']
+        }
+      },
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    const create = result.plan.scopedPatch?.operations.find((operation) => operation.kind === 'create');
+    expect(create).toMatchObject({ kind: 'create' });
+    if (!create || create.kind !== 'create') throw new Error('mixed create operation missing');
+    expect(create.desiredMarkdown).toContain(`[Integrate with Model Providers](${resolvedUrl})`);
+    expect(create.desiredMarkdown).not.toContain('./integrate-with-model-providers');
+    expect(create.desiredBlocks).toContainEqual(expect.objectContaining({
+      markdown: expect.stringContaining(`For details, see [Integrate with Model Providers](${resolvedUrl}).`)
+    }));
+  });
+
+  it('reports resolved-link create readback loss with recoverable pending operations and no new receipt', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    let directBlocks = fixture.baselineRemoteBlocks.slice(1);
+    let nestedChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] = [];
+    let created = false;
+    let requestedMarkdown = '';
+    const counter = { value: 0 };
+    const currentBlocks = () => [
+      {
+        block_id: 'doc_token',
+        block_type: 1,
+        children: directBlocks.flatMap((block) => block.block_id ? [block.block_id] : [])
+      },
+      ...directBlocks,
+      ...nestedChildren
+    ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: created ? fixture.partialRemoteMarkdown : fixture.baselineRemoteMarkdown,
+        revision: created ? '33' : '31'
+      }),
+      fetchDocBlocks: async () => ({ blocks: currentBlocks() }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        const replacement = markdownToFeishuBlocks(content)[0];
+        if (!replacement) throw new Error('partial create intro replacement missing');
+        directBlocks = directBlocks.map((block) => block.block_id === blockId
+          ? { ...replacement, block_id: blockId }
+          : block);
+      },
+      insertBlocksAfter: async () => {
+        throw new Error('nested resolved-link create must use explicit child creation');
+      },
+      createChildBlocks: async ({ parentBlockId, index, blocks }) => {
+        requestedMarkdown += feishuBlocksToMarkdown(blocks);
+        const createdBlocks = createChildBlocksInMemory({
+          documentId: 'doc_token',
+          directBlocks,
+          descendants: nestedChildren,
+          parentBlockId,
+          index,
+          blocks,
+          prefix: 'created',
+          counter,
+          transform: (block) => {
+            if (!feishuBlocksToMarkdown([block]).includes('For details, see')) return block;
+            return {
+              ...markdownBlock(block.block_id!, 'For details, see Integrate with Model Providers.'),
+              parent_id: block.parent_id
+            };
+          }
+        });
+        created = true;
+        return { blocks: createdBlocks };
+      },
+      deleteBlocks: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Flow') }),
+      updateWhiteboard: async () => {},
+      resolveBaseUrl: async () => ({ baseToken: 'base_token' }),
+      fetchBaseTables: async () => [{ id: 'tbl_docs', name: 'Docs' }],
+      fetchBaseRecords: async () => [{
+        recordId: 'rec1',
+        fields: {
+          Slug: 'integrate-with-model-providers',
+          Docs: `[Integrate with Model Providers](${fixture.resolvedUrl})`,
+          'Placement Type': ['canonical']
+        }
+      }],
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    let thrown: unknown;
+    try {
+      await runPublish({
+        cwd: fixture.dir,
+        file: fixture.markdownPath,
+        target: { kind: 'docx', token: 'doc_token' },
+        profile: 'zilliz',
+        dialect: 'zdoc-authoring',
+        dialectConfig: fixture.dialectConfig,
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        syncWhiteboards: true,
+        confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+        adapter
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(requestedMarkdown).toContain(`[Integrate with Model Providers](${fixture.resolvedUrl})`);
+    expect(requestedMarkdown).not.toContain('./integrate-with-model-providers');
+    expect(thrown).toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [
+        expect.objectContaining({ kind: 'update' }),
+        expect.objectContaining({ kind: 'create' })
+      ],
+      failedOperation: expect.objectContaining({ kind: 'scoped-readback' }),
+      pendingOperations: expect.arrayContaining([
+        expect.objectContaining({ kind: 'table-create' }),
+        expect.objectContaining({ kind: 'whiteboard-update' }),
+        expect.objectContaining({ kind: 'delete' })
+      ]),
+      receiptWritten: false
+    });
+    await expect(readPublishReceipt({
+      cwd: fixture.dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({ version: 3 });
+  });
+
+  it('recovers an exact completed mixed create plus unchanged baseline suffix after readback failure', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: fixture.partialRemoteMarkdown, revision: '33' }),
+      fetchDocBlocks: async () => ({ blocks: fixture.partialRemoteBlocks }),
+      replaceDocument: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Flow') }),
+      updateWhiteboard: async () => {},
+      resolveBaseUrl: async () => ({ baseToken: 'base_token' }),
+      fetchBaseTables: async () => [{ id: 'tbl_docs', name: 'Docs' }],
+      fetchBaseRecords: async () => [{
+        recordId: 'rec1',
+        fields: {
+          Slug: 'integrate-with-model-providers',
+          Docs: `[Integrate with Model Providers](${fixture.resolvedUrl})`,
+          'Placement Type': ['canonical']
+        }
+      }],
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      dialect: 'zdoc-authoring',
+      dialectConfig: fixture.dialectConfig,
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.scopedPatch?.operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'create',
+        insertAfterBlockId: 'before-intro',
+        desiredMarkdown: expect.stringContaining(
+          `For details, see [Integrate with Model Providers](${fixture.resolvedUrl}).`
+        )
+      }),
+      expect.objectContaining({
+        kind: 'delete',
+        locator: { sectionPath: ['Before you start'], kind: 'text', ordinal: 2 },
+        blockIds: expect.arrayContaining(['created-1', 'created-12', 'old-1', 'old-2', 'old-3'])
+      }),
+      expect.objectContaining({
+        kind: 'table-create',
+        insertAfterBlockId: 'params-intro',
+        insertBeforeBlockId: 'provider-primary'
+      }),
+      expect.objectContaining({ kind: 'delete', blockIds: ['provider-duplicate'] })
+    ]));
+    expect(result.plan.scopedPatch?.operations).not.toContainEqual(expect.objectContaining({
+      kind: 'update',
+      remoteBlockId: fixture.detailsBlockId
+    }));
+    expect(result.plan.scopedPatch?.scopeSummary.overlappingConflicts).toEqual([]);
+    expect(result.plan.whiteboards?.operations).toContainEqual(expect.objectContaining({
+      kind: 'whiteboard-update',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    }));
+    expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(result.plan.requiredRemoteWhiteboardOverwrites).toEqual(['images/flow.png']);
+  });
+
+  it('recovers an exact completed native table create after a later Whiteboard failure', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    let directBlocks = fixture.partialRemoteBlocks.slice(1);
+    let nestedChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] = [];
+    let tableChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] = [];
+    let hierarchyCreated = false;
+    let tableCreated = false;
+    let deleteCalls = 0;
+    const treeCounter = { value: 0 };
+    const currentBlocks = () => [
+      {
+        block_id: 'doc_token',
+        block_type: 1,
+        children: directBlocks.flatMap((block) => block.block_id ? [block.block_id] : [])
+      },
+      ...directBlocks,
+      ...nestedChildren,
+      ...tableChildren
+    ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: tableCreated
+          ? fixture.tableCreatedRemoteMarkdown
+          : hierarchyCreated
+            ? fixture.linkRepairedRemoteMarkdown
+            : fixture.partialRemoteMarkdown,
+        revision: tableCreated ? '35' : '33'
+      }),
+      fetchDocBlocks: async () => ({ blocks: currentBlocks() }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        const replacement = markdownToFeishuBlocks(content)[0];
+        if (!replacement) throw new Error('table recovery link replacement missing');
+        directBlocks = directBlocks.map((block) => block.block_id === blockId
+          ? { ...replacement, block_id: blockId }
+          : block);
+      },
+      insertBlocksAfter: async ({ blockId, content, format }) => {
+        expect(blockId).toBe('params-intro');
+        expect(format).toBe('xml');
+        expect(content).toMatch(/^<table>/);
+        const [root, ...children] = feishuTableBlocks([
+          ['name', 'Function name.'],
+          ['input_field_names', 'Source fields.'],
+          ['output_field_names', 'Output fields.'],
+          ['function_type', 'Function type.'],
+          ['params', 'Provider parameters.']
+        ], 'params-table', true);
+        const anchorIndex = directBlocks.findIndex((block) => block.block_id === blockId);
+        if (!root || anchorIndex < 0) throw new Error('table recovery insert anchor missing');
+        directBlocks.splice(anchorIndex + 1, 0, root);
+        tableChildren = children;
+        tableCreated = true;
+      },
+      createChildBlocks: async ({ parentBlockId, index, blocks }) => {
+        const created = createChildBlocksInMemory({
+          documentId: 'doc_token',
+          directBlocks,
+          descendants: nestedChildren,
+          parentBlockId,
+          index,
+          blocks,
+          prefix: 'recovered',
+          counter: treeCounter
+        });
+        hierarchyCreated = true;
+        return { blocks: created };
+      },
+      deleteBlocks: async () => { deleteCalls += 1; },
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Flow') }),
+      updateWhiteboard: async () => {
+        throw new Error('doc data is not ready: resource error: whiteboard');
+      },
+      resolveBaseUrl: async () => ({ baseToken: 'base_token' }),
+      fetchBaseTables: async () => [{ id: 'tbl_docs', name: 'Docs' }],
+      fetchBaseRecords: async () => [{
+        recordId: 'rec1',
+        fields: {
+          Slug: 'integrate-with-model-providers',
+          Docs: `[Integrate with Model Providers](${fixture.resolvedUrl})`,
+          'Placement Type': ['canonical']
+        }
+      }],
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    let thrown: unknown;
+    try {
+      await runPublish({
+        cwd: fixture.dir,
+        file: fixture.markdownPath,
+        target: { kind: 'docx', token: 'doc_token' },
+        profile: 'zilliz',
+        dialect: 'zdoc-authoring',
+        dialectConfig: fixture.dialectConfig,
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        syncWhiteboards: true,
+        confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+        adapter
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [
+        expect.objectContaining({ kind: 'create' }),
+        expect.objectContaining({ kind: 'table-create' })
+      ],
+      failedOperation: expect.objectContaining({ kind: 'whiteboard-update' }),
+      pendingOperations: [
+        expect.objectContaining({
+          kind: 'delete',
+          locator: { sectionPath: ['Before you start'], kind: 'text', ordinal: 2 }
+        }),
+        expect.objectContaining({
+          kind: 'delete',
+          locator: { sectionPath: ['Define the text embedding function'], kind: 'text', ordinal: 3 }
+        })
+      ],
+      receiptWritten: false
+    });
+    expect(deleteCalls).toBe(0);
+    await expect(readPublishReceipt({
+      cwd: fixture.dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({ version: 3 });
+
+    const recovery = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      dialect: 'zdoc-authoring',
+      dialectConfig: fixture.dialectConfig,
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    expect(recovery.plan.strategy).toBe('block-patch');
+    expect(recovery.plan.scopedPatch?.blockers).toEqual([]);
+    expect(recovery.plan.scopedPatch?.scopeSummary.overlappingConflicts).toEqual([]);
+    expect(recovery.plan.scopedPatch?.operations).toEqual([
+      expect.objectContaining({
+        kind: 'delete',
+        blockIds: expect.arrayContaining(['created-1', 'created-12', 'old-1', 'old-2', 'old-3'])
+      }),
+      expect.objectContaining({ kind: 'delete', blockIds: ['provider-duplicate'] })
+    ]);
+    expect(recovery.plan.scopedPatch?.operations).not.toContainEqual(expect.objectContaining({ kind: 'table-create' }));
+    expect(recovery.plan.whiteboards?.operations).toEqual([expect.objectContaining({
+      kind: 'whiteboard-update',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    })]);
+    expect(recovery.plan.requiredRemoteWhiteboardOverwrites).toEqual(['images/flow.png']);
+    expect(recovery.plan.requiresCollaborationRiskConfirmation).toBe(true);
+  });
+
+  it('blocks completed table-create recovery when the native table content drifted', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    const state = completedTableRecoveryState(fixture);
+    const changed = 'Function description changed remotely.';
+    const cellIndex = state.blocks.findIndex((block) => feishuBlocksToMarkdown([block]).includes('Function name.'));
+    const cell = state.blocks[cellIndex];
+    if (!cell?.block_id) throw new Error('completed table content drift cell missing');
+    state.blocks[cellIndex] = textBlock(cell.block_id, changed);
+
+    const result = await runCompletedTableRecoveryDryRun(
+      fixture,
+      state.blocks,
+      fixture.tableCreatedRemoteMarkdown.replace('Function name.', changed)
+    );
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-drift',
+      component: 'Table',
+      severity: 'blocker'
+    }));
+  });
+
+  it('blocks completed table-create recovery when native table marks drifted', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    const state = completedTableRecoveryState(fixture);
+    const cellIndex = state.blocks.findIndex((block) => feishuBlocksToMarkdown([block]).includes('Function name.'));
+    const cell = state.blocks[cellIndex];
+    if (!cell?.block_id) throw new Error('completed table marks drift cell missing');
+    state.blocks[cellIndex] = markdownBlock(cell.block_id, '**Function name.**');
+
+    const result = await runCompletedTableRecoveryDryRun(
+      fixture,
+      state.blocks,
+      fixture.tableCreatedRemoteMarkdown.replace('Function name.', '**Function name.**')
+    );
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-drift',
+      component: 'Table',
+      severity: 'blocker'
+    }));
+  });
+
+  it('blocks completed table-create recovery when the native table moved outside its reviewed anchors', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    const state = completedTableRecoveryState(fixture);
+    const tableIndex = state.directBlocks.findIndex((block) => block.block_id === 'params-table');
+    const [table] = state.directBlocks.splice(tableIndex, 1);
+    const providerIndex = state.directBlocks.findIndex((block) => block.block_id === 'provider-primary');
+    if (!table || tableIndex < 0 || providerIndex < 0) throw new Error('completed table move fixture missing');
+    state.directBlocks.splice(providerIndex + 1, 0, table);
+    const blocks = completedTableBlocks(state.directBlocks, state.tableChildren);
+    const movedMarkdown = fixture.linkRepairedRemoteMarkdown.replace(
+      `The following table describes the parameters.\n\n${fixture.provider}`,
+      `The following table describes the parameters.\n\n${fixture.provider}\n\n${fixture.tableMarkdown}`
+    );
+
+    const result = await runCompletedTableRecoveryDryRun(fixture, blocks, movedMarkdown);
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-drift',
+      component: 'Table',
+      severity: 'blocker'
+    }));
+  });
+
+  it('blocks completed table-create recovery when an adjacent anchor changed remotely', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    const state = completedTableRecoveryState(fixture);
+    const changedProvider = `${fixture.provider} A teammate added this sentence.`;
+    const providerIndex = state.directBlocks.findIndex((block) => block.block_id === 'provider-primary');
+    if (providerIndex < 0) throw new Error('completed table following anchor missing');
+    state.directBlocks[providerIndex] = markdownBlock('provider-primary', changedProvider);
+    const blocks = completedTableBlocks(state.directBlocks, state.tableChildren);
+
+    const result = await runCompletedTableRecoveryDryRun(
+      fixture,
+      blocks,
+      fixture.tableCreatedRemoteMarkdown.replace(fixture.provider, changedProvider)
+    );
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-drift',
+      component: 'Table',
+      severity: 'blocker'
+    }));
+  });
+
+  it('blocks partial-create recovery when an extra remote block is present', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    const direct = fixture.partialRemoteBlocks.slice(1);
+    const oldStart = direct.findIndex((block) => block.block_id === 'old-1');
+    direct.splice(oldStart, 0, markdownBlock('teammate-extra', 'A teammate added this paragraph.'));
+    const blocks = [
+      { block_id: 'doc_token', block_type: 1, children: direct.map((block) => block.block_id!) },
+      ...direct
+    ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    const remoteMarkdown = fixture.partialRemoteMarkdown.replace(
+      '\n\n- Create credentials in the provider console.\n- Grant the required permissions.',
+      '\n\nA teammate added this paragraph.\n\n- Create credentials in the provider console.\n- Grant the required permissions.'
+    );
+    const adapter = recoveryPlanningAdapter(fixture, blocks, remoteMarkdown);
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      dialect: 'zdoc-authoring',
+      dialectConfig: fixture.dialectConfig,
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.scopedPatch?.safeToWrite).toBe(false);
+    expect(result.plan.scopedPatch?.warnings).not.toContainEqual(expect.stringContaining('recovering exact completed scoped create'));
+  });
+
+  it('blocks partial-create recovery when an ordinary created nested paragraph drifted', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    const expected = 'Grant the required permissions.';
+    const drifted = 'Grant the required permissions and rotate them weekly.';
+    let driftedBlockId: string | undefined;
+    const blocks = fixture.partialRemoteBlocks.map((block) => {
+      if (feishuBlocksToMarkdown([block]).trim() !== expected) return block;
+      driftedBlockId = block.block_id;
+      return markdownBlock(block.block_id!, drifted);
+    });
+    if (!driftedBlockId) throw new Error('nested drift fixture block missing');
+    const remoteMarkdown = fixture.partialRemoteMarkdown.replace(expected, drifted);
+    const adapter = recoveryPlanningAdapter(fixture, blocks, remoteMarkdown);
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      dialect: 'zdoc-authoring',
+      dialectConfig: fixture.dialectConfig,
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.scopedPatch?.safeToWrite).toBe(false);
+    expect(result.plan.scopedPatch?.blockers).not.toEqual([]);
+    expect(result.plan.scopedPatch?.warnings).not.toContainEqual(expect.stringContaining('recovering exact completed scoped create'));
+  });
+
+  it('fails closed before flattened hierarchy recovery when its reviewed remote block drifted', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    let blockReads = 0;
+    let writes = 0;
+    const driftedBlocks = fixture.partialRemoteBlocks.map((block) => {
+      return block.block_id === fixture.detailsBlockId
+        ? markdownBlock(fixture.detailsBlockId, 'A teammate changed this paragraph.')
+        : block;
+    });
+    const adapter = recoveryPlanningAdapter(fixture, fixture.partialRemoteBlocks, fixture.partialRemoteMarkdown);
+    adapter.fetchDocBlocks = async () => ({
+      blocks: (blockReads += 1) === 1 ? fixture.partialRemoteBlocks : driftedBlocks
+    });
+    adapter.replaceBlock = async () => { writes += 1; };
+    adapter.insertBlocksAfter = async () => { writes += 1; };
+    adapter.deleteBlocks = async () => { writes += 1; };
+    adapter.updateWhiteboard = async () => { writes += 1; };
+
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      dialect: 'zdoc-authoring',
+      dialectConfig: fixture.dialectConfig,
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    })).rejects.toThrow('partial-create recovery preflight failed: flattened sequence content changed');
+    expect(writes).toBe(0);
+    await expect(readPublishReceipt({
+      cwd: fixture.dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({ version: 3 });
+  });
+
+  it('writes the exact partial-create recovery and records a receipt only after final readback', async () => {
+    const fixture = await createMixedCreateRecoveryFixture();
+    let directBlocks = fixture.partialRemoteBlocks.slice(1);
+    let nestedChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] = [];
+    let tableChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] = [];
+    let remoteRaw: unknown = whiteboardTextRaw('Flow');
+    let written = false;
+    const calls: string[] = [];
+    const treeCounter = { value: 0 };
+    const currentBlocks = () => [
+      {
+        block_id: 'doc_token',
+        block_type: 1,
+        children: directBlocks.flatMap((block) => block.block_id ? [block.block_id] : [])
+      },
+      ...directBlocks,
+      ...nestedChildren,
+      ...tableChildren
+    ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: written ? fixture.finalRemoteMarkdown : fixture.partialRemoteMarkdown,
+        revision: written ? '34' : '33'
+      }),
+      fetchDocBlocks: async () => ({ blocks: currentBlocks() }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        calls.push(`replace:${blockId}`);
+        const replacement = markdownToFeishuBlocks(content)[0];
+        if (!replacement) throw new Error('recovery replacement block missing');
+        directBlocks = directBlocks.map((block) => block.block_id === blockId
+          ? { ...replacement, block_id: blockId }
+          : block);
+        written = true;
+      },
+      insertBlocksAfter: async ({ blockId, content, format }) => {
+        calls.push(`insert:${blockId}:${format}`);
+        expect(content).toMatch(/^<table>/);
+        const [root, ...children] = feishuTableBlocks([
+          ['name', 'Function name.'],
+          ['input_field_names', 'Source fields.'],
+          ['output_field_names', 'Output fields.'],
+          ['function_type', 'Function type.'],
+          ['params', 'Provider parameters.']
+        ], 'params-table', true);
+        const anchorIndex = directBlocks.findIndex((block) => block.block_id === blockId);
+        if (!root || anchorIndex < 0) throw new Error('recovery table anchor missing');
+        directBlocks.splice(anchorIndex + 1, 0, root);
+        tableChildren = children;
+        written = true;
+      },
+      createChildBlocks: async ({ parentBlockId, index, blocks }) => {
+        calls.push(`create:${parentBlockId}:${blocks.length}`);
+        const created = createChildBlocksInMemory({
+          documentId: 'doc_token',
+          directBlocks,
+          descendants: nestedChildren,
+          parentBlockId,
+          index,
+          blocks,
+          prefix: 'recovered',
+          counter: treeCounter
+        });
+        written = true;
+        return { blocks: created };
+      },
+      deleteBlocks: async ({ blockIds }) => {
+        calls.push(`delete:${blockIds.join(',')}`);
+        const deleting = new Set(blockIds);
+        directBlocks = directBlocks.filter((block) => !block.block_id || !deleting.has(block.block_id));
+        written = true;
+      },
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: remoteRaw }),
+      updateWhiteboard: async () => {
+        calls.push('whiteboard:wb_token');
+        remoteRaw = whiteboardTextRaw('Updated Flow');
+        written = true;
+      },
+      resolveBaseUrl: async () => ({ baseToken: 'base_token' }),
+      fetchBaseTables: async () => [{ id: 'tbl_docs', name: 'Docs' }],
+      fetchBaseRecords: async () => [{
+        recordId: 'rec1',
+        fields: {
+          Slug: 'integrate-with-model-providers',
+          Docs: `[Integrate with Model Providers](${fixture.resolvedUrl})`,
+          'Placement Type': ['canonical']
+        }
+      }],
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'zilliz',
+      dialect: 'zdoc-authoring',
+      dialectConfig: fixture.dialectConfig,
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(calls).toEqual([
+      'create:doc_token:3',
+      'create:recovered-1:2',
+      'create:recovered-2:5',
+      'create:recovered-3:2',
+      'insert:params-intro:xml',
+      'whiteboard:wb_token',
+      'delete:created-1,created-2,created-3,created-4,created-5,created-6,created-7,created-8,created-9,created-10,created-11,created-12,old-1,old-2,old-3',
+      'delete:provider-duplicate'
+    ]);
+    expect(directBlocks.map((block) => block.block_id)).not.toEqual(expect.arrayContaining([
+      'old-1', 'old-2', 'old-3', 'provider-duplicate'
+    ]));
+    expect(directBlocks).toContainEqual(expect.objectContaining({
+      block_id: 'wb_block',
+      block_type: 43,
+      whiteboard: { token: 'wb_token' }
+    }));
+    await expect(readPublishReceipt({
+      cwd: fixture.dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({
+      version: 4,
+      whiteboards: [{ blockId: 'wb_block', whiteboardToken: 'wb_token' }]
+    });
+  });
+
+  it('writes and verifies mixed text replacement without changing protected Whiteboard identity', async () => {
+    const fixture = await createMixedTextProtectedWhiteboardFixture();
+    let directBlocks = fixture.remoteBlocks.slice(1);
+    let written = false;
+    let remoteRaw: unknown = whiteboardTextRaw('Flow');
+    let createdBlock = 0;
+    const treeCounter = { value: 0 };
+    let nestedChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] = [];
+    const currentBlocks = () => [
+      {
+        block_id: 'doc_token',
+        block_type: 1,
+        children: directBlocks.flatMap((block) => block.block_id ? [block.block_id] : [])
+      },
+      ...directBlocks,
+      ...nestedChildren
+    ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: written ? fixture.desiredRemoteMarkdown : fixture.remoteMarkdown,
+        revision: written ? '3' : '2'
+      }),
+      fetchDocBlocks: async () => ({ blocks: currentBlocks() }),
+      replaceDocument: async () => {},
+      replaceBlock: async ({ blockId, content }) => {
+        const replacement = markdownToFeishuBlocks(content)[0];
+        if (!replacement) throw new Error('replacement block missing');
+        directBlocks = directBlocks.map((block) => block.block_id === blockId
+          ? { ...replacement, block_id: blockId }
+          : block);
+        written = true;
+      },
+      insertBlocksAfter: async ({ blockId, content, format }) => {
+        expect(format).toBe('markdown');
+        const materialized = {
+          roots: markdownToFeishuBlocks(content).map((block) => ({
+            ...block,
+            block_id: `created-${createdBlock += 1}`
+          })),
+          descendants: []
+        };
+        const anchorIndex = blockId === 'doc_token'
+          ? -1
+          : directBlocks.findIndex((block) => block.block_id === blockId);
+        if (anchorIndex < -1 || (blockId !== 'doc_token' && anchorIndex < 0)) {
+          throw new Error('insert anchor missing');
+        }
+        directBlocks.splice(anchorIndex + 1, 0, ...materialized.roots);
+        nestedChildren = materialized.descendants;
+        written = true;
+      },
+      createChildBlocks: async ({ parentBlockId, index, blocks }) => {
+        const created = createChildBlocksInMemory({
+          documentId: 'doc_token',
+          directBlocks,
+          descendants: nestedChildren,
+          parentBlockId,
+          index,
+          blocks,
+          prefix: 'tree',
+          counter: treeCounter
+        });
+        written = true;
+        return { blocks: created };
+      },
+      deleteBlocks: async ({ blockIds }) => {
+        const deleting = new Set(blockIds);
+        directBlocks = directBlocks.filter((block) => !block.block_id || !deleting.has(block.block_id));
+        written = true;
+      },
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: remoteRaw }),
+      updateWhiteboard: async () => {
+        remoteRaw = whiteboardTextRaw('Updated Flow');
+        written = true;
+      }
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(directBlocks).toContainEqual(expect.objectContaining({
+      block_id: 'wb_block',
+      block_type: 43,
+      whiteboard: { token: 'wb_token' }
+    }));
+    expect(directBlocks.map((block) => block.block_id)).not.toEqual(expect.arrayContaining([
+      'old-1', 'old-2', 'old-3', 'duplicate'
+    ]));
+    await expect(readPublishReceipt({
+      cwd: fixture.dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({
+      version: 4,
+      whiteboards: [{ blockId: 'wb_block', whiteboardToken: 'wb_token' }]
+    });
+  });
+
+  it('repairs receipt-recorded missing table and duplicate text without changing a protected Whiteboard', async () => {
+    const fixture = await createRecordedRoundTripLossFixture();
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: fixture.remoteMarkdown, revision: '2' }),
+        fetchDocBlocks: async () => ({ blocks: fixture.remoteBlocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('block-patch');
+    expect(result.plan.requiresCollaborationRiskConfirmation).toBe(true);
+    expect(result.plan.scopedPatch?.blockers).toEqual([]);
+    expect(result.plan.scopedPatch?.operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'table-create',
+        insertAfterBlockId: 'params-intro',
+        insertBeforeBlockId: 'provider-primary',
+        locator: { sectionPath: ['Define the text embedding function'], kind: 'table', ordinal: 0 }
+      }),
+      expect.objectContaining({
+        kind: 'delete',
+        blockIds: ['provider-duplicate']
+      })
+    ]));
+    expect(result.plan.zdocRoundTrip?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'round-trip-loss-repair', component: 'Table', severity: 'warning' }),
+      expect.objectContaining({ code: 'round-trip-loss-repair', component: 'Text', severity: 'warning' })
+    ]));
+    expect(result.plan.whiteboards?.operations).toEqual([]);
+    expect(result.plan.whiteboards?.assets).toContainEqual(expect.objectContaining({
+      assetKey: 'images/flow.png',
+      action: 'preserve tracked whiteboard',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    }));
+  });
+
+  it('writes and verifies an anchored native table repair before deleting the recorded duplicate', async () => {
+    const fixture = await createRecordedRoundTripLossFixture();
+    let directBlocks = fixture.remoteBlocks.slice(1);
+    let tableChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] = [];
+    let written = false;
+    const calls: string[] = [];
+    const currentBlocks = () => [
+      {
+        block_id: 'doc_token',
+        block_type: 1,
+        children: directBlocks.flatMap((block) => block.block_id ? [block.block_id] : [])
+      },
+      ...directBlocks,
+      ...tableChildren
+    ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: written ? fixture.desiredRemoteMarkdown : fixture.remoteMarkdown,
+        revision: written ? '3' : '2'
+      }),
+      fetchDocBlocks: async () => ({ blocks: currentBlocks() }),
+      replaceDocument: async () => {},
+      insertBlocksAfter: async ({ blockId, content, format }) => {
+        calls.push(`insert:${blockId}:${format}`);
+        expect(format).toBe('xml');
+        expect(content).toMatch(/^<table>/);
+        const [tableRoot, ...children] = feishuTableBlocks([
+          ['name', 'Function name.'],
+          ['input_field_names', 'Source fields.'],
+          ['output_field_names', 'Output fields.'],
+          ['function_type', 'Function type.'],
+          ['params', 'Provider parameters.']
+        ], 'params-table', true);
+        const anchorIndex = directBlocks.findIndex((block) => block.block_id === blockId);
+        if (!tableRoot || anchorIndex < 0) throw new Error('table insert fixture anchor missing');
+        directBlocks.splice(anchorIndex + 1, 0, tableRoot);
+        tableChildren = children;
+        written = true;
+      },
+      deleteBlocks: async ({ blockIds }) => {
+        calls.push(`delete:${blockIds.join(',')}`);
+        const deleting = new Set(blockIds);
+        directBlocks = directBlocks.filter((block) => !block.block_id || !deleting.has(block.block_id));
+        written = true;
+      },
+      replaceBlock: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(calls).toEqual(['insert:params-intro:xml', 'delete:provider-duplicate']);
+    expect(directBlocks.map((block) => block.block_id)).toEqual(expect.arrayContaining([
+      'wb_block', 'params-intro', 'params-table', 'provider-primary'
+    ]));
+    expect(directBlocks.map((block) => block.block_id)).not.toContain('provider-duplicate');
+    expect(directBlocks.find((block) => block.block_id === 'wb_block')).toMatchObject({
+      block_type: 43,
+      whiteboard: { token: 'wb_token' }
+    });
+  });
+
+  it('fails closed before table creation when the reviewed adjacent anchors drift', async () => {
+    const fixture = await createRecordedRoundTripLossFixture();
+    let blockReads = 0;
+    let inserts = 0;
+    const driftedBlocks = (() => {
+      const direct = fixture.remoteBlocks.slice(1);
+      const anchorIndex = direct.findIndex((block) => block.block_id === 'params-intro');
+      direct.splice(anchorIndex + 1, 0, markdownBlock('interloper', 'A teammate inserted this paragraph.'));
+      return [
+        { block_id: 'doc_token', block_type: 1, children: direct.map((block) => block.block_id!) },
+        ...direct
+      ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+    })();
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: fixture.remoteMarkdown, revision: '2' }),
+      fetchDocBlocks: async () => ({
+        blocks: (blockReads += 1) === 1 ? fixture.remoteBlocks : driftedBlocks
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => { inserts += 1; },
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    })).rejects.toThrow('table-create preflight failed: adjacent anchors no longer match the reviewed plan');
+    expect(inserts).toBe(0);
+  });
+
+  it('blocks a recorded table loss when the local table changed after the receipt', async () => {
+    const fixture = await createRecordedRoundTripLossFixture();
+    const current = await readFile(fixture.markdownPath, 'utf8');
+    await writeFile(fixture.markdownPath, current.replace('Provider parameters.', 'Changed provider parameters.'), 'utf8');
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: fixture.remoteMarkdown, revision: '2' }),
+        fetchDocBlocks: async () => ({ blocks: fixture.remoteBlocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.risks).toContainEqual(expect.stringContaining('changed locally after the receipt'));
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-drift',
+      component: 'Table',
+      severity: 'blocker'
+    }));
+  });
+
+  it('blocks a recorded duplicate loss when the remote duplicate changed after the receipt', async () => {
+    const fixture = await createRecordedRoundTripLossFixture();
+    const changedDuplicate = 'A teammate changed the duplicate provider guidance.';
+    const remoteMarkdown = fixture.remoteMarkdown.replace(
+      `${fixture.provider}\n\n${fixture.provider}`,
+      `${fixture.provider}\n\n${changedDuplicate}`
+    );
+    const remoteBlocks = fixture.remoteBlocks.map((block) => {
+      return block.block_id === 'provider-duplicate'
+        ? markdownBlock('provider-duplicate', changedDuplicate)
+        : block;
+    });
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '3' }),
+        fetchDocBlocks: async () => ({ blocks: remoteBlocks }),
+        replaceDocument: async () => {},
+        createDocument: async () => ({ documentId: 'created' })
+      }
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.risks).toContainEqual(expect.stringContaining('changed remotely after the receipt'));
+    expect(result.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'round-trip-loss-drift',
+      component: 'Text',
+      severity: 'blocker'
+    }));
+  });
+
+  it('blocks tracked direct SVG protection when the remote Whiteboard identity mismatches the receipt', async () => {
+    const fixture = await createTrackedDirectSvgFixture({
+      baselineText: 'Surrounding text.',
+      currentText: 'Updated surrounding text.'
+    });
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: trackedDirectSvgAdapter({
+        text: 'Surrounding text.',
+        whiteboardToken: 'different_token'
+      })
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({
+      code: 'tracked-whiteboard-identity-mismatch'
+    }));
+    expect(result.plan.risks).toContain('scoped publish is blocked; auto will not fall back to document replacement');
+  });
+
+  it('blocks a Zdoc direct SVG when the corresponding remote Whiteboard has no receipt identity', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-whiteboard-untracked-'));
+    const images = join(dir, 'images');
+    const markdownPath = join(dir, 'doc.md');
+    await mkdir(images);
+    await writeFile(markdownPath, 'Surrounding text.\n\n![Flow](./images/flow.svg)', 'utf8');
+    await writeFile(join(images, 'flow.svg'), '<svg viewBox="0 0 10 10"><text>Flow</text></svg>', 'utf8');
+
+    const result = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter: trackedDirectSvgAdapter({ text: 'Surrounding text.' })
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.whiteboards?.blockers).toContainEqual(expect.objectContaining({
+      code: 'tracked-whiteboard-receipt-missing',
+      assetKey: 'images/flow.png'
+    }));
+  });
+
+  it('blocks document replacement when Zdoc receipts protect Whiteboard identity', async () => {
+    const fixture = await createTrackedDirectSvgFixture({
+      baselineText: 'Surrounding text.',
+      currentText: 'Updated surrounding text.'
+    });
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'document-replace',
+      confirmDestructive: false,
+      adapter: trackedDirectSvgAdapter({ text: 'Surrounding text.' })
+    });
+
+    expect(result.plan.strategy).toBe('blocked');
+    expect(result.plan.risks).toContain('document replacement cannot preserve tracked Whiteboard block and token identity');
+  });
+
   it('plans a Whiteboard image replacement during dry-run', async () => {
     const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
     const adapter: FeishuAdapter = {
@@ -3263,6 +5384,571 @@ After.`, 'utf8');
       });
   });
 
+  it('retries a structured applying Whiteboard update with the same idempotency token', async () => {
+    const updatedSvg = '<svg viewBox="0 0 10 10"><text>CAGRA v2</text></svg>';
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)', updatedSvg);
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    await writeTrackedWhiteboardReceipt({
+      cwd: fixture.dir,
+      markdown: '![CAGRA](./assets/cagra.png)',
+      remoteMarkdown,
+      svgHash: hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>'),
+      remoteRaw: whiteboardTextRaw('CAGRA v1')
+    });
+    let remoteRaw: unknown = whiteboardTextRaw('CAGRA v1');
+    const idempotencyTokens: string[] = [];
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remoteMarkdown, revision: '2' }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+        { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+      queryWhiteboard: async () => ({ raw: remoteRaw }),
+      updateWhiteboard: async ({ idempotencyToken }) => {
+        idempotencyTokens.push(idempotencyToken);
+        if (idempotencyTokens.length === 1) {
+          throw new Error(JSON.stringify({
+            ok: false,
+            error: {
+              code: 4003101,
+              message: 'doc is applying doc data is not ready resource error whiteboard'
+            }
+          }));
+        }
+        remoteRaw = whiteboardTextRaw('CAGRA v2');
+      },
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(idempotencyTokens).toHaveLength(2);
+    expect(new Set(idempotencyTokens).size).toBe(1);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({
+        version: 4,
+        whiteboards: [{ blockId: 'wb_block', whiteboardToken: 'wb_token' }]
+      });
+  });
+
+  it('retries provider code 4003101 preserved by the Lark CLI adapter', async () => {
+    const updatedSvg = '<svg viewBox="0 0 10 10"><text>CAGRA v2</text></svg>';
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)', updatedSvg);
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    await writeTrackedWhiteboardReceipt({
+      cwd: fixture.dir,
+      markdown: '![CAGRA](./assets/cagra.png)',
+      remoteMarkdown,
+      svgHash: hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>'),
+      remoteRaw: whiteboardTextRaw('CAGRA v1')
+    });
+    let updated = false;
+    const idempotencyTokens: string[] = [];
+    const adapter = new LarkCliAdapter({
+      exec: async (args) => {
+        if (args[0] === 'docs' && args[1] === '+fetch') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { content: remoteMarkdown, revision_id: 2 } }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'api' && args[1] === 'GET' && args[2]?.includes('/blocks')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                items: [
+                  { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+                  { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+                ],
+                has_more: false
+              }
+            }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+query') {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: { raw: updated ? whiteboardTextRaw('CAGRA v2') : whiteboardTextRaw('CAGRA v1') }
+            }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+update') {
+          idempotencyTokens.push(args[args.indexOf('--idempotent-token') + 1]!);
+          if (idempotencyTokens.length === 1) {
+            return {
+              stdout: '',
+              stderr: JSON.stringify({
+                ok: false,
+                error: {
+                  type: 'internal',
+                  subtype: 'openapi_error',
+                  code: 4003101,
+                  message: 'doc is applying doc data is not ready resource error whiteboard',
+                  retryable: false
+                }
+              })
+            };
+          }
+          updated = true;
+          return { stdout: JSON.stringify({ ok: true, data: { result: 'success' } }), stderr: '' };
+        }
+        throw new Error(`unexpected lark-cli call: ${args.join(' ')}`);
+      }
+    });
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(idempotencyTokens).toHaveLength(2);
+    expect(new Set(idempotencyTokens).size).toBe(1);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({ version: 4 });
+  });
+
+  it('retries a structured raw-not-ready query after a Lark CLI Whiteboard update', async () => {
+    const updatedSvg = '<svg viewBox="0 0 10 10"><text>CAGRA v2</text></svg>';
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)', updatedSvg);
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    await writeTrackedWhiteboardReceipt({
+      cwd: fixture.dir,
+      markdown: '![CAGRA](./assets/cagra.png)',
+      remoteMarkdown,
+      svgHash: hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>'),
+      remoteRaw: whiteboardTextRaw('CAGRA v1')
+    });
+    let updated = false;
+    let updates = 0;
+    let postUpdateQueries = 0;
+    const adapter = new LarkCliAdapter({
+      exec: async (args) => {
+        if (args[0] === 'docs' && args[1] === '+fetch') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { content: remoteMarkdown, revision_id: 2 } }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'api' && args[1] === 'GET' && args[2]?.includes('/blocks')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                items: [
+                  { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+                  { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+                ],
+                has_more: false
+              }
+            }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+query') {
+          if (!updated) {
+            return {
+              stdout: JSON.stringify({ ok: true, data: { raw: whiteboardTextRaw('CAGRA v1') } }),
+              stderr: ''
+            };
+          }
+          postUpdateQueries += 1;
+          return postUpdateQueries === 1
+            ? { stdout: JSON.stringify({ ok: true, data: { raw: { nodes: [] } } }), stderr: '' }
+            : {
+                stdout: JSON.stringify({ ok: true, data: { raw: whiteboardTextRaw('CAGRA v2') } }),
+                stderr: ''
+              };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+update') {
+          updates += 1;
+          updated = true;
+          return { stdout: JSON.stringify({ ok: true, data: { result: 'success' } }), stderr: '' };
+        }
+        throw new Error(`unexpected lark-cli call: ${args.join(' ')}`);
+      }
+    });
+
+    const result = await runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    });
+
+    expect(result.mode).toBe('write');
+    expect(updates).toBe(1);
+    expect(postUpdateQueries).toBe(2);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({ version: 4 });
+  });
+
+  it('does not retry malformed raw state after a Lark CLI Whiteboard update', async () => {
+    const updatedSvg = '<svg viewBox="0 0 10 10"><text>CAGRA v2</text></svg>';
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)', updatedSvg);
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    const previousSvgHash = hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>');
+    await writeTrackedWhiteboardReceipt({
+      cwd: fixture.dir,
+      markdown: '![CAGRA](./assets/cagra.png)',
+      remoteMarkdown,
+      svgHash: previousSvgHash,
+      remoteRaw: whiteboardTextRaw('CAGRA v1')
+    });
+    let updated = false;
+    let updates = 0;
+    let postUpdateQueries = 0;
+    const adapter = new LarkCliAdapter({
+      exec: async (args) => {
+        if (args[0] === 'docs' && args[1] === '+fetch') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { content: remoteMarkdown, revision_id: 2 } }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'api' && args[1] === 'GET' && args[2]?.includes('/blocks')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                items: [
+                  { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+                  { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+                ],
+                has_more: false
+              }
+            }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+query') {
+          if (!updated) {
+            return {
+              stdout: JSON.stringify({ ok: true, data: { raw: whiteboardTextRaw('CAGRA v1') } }),
+              stderr: ''
+            };
+          }
+          postUpdateQueries += 1;
+          return {
+            stdout: JSON.stringify({ ok: true, data: { raw: { version: 1 } } }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+update') {
+          updates += 1;
+          updated = true;
+          return { stdout: JSON.stringify({ ok: true, data: { result: 'success' } }), stderr: '' };
+        }
+        throw new Error(`unexpected lark-cli call: ${args.join(' ')}`);
+      }
+    });
+
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [],
+      failedOperation: expect.objectContaining({ kind: 'whiteboard-update' }),
+      receiptWritten: false
+    });
+    expect(updates).toBe(1);
+    expect(postUpdateQueries).toBe(1);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({ version: 3, whiteboards: [{ svgHash: previousSvgHash }] });
+  });
+
+  it('does not retry a non-applying Whiteboard update error', async () => {
+    const updatedSvg = '<svg viewBox="0 0 10 10"><text>CAGRA v2</text></svg>';
+    const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)', updatedSvg);
+    const remoteMarkdown = '![CAGRA](remote-whiteboard)';
+    const previousSvgHash = hashText('<svg viewBox="0 0 10 10"><text>CAGRA v1</text></svg>');
+    await writeTrackedWhiteboardReceipt({
+      cwd: fixture.dir,
+      markdown: '![CAGRA](./assets/cagra.png)',
+      remoteMarkdown,
+      svgHash: previousSvgHash,
+      remoteRaw: whiteboardTextRaw('CAGRA v1')
+    });
+    let updates = 0;
+    const adapter = new LarkCliAdapter({
+      exec: async (args) => {
+        if (args[0] === 'docs' && args[1] === '+fetch') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { content: remoteMarkdown, revision_id: 2 } }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'api' && args[1] === 'GET' && args[2]?.includes('/blocks')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                items: [
+                  { block_id: 'doc_token', block_type: 1, children: ['wb_block'] },
+                  { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+                ],
+                has_more: false
+              }
+            }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+query') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { raw: whiteboardTextRaw('CAGRA v1') } }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'whiteboard' && args[1] === '+update') {
+          updates += 1;
+          return {
+            stdout: '',
+            stderr: JSON.stringify({
+              ok: false,
+              error: {
+                type: 'authorization',
+                subtype: 'openapi_error',
+                code: 403,
+                message: 'doc is applying doc data is not ready resource error whiteboard',
+                retryable: false
+              }
+            })
+          };
+        }
+        throw new Error(`unexpected lark-cli call: ${args.join(' ')}`);
+      }
+    });
+
+    await expect(runPublish({
+      cwd: fixture.dir,
+      file: fixture.markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      syncWhiteboards: true,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      failedOperation: expect.objectContaining({ kind: 'whiteboard-update' }),
+      receiptWritten: false
+    });
+    expect(updates).toBe(1);
+    await expect(readPublishReceipt({ cwd: fixture.dir, target: { kind: 'docx', token: 'doc_token' } }))
+      .resolves.toMatchObject({
+        version: 3,
+        whiteboards: [{ svgHash: previousSvgHash }]
+      });
+  });
+
+  it('fails after bounded applying retries without executing pending deletes', async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = await createMixedCreateRecoveryFixture();
+      const state = completedTableRecoveryState(fixture);
+      let updates = 0;
+      let deletes = 0;
+      let resolveFirstUpdate!: () => void;
+      const firstUpdate = new Promise<void>((resolve) => { resolveFirstUpdate = resolve; });
+      const adapter = recoveryPlanningAdapter(fixture, state.blocks, fixture.tableCreatedRemoteMarkdown);
+      adapter.updateWhiteboard = async () => {
+        updates += 1;
+        if (updates === 1) resolveFirstUpdate();
+        throw new Error(JSON.stringify({
+          ok: false,
+          error: {
+            code: 4003101,
+            message: 'doc is applying doc data is not ready resource error whiteboard'
+          }
+        }));
+      };
+      adapter.deleteBlocks = async () => { deletes += 1; };
+
+      const outcome = runPublish({
+        cwd: fixture.dir,
+        file: fixture.markdownPath,
+        target: { kind: 'docx', token: 'doc_token' },
+        profile: 'zilliz',
+        dialect: 'zdoc-authoring',
+        dialectConfig: fixture.dialectConfig,
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        syncWhiteboards: true,
+        confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+        adapter
+      }).then(
+        (result) => ({ result, error: undefined }),
+        (error: unknown) => ({ result: undefined, error })
+      );
+
+      await firstUpdate;
+      await vi.runAllTimersAsync();
+      const { result, error } = await outcome;
+
+      expect(result).toBeUndefined();
+      expect(error).toMatchObject({
+        name: 'PartialWriteError',
+        completedOperations: [],
+        failedOperation: expect.objectContaining({ kind: 'whiteboard-update' }),
+        pendingOperations: [
+          expect.objectContaining({
+            kind: 'delete',
+            locator: { sectionPath: ['Before you start'], kind: 'text', ordinal: 5 }
+          }),
+          expect.objectContaining({
+            kind: 'delete',
+            locator: { sectionPath: ['Define the text embedding function'], kind: 'text', ordinal: 3 }
+          })
+        ],
+        receiptWritten: false
+      });
+      expect(updates).toBe(8);
+      expect(deletes).toBe(0);
+      await expect(readPublishReceipt({
+        cwd: fixture.dir,
+        target: { kind: 'docx', token: 'doc_token' }
+      })).resolves.toMatchObject({ version: 3 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails after bounded raw-not-ready readback retries without executing pending deletes', async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = await createMixedCreateRecoveryFixture();
+      const state = completedTableRecoveryState(fixture);
+      let updated = false;
+      let updates = 0;
+      let postUpdateQueries = 0;
+      let deletes = 0;
+      let resolveFirstPostUpdateQuery!: () => void;
+      const firstPostUpdateQuery = new Promise<void>((resolve) => { resolveFirstPostUpdateQuery = resolve; });
+      const adapter = recoveryPlanningAdapter(fixture, state.blocks, fixture.tableCreatedRemoteMarkdown);
+      adapter.updateWhiteboard = async () => {
+        updates += 1;
+        updated = true;
+      };
+      adapter.queryWhiteboard = async () => {
+        if (!updated) return { raw: whiteboardTextRaw('Flow') };
+        postUpdateQueries += 1;
+        if (postUpdateQueries === 1) resolveFirstPostUpdateQuery();
+        throw new CliFailure({
+          type: 'verification',
+          subtype: 'whiteboard_raw_not_ready',
+          message: 'raw node state is not ready',
+          retryable: false
+        });
+      };
+      adapter.deleteBlocks = async () => { deletes += 1; };
+
+      const outcome = runPublish({
+        cwd: fixture.dir,
+        file: fixture.markdownPath,
+        target: { kind: 'docx', token: 'doc_token' },
+        profile: 'zilliz',
+        dialect: 'zdoc-authoring',
+        dialectConfig: fixture.dialectConfig,
+        write: true,
+        create: false,
+        strategy: 'auto',
+        confirmDestructive: false,
+        confirmCollaborationRisk: true,
+        syncWhiteboards: true,
+        confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+        adapter
+      }).then(
+        (result) => ({ result, error: undefined }),
+        (error: unknown) => ({ result: undefined, error })
+      );
+
+      await firstPostUpdateQuery;
+      await vi.runAllTimersAsync();
+      const { result, error } = await outcome;
+
+      expect(result).toBeUndefined();
+      expect(error).toMatchObject({
+        name: 'PartialWriteError',
+        completedOperations: [],
+        failedOperation: expect.objectContaining({ kind: 'whiteboard-update' }),
+        pendingOperations: [
+          expect.objectContaining({
+            kind: 'delete',
+            locator: { sectionPath: ['Before you start'], kind: 'text', ordinal: 5 }
+          }),
+          expect.objectContaining({
+            kind: 'delete',
+            locator: { sectionPath: ['Define the text embedding function'], kind: 'text', ordinal: 3 }
+          })
+        ],
+        receiptWritten: false
+      });
+      expect(updates).toBe(1);
+      expect(postUpdateQueries).toBe(8);
+      expect(deletes).toBe(0);
+      await expect(readPublishReceipt({
+        cwd: fixture.dir,
+        target: { kind: 'docx', token: 'doc_token' }
+      })).resolves.toMatchObject({ version: 3 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the previous receipt when Whiteboard readback is missing expected text', async () => {
     const fixture = await createWhiteboardFixture('![CAGRA](./assets/cagra.png)');
     let created = false;
@@ -3310,6 +5996,853 @@ After.`, 'utf8');
 
 function whiteboardTextRaw(text: string): { nodes: Array<{ id: string; type: string; text: { text: string } }> } {
   return { nodes: [{ id: 'text-1', type: 'text_shape', text: { text } }] };
+}
+
+async function createMixedTextProtectedWhiteboardFixture(input: {
+  relativeDetailsLink?: boolean;
+} = {}): Promise<{
+  dir: string;
+  markdownPath: string;
+  remoteMarkdown: string;
+  desiredRemoteMarkdown: string;
+  desiredBefore: string;
+  remoteBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+}> {
+  const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-mixed-text-whiteboard-'));
+  const images = join(dir, 'images');
+  const markdownPath = join(dir, 'doc.md');
+  const baselineSvg = '<svg viewBox="0 0 10 10"><text>Flow</text></svg>';
+  const currentSvg = '<svg viewBox="0 0 10 10"><text>Updated Flow</text></svg>';
+  const detailsParagraph = input.relativeDetailsLink
+    ? 'For details, see [Integrate with Model Providers](./integrate-with-model-providers).'
+    : 'Store the secret securely.';
+  const desiredBefore = [
+    '- **Create credentials**',
+    '',
+    '    Create credentials in the provider console.',
+    '',
+    '- **Grant permissions**',
+    '',
+    '    Grant the required permissions.',
+    '',
+    '    - Read models',
+    '    - Invoke endpoints',
+    '    - Inspect usage',
+    '',
+    `    ${detailsParagraph}`,
+    '',
+    '- **Choose a model**',
+    '',
+    '    Choose a supported embedding model.'
+  ].join('\n');
+  const baselineMarkdown = [
+    '# Hugging Face',
+    '',
+    'Intro [integration](https://docs.example.com/integration).',
+    '',
+    '## How it works',
+    '',
+    '![Flow](./images/flow.svg)',
+    '',
+    '## Before you start',
+    '',
+    '- Create credentials in the provider console.',
+    '- Grant the required permissions.',
+    '- Choose a supported embedding model.',
+    '',
+    'This requirement is already covered above.',
+    '',
+    '## Configure the integration',
+    '',
+    'Continue here.'
+  ].join('\n');
+  const desiredMarkdown = [
+    '# Hugging Face',
+    '',
+    'Intro [integration](https://example.feishu.cn/wiki/english).',
+    '',
+    '## How it works',
+    '',
+    '![Flow](./images/flow.svg)',
+    '',
+    '## Before you start',
+    '',
+    desiredBefore,
+    '',
+    '## Configure the integration',
+    '',
+    'Continue here.'
+  ].join('\n');
+  const remoteMarkdown = baselineMarkdown
+    .replace('https://docs.example.com/integration', 'https://docs.example.com/integration')
+    .replace('./images/flow.svg', 'remote-whiteboard');
+  const desiredRemoteMarkdown = desiredMarkdown.replace('./images/flow.svg', 'remote-whiteboard');
+  const directBlocks = [
+    markdownBlock('intro', 'Intro [integration](https://docs.example.com/integration).'),
+    markdownBlock('how', '## How it works'),
+    { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } },
+    markdownBlock('before', '## Before you start'),
+    markdownBlock('old-1', '- Create credentials in the provider console.'),
+    markdownBlock('old-2', '- Grant the required permissions.'),
+    markdownBlock('old-3', '- Choose a supported embedding model.'),
+    markdownBlock('duplicate', 'This requirement is already covered above.'),
+    markdownBlock('configure', '## Configure the integration'),
+    markdownBlock('continue', 'Continue here.')
+  ];
+  const remoteBlocks = [
+    { block_id: 'doc_token', block_type: 1, children: directBlocks.map((block) => block.block_id!) },
+    ...directBlocks
+  ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+
+  await mkdir(images);
+  await writeFile(markdownPath, desiredMarkdown, 'utf8');
+  await writeFile(join(images, 'flow.svg'), currentSvg, 'utf8');
+
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd: dir, target, markdown: baselineMarkdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: dir,
+    target,
+    document: remoteSemanticDocument(remoteBlocks, 'doc_token')
+  });
+  await writePublishReceipt({
+    cwd: dir,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(baselineMarkdown),
+      publishDraftHash: hashText(baselineMarkdown),
+      remoteSnapshotHash: hashText(remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'images/flow.png',
+        pngPath: 'images/flow.png',
+        svgPath: 'images/flow.svg',
+        svgHash: hashText(baselineSvg),
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: whiteboardRemoteStateHash(whiteboardTextRaw('Flow')),
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-16T00:00:00.000Z'
+    }
+  });
+  return { dir, markdownPath, remoteMarkdown, desiredRemoteMarkdown, desiredBefore, remoteBlocks };
+}
+
+async function createMixedCreateRecoveryFixture(): Promise<{
+  dir: string;
+  markdownPath: string;
+  baselineRemoteMarkdown: string;
+  baselineRemoteBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+  partialRemoteMarkdown: string;
+  partialRemoteBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+  linkRepairedRemoteMarkdown: string;
+  tableCreatedRemoteMarkdown: string;
+  finalRemoteMarkdown: string;
+  resolvedBefore: string;
+  detailsBlockId: string;
+  resolvedUrl: string;
+  provider: string;
+  tableMarkdown: string;
+  dialectConfig: {
+    linkResolver: {
+      type: 'lark-base';
+      baseUrl: string;
+      keyField: string;
+      urlField: string;
+      placementTypeField: string;
+      acceptedPlacementTypes: string[];
+    };
+  };
+}> {
+  const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-partial-create-recovery-'));
+  const images = join(dir, 'images');
+  const markdownPath = join(dir, 'doc.md');
+  const baselineSvg = '<svg viewBox="0 0 10 10"><text>Flow</text></svg>';
+  const currentSvg = '<svg viewBox="0 0 10 10"><text>Updated Flow</text></svg>';
+  const resolvedUrl = 'https://example.feishu.cn/wiki/B1cSwfWcri4VJLkCR20cHIs6nCf';
+  const relativeDetails = 'For details, see [Integrate with Model Providers](./integrate-with-model-providers).';
+  const resolvedDetails = `For details, see [Integrate with Model Providers](${resolvedUrl}).`;
+  const plainDetails = 'For details, see Integrate with Model Providers.';
+  const provider = 'Set `provider` and `credential` together. The token must be valid for the selected provider.';
+  const beforeIntro = 'Complete these prerequisites before creating the collection.';
+  const oldBefore = [
+    '- Create credentials in the provider console.',
+    '- Grant the required permissions.',
+    '- Choose a supported embedding model.'
+  ].join('\n');
+  const desiredBefore = [
+    '- **Create credentials**',
+    '',
+    `    ${relativeDetails}`,
+    '',
+    '    Create credentials in the provider console.',
+    '',
+    '- **Grant permissions**',
+    '',
+    '    Grant the required permissions.',
+    '',
+    '    - Read models',
+    '    - Invoke endpoints',
+    '    - Inspect usage',
+    '',
+    '    Review the granted permissions regularly.',
+    '',
+    '- **Choose a model**',
+    '',
+    '    Choose a supported embedding model.',
+    '',
+    '    Confirm that the model supports text embeddings.'
+  ].join('\n');
+  const resolvedBefore = desiredBefore.replace(relativeDetails, resolvedDetails);
+  const table = markdownParameterTable([
+    ['name', 'Function name.'],
+    ['input_field_names', 'Source fields.'],
+    ['output_field_names', 'Output fields.'],
+    ['function_type', 'Function type.'],
+    ['params', 'Provider parameters.']
+  ]);
+  const baselineMarkdown = [
+    '# Hugging Face',
+    '',
+    'Intro [integration](https://docs.example.com/integration).',
+    '',
+    '## How it works',
+    '',
+    '![Flow](./images/flow.svg)',
+    '',
+    '## Before you start',
+    '',
+    beforeIntro,
+    '',
+    oldBefore,
+    '',
+    '## Define the text embedding function',
+    '',
+    'The following table describes the parameters.',
+    '',
+    table,
+    '',
+    provider,
+    '',
+    '## Configure the integration',
+    '',
+    'Continue here.'
+  ].join('\n');
+  const desiredMarkdown = [
+    '# Hugging Face',
+    '',
+    'Intro [integration](https://example.feishu.cn/wiki/english).',
+    '',
+    '## How it works',
+    '',
+    '![Flow](./images/flow.svg)',
+    '',
+    '## Before you start',
+    '',
+    beforeIntro,
+    '',
+    desiredBefore,
+    '',
+    '## Define the text embedding function',
+    '',
+    'The following table describes the parameters.',
+    '',
+    table,
+    '',
+    provider,
+    '',
+    '## Configure the integration',
+    '',
+    'Continue here.'
+  ].join('\n');
+  const baselineRemoteMarkdown = [
+    '# Hugging Face',
+    '',
+    'Intro [integration](https://docs.example.com/integration).',
+    '',
+    '## How it works',
+    '',
+    '![Flow](remote-whiteboard)',
+    '',
+    '## Before you start',
+    '',
+    beforeIntro,
+    '',
+    oldBefore,
+    '',
+    '## Define the text embedding function',
+    '',
+    'The following table describes the parameters.',
+    '',
+    provider,
+    '',
+    provider,
+    '',
+    '## Configure the integration',
+    '',
+    'Continue here.'
+  ].join('\n');
+  const partialRemoteMarkdown = [
+    '# Hugging Face',
+    '',
+    'Intro [integration](https://example.feishu.cn/wiki/english).',
+    '',
+    '## How it works',
+    '',
+    '![Flow](remote-whiteboard)',
+    '',
+    '## Before you start',
+    '',
+    beforeIntro,
+    '',
+    resolvedBefore.replace(resolvedDetails, plainDetails),
+    '',
+    oldBefore,
+    '',
+    '## Define the text embedding function',
+    '',
+    'The following table describes the parameters.',
+    '',
+    provider,
+    '',
+    provider,
+    '',
+    '## Configure the integration',
+    '',
+    'Continue here.'
+  ].join('\n');
+  const finalRemoteMarkdown = desiredMarkdown
+    .replace(relativeDetails, resolvedDetails)
+    .replace('./images/flow.svg', 'remote-whiteboard');
+  const linkRepairedRemoteMarkdown = partialRemoteMarkdown.replace(plainDetails, resolvedDetails);
+  const tableCreatedRemoteMarkdown = linkRepairedRemoteMarkdown.replace(
+    `The following table describes the parameters.\n\n${provider}`,
+    `The following table describes the parameters.\n\n${table}\n\n${provider}`
+  );
+
+  const baselineDirect = [
+    markdownBlock('intro', 'Intro [integration](https://docs.example.com/integration).'),
+    markdownBlock('how', '## How it works'),
+    { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } },
+    markdownBlock('before', '## Before you start'),
+    textBlock('before-intro', beforeIntro),
+    markdownBlock('old-1', '- Create credentials in the provider console.'),
+    markdownBlock('old-2', '- Grant the required permissions.'),
+    markdownBlock('old-3', '- Choose a supported embedding model.'),
+    markdownBlock('define', '## Define the text embedding function'),
+    textBlock('params-intro', 'The following table describes the parameters.'),
+    markdownBlock('provider-primary', provider),
+    markdownBlock('provider-duplicate', provider),
+    markdownBlock('configure', '## Configure the integration'),
+    textBlock('continue', 'Continue here.')
+  ];
+  const baselineRemoteBlocks = [
+    { block_id: 'doc_token', block_type: 1, children: baselineDirect.map((block) => block.block_id!) },
+    ...baselineDirect
+  ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+  const createdBlocks = flattenTextBlockTrees(markdownToFeishuBlocks(resolvedBefore)).map((block, index) => ({
+    ...block,
+    block_id: `created-${index + 1}`
+  }));
+  const representationIndex = createdBlocks.findIndex((block) => {
+    return feishuBlocksToMarkdown([block]).trim() === 'Create credentials in the provider console.';
+  });
+  if (representationIndex < 0) throw new Error('partial recovery fixture representation block missing');
+  const representationBlockId = createdBlocks[representationIndex]!.block_id!;
+  createdBlocks[representationIndex] = textBlock(
+    representationBlockId,
+    'Create\u00a0credentials in the provider console.'
+  );
+  const detailsIndex = createdBlocks.findIndex((block) => {
+    return feishuBlocksToMarkdown([block]).includes('For details, see');
+  });
+  if (detailsIndex < 0) throw new Error('partial recovery fixture details block missing');
+  const detailsBlockId = createdBlocks[detailsIndex]!.block_id!;
+  createdBlocks[detailsIndex] = markdownBlock(detailsBlockId, plainDetails);
+  const partialDirect = [
+    markdownBlock('intro', 'Intro [integration](https://example.feishu.cn/wiki/english).'),
+    markdownBlock('how', '## How it works'),
+    { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } },
+    markdownBlock('before', '## Before you start'),
+    textBlock('before-intro', beforeIntro),
+    ...createdBlocks,
+    markdownBlock('old-1', '- Create credentials in the provider console.'),
+    markdownBlock('old-2', '- Grant the required permissions.'),
+    markdownBlock('old-3', '- Choose a supported embedding model.'),
+    markdownBlock('define', '## Define the text embedding function'),
+    textBlock('params-intro', 'The following table describes the parameters.'),
+    markdownBlock('provider-primary', provider),
+    markdownBlock('provider-duplicate', provider),
+    markdownBlock('configure', '## Configure the integration'),
+    textBlock('continue', 'Continue here.')
+  ];
+  const partialRemoteBlocks = [
+    { block_id: 'doc_token', block_type: 1, children: partialDirect.map((block) => block.block_id!) },
+    ...partialDirect
+  ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+
+  await mkdir(images);
+  await writeFile(markdownPath, desiredMarkdown, 'utf8');
+  await writeFile(join(images, 'flow.svg'), currentSvg, 'utf8');
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd: dir, target, markdown: baselineMarkdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: dir,
+    target,
+    document: remoteSemanticDocument(baselineRemoteBlocks, 'doc_token')
+  });
+  await writePublishReceipt({
+    cwd: dir,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'zilliz',
+      localSourceHash: hashText(baselineMarkdown),
+      publishDraftHash: hashText(baselineMarkdown),
+      remoteSnapshotHash: hashText(baselineRemoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'images/flow.png',
+        pngPath: 'images/flow.png',
+        svgPath: 'images/flow.svg',
+        svgHash: hashText(baselineSvg),
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: whiteboardRemoteStateHash(whiteboardTextRaw('Flow')),
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-16T00:00:00.000Z'
+    }
+  });
+  return {
+    dir,
+    markdownPath,
+    baselineRemoteMarkdown,
+    baselineRemoteBlocks,
+    partialRemoteMarkdown,
+    partialRemoteBlocks,
+    linkRepairedRemoteMarkdown,
+    tableCreatedRemoteMarkdown,
+    finalRemoteMarkdown,
+    resolvedBefore,
+    detailsBlockId,
+    resolvedUrl,
+    provider,
+    tableMarkdown: table,
+    dialectConfig: {
+      linkResolver: {
+        type: 'lark-base',
+        baseUrl: 'https://example.feishu.cn/base/base_token',
+        keyField: 'Slug',
+        urlField: 'Docs',
+        placementTypeField: 'Placement Type',
+        acceptedPlacementTypes: ['canonical']
+      }
+    }
+  };
+}
+
+function completedTableRecoveryState(
+  fixture: Awaited<ReturnType<typeof createMixedCreateRecoveryFixture>>
+): {
+  blocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+  directBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+  tableChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+} {
+  const resolvedDetails = `For details, see [Integrate with Model Providers](${fixture.resolvedUrl}).`;
+  const directBlocks = fixture.partialRemoteBlocks.slice(1).map((block) => {
+    return block.block_id === fixture.detailsBlockId
+      ? markdownBlock(fixture.detailsBlockId, resolvedDetails)
+      : block;
+  });
+  const nested = materializeTextBlockTrees(fixture.resolvedBefore, 'recovered');
+  const beforeIntroIndex = directBlocks.findIndex((block) => block.block_id === 'before-intro');
+  if (beforeIntroIndex < 0) throw new Error('completed hierarchy recovery fixture anchor missing');
+  directBlocks.splice(beforeIntroIndex + 1, 0, ...nested.roots);
+  const [table, ...tableChildren] = feishuTableBlocks([
+    ['name', 'Function name.'],
+    ['input_field_names', 'Source fields.'],
+    ['output_field_names', 'Output fields.'],
+    ['function_type', 'Function type.'],
+    ['params', 'Provider parameters.']
+  ], 'params-table', true);
+  const anchorIndex = directBlocks.findIndex((block) => block.block_id === 'params-intro');
+  if (!table || anchorIndex < 0) throw new Error('completed table recovery fixture anchor missing');
+  directBlocks.splice(anchorIndex + 1, 0, table);
+  return {
+    blocks: completedTableBlocks(directBlocks, [...nested.descendants, ...tableChildren]),
+    directBlocks,
+    tableChildren: [...nested.descendants, ...tableChildren]
+  };
+}
+
+function completedTableBlocks(
+  directBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'],
+  tableChildren: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks']
+): Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'] {
+  return [
+    {
+      block_id: 'doc_token',
+      block_type: 1,
+      children: directBlocks.flatMap((block) => block.block_id ? [block.block_id] : [])
+    },
+    ...directBlocks,
+    ...tableChildren
+  ];
+}
+
+async function runCompletedTableRecoveryDryRun(
+  fixture: Awaited<ReturnType<typeof createMixedCreateRecoveryFixture>>,
+  blocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'],
+  markdown: string
+) {
+  return runPublish({
+    cwd: fixture.dir,
+    file: fixture.markdownPath,
+    target: { kind: 'docx', token: 'doc_token' },
+    profile: 'zilliz',
+    dialect: 'zdoc-authoring',
+    dialectConfig: fixture.dialectConfig,
+    write: false,
+    create: false,
+    strategy: 'auto',
+    confirmDestructive: false,
+    syncWhiteboards: true,
+    confirmedRemoteWhiteboardOverwrites: ['images/flow.png'],
+    adapter: recoveryPlanningAdapter(fixture, blocks, markdown)
+  });
+}
+
+function recoveryPlanningAdapter(
+  fixture: Awaited<ReturnType<typeof createMixedCreateRecoveryFixture>>,
+  blocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'],
+  markdown: string
+): FeishuAdapter {
+  return {
+    fetchDocMarkdown: async () => ({ markdown, revision: '33' }),
+    fetchDocBlocks: async () => ({ blocks }),
+    replaceDocument: async () => {},
+    replaceBlock: async () => {},
+    insertBlocksAfter: async () => {},
+    deleteBlocks: async () => {},
+    replaceImageWithWhiteboard: async () => ({ blockId: 'wb_block', whiteboardToken: 'wb_token' }),
+    queryWhiteboard: async () => ({ raw: whiteboardTextRaw('Flow') }),
+    updateWhiteboard: async () => {},
+    resolveBaseUrl: async () => ({ baseToken: 'base_token' }),
+    fetchBaseTables: async () => [{ id: 'tbl_docs', name: 'Docs' }],
+    fetchBaseRecords: async () => [{
+      recordId: 'rec1',
+      fields: {
+        Slug: 'integrate-with-model-providers',
+        Docs: `[Integrate with Model Providers](${fixture.resolvedUrl})`,
+        'Placement Type': ['canonical']
+      }
+    }],
+    createDocument: async () => ({ documentId: 'created' })
+  };
+}
+
+async function createRecordedRoundTripLossFixture(): Promise<{
+  dir: string;
+  markdownPath: string;
+  remoteMarkdown: string;
+  desiredRemoteMarkdown: string;
+  provider: string;
+  remoteBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+}> {
+  const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-recorded-loss-'));
+  const images = join(dir, 'images');
+  const markdownPath = join(dir, 'doc.md');
+  const svg = '<svg viewBox="0 0 10 10"><text>Flow</text></svg>';
+  const provider = 'Set `provider` and `credential` together. The token must be valid for the selected provider.';
+  const table = [
+    '| Parameter | Description |',
+    '|-|-|',
+    '| `name` | Function name. |',
+    '| `input_field_names` | Source fields. |',
+    '| `output_field_names` | Output fields. |',
+    '| `function_type` | Function type. |',
+    '| `params` | Provider parameters. |'
+  ].join('\n');
+  const localMarkdown = [
+    '# Hugging Face',
+    '',
+    '## How it works',
+    '',
+    '![Flow](./images/flow.svg)',
+    '',
+    '## Define the text embedding function',
+    '',
+    'The following table describes the parameters.',
+    '',
+    table,
+    '',
+    provider,
+    '',
+    '## Next step',
+    '',
+    'Create the collection.'
+  ].join('\n');
+  const remoteMarkdown = [
+    '# Hugging Face',
+    '',
+    '## How it works',
+    '',
+    '![Flow](remote-whiteboard)',
+    '',
+    '## Define the text embedding function',
+    '',
+    'The following table describes the parameters.',
+    '',
+    provider,
+    '',
+    provider,
+    '',
+    '## Next step',
+    '',
+    'Create the collection.'
+  ].join('\n');
+  const directBlocks = [
+    markdownBlock('how', '## How it works'),
+    { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } },
+    markdownBlock('define', '## Define the text embedding function'),
+    textBlock('params-intro', 'The following table describes the parameters.'),
+    markdownBlock('provider-primary', provider),
+    markdownBlock('provider-duplicate', provider),
+    markdownBlock('next', '## Next step'),
+    textBlock('create', 'Create the collection.')
+  ];
+  const remoteBlocks = [
+    { block_id: 'doc_token', block_type: 1, children: directBlocks.map((block) => block.block_id!) },
+    ...directBlocks
+  ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+
+  await mkdir(images);
+  await writeFile(markdownPath, localMarkdown, 'utf8');
+  await writeFile(join(images, 'flow.svg'), svg, 'utf8');
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd: dir, target, markdown: localMarkdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: dir,
+    target,
+    document: remoteSemanticDocument(remoteBlocks, 'doc_token')
+  });
+  await writePublishReceipt({
+    cwd: dir,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(localMarkdown),
+      publishDraftHash: hashText(localMarkdown),
+      remoteSnapshotHash: hashText(remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'images/flow.png',
+        pngPath: 'images/flow.png',
+        svgPath: 'images/flow.svg',
+        svgHash: hashText(svg),
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: whiteboardRemoteStateHash(whiteboardTextRaw('Flow')),
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-16T00:00:00.000Z'
+    }
+  });
+  const desiredRemoteMarkdown = localMarkdown.replace('./images/flow.svg', 'remote-whiteboard');
+  return { dir, markdownPath, remoteMarkdown, desiredRemoteMarkdown, provider, remoteBlocks };
+}
+
+function markdownBlock(blockId: string, markdown: string) {
+  const block = markdownToFeishuBlocks(markdown)[0];
+  if (!block) throw new Error(`Markdown fixture did not produce a block: ${markdown}`);
+  return { ...block, block_id: blockId };
+}
+
+function flattenTextBlockTrees(blocks: FeishuBlock[]): FeishuBlock[] {
+  return blocks.flatMap(flattenTextBlockTree);
+}
+
+function flattenTextBlockTree(block: FeishuBlock): FeishuBlock[] {
+  const children = Array.isArray(block.children)
+    ? block.children.filter((child): child is FeishuBlock => {
+        return Boolean(child && typeof child === 'object' && !Array.isArray(child) && 'block_type' in child);
+      })
+    : [];
+  const { children: _children, ...shell } = block;
+  return [shell, ...children.flatMap(flattenTextBlockTree)];
+}
+
+function materializeTextBlockTrees(
+  markdown: string,
+  prefix: string
+): { roots: FeishuBlock[]; descendants: FeishuBlock[] } {
+  let ordinal = 0;
+  const materialize = (block: FeishuBlock): { root: FeishuBlock; descendants: FeishuBlock[] } => {
+    ordinal += 1;
+    const blockId = `${prefix}-${ordinal}`;
+    const children = Array.isArray(block.children)
+      ? block.children.filter((child): child is FeishuBlock => {
+          return Boolean(child && typeof child === 'object' && !Array.isArray(child) && 'block_type' in child);
+        })
+      : [];
+    const materializedChildren = children.map(materialize);
+    const root: FeishuBlock = {
+      ...block,
+      block_id: blockId,
+      ...(materializedChildren.length > 0
+        ? { children: materializedChildren.map((child) => child.root.block_id!) }
+        : { children: undefined })
+    };
+    return {
+      root,
+      descendants: materializedChildren.flatMap((child) => [child.root, ...child.descendants])
+    };
+  };
+  const materialized = markdownToFeishuBlocks(markdown).map(materialize);
+  return {
+    roots: materialized.map((entry) => entry.root),
+    descendants: materialized.flatMap((entry) => entry.descendants)
+  };
+}
+
+function createChildBlocksInMemory(input: {
+  documentId: string;
+  directBlocks: FeishuBlock[];
+  descendants: FeishuBlock[];
+  parentBlockId: string;
+  index?: number;
+  blocks: FeishuBlock[];
+  prefix: string;
+  counter: { value: number };
+  transform?: (block: FeishuBlock) => FeishuBlock;
+}): FeishuBlock[] {
+  const created = input.blocks.map((block) => {
+    input.counter.value += 1;
+    const candidate = {
+      ...block,
+      block_id: `${input.prefix}-${input.counter.value}`,
+      parent_id: input.parentBlockId,
+      children: undefined
+    };
+    return input.transform ? input.transform(candidate) : candidate;
+  });
+  const index = input.index ?? -1;
+  if (input.parentBlockId === input.documentId) {
+    input.directBlocks.splice(index < 0 ? input.directBlocks.length : index, 0, ...created);
+    return created;
+  }
+  const parent = [...input.directBlocks, ...input.descendants].find((block) => {
+    return block.block_id === input.parentBlockId;
+  });
+  if (!parent) throw new Error(`created child parent ${input.parentBlockId} is missing`);
+  const childIds = Array.isArray(parent.children) && parent.children.every((child) => typeof child === 'string')
+    ? parent.children as string[]
+    : [];
+  childIds.splice(index < 0 ? childIds.length : index, 0, ...created.map((block) => block.block_id!));
+  parent.children = childIds;
+  input.descendants.push(...created);
+  return created;
+}
+
+async function createTrackedDirectSvgFixture(input: {
+  baselineText: string;
+  currentText: string;
+  currentSvg?: string;
+}): Promise<{ dir: string; markdownPath: string }> {
+  const dir = await mkdtemp(join(tmpdir(), 'fms-zdoc-whiteboard-protection-'));
+  const images = join(dir, 'images');
+  const markdownPath = join(dir, 'doc.md');
+  const baselineSvg = '<svg viewBox="0 0 10 10"><text>Flow</text></svg>';
+  const markdown = (text: string) => `${text}\n\n![Flow](./images/flow.svg)`;
+  const remoteMarkdown = `${input.baselineText}\n\n![Flow](remote-whiteboard)`;
+  await mkdir(images);
+  await writeFile(markdownPath, markdown(input.currentText), 'utf8');
+  await writeFile(join(images, 'flow.svg'), input.currentSvg ?? baselineSvg, 'utf8');
+
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({
+    cwd: dir,
+    target,
+    markdown: markdown(input.baselineText)
+  });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: dir,
+    target,
+    document: { nodes: [
+      {
+        kind: 'text',
+        locator: { sectionPath: [], kind: 'text', ordinal: 0 },
+        blockType: 2,
+        markdown: input.baselineText,
+        remoteBlockId: 'text_block'
+      },
+      {
+        kind: 'asset',
+        locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+        representation: 'whiteboard',
+        remoteBlockId: 'wb_block',
+        remoteToken: 'wb_token'
+      }
+    ] }
+  });
+  await writePublishReceipt({
+    cwd: dir,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(markdown(input.baselineText)),
+      publishDraftHash: hashText(markdown(input.baselineText)),
+      remoteSnapshotHash: hashText(remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'images/flow.png',
+        pngPath: 'images/flow.png',
+        svgPath: 'images/flow.svg',
+        svgHash: hashText(baselineSvg),
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: whiteboardRemoteStateHash(whiteboardTextRaw('Flow')),
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-16T00:00:00.000Z'
+    }
+  });
+  return { dir, markdownPath };
+}
+
+function trackedDirectSvgAdapter(input: {
+  text: string;
+  blockId?: string;
+  whiteboardToken?: string;
+}): FeishuAdapter {
+  const blockId = input.blockId ?? 'wb_block';
+  const whiteboardToken = input.whiteboardToken ?? 'wb_token';
+  return {
+    fetchDocMarkdown: async () => ({
+      markdown: `${input.text}\n\n![Flow](remote-whiteboard)`,
+      revision: '2'
+    }),
+    fetchDocBlocks: async () => ({ blocks: [
+      { block_id: 'doc_token', block_type: 1, children: ['text_block', blockId] },
+      textBlock('text_block', input.text),
+      { block_id: blockId, block_type: 43, whiteboard: { token: whiteboardToken } }
+    ] }),
+    replaceDocument: async () => {}
+  };
 }
 
 async function createWhiteboardFixture(markdown: string, svg = '<svg viewBox="0 0 10 10"><text>CAGRA</text></svg>') {
@@ -3690,11 +7223,295 @@ function blockPatchAdapter(input: {
   };
 }
 
+async function createMalformedHierarchyRecoveryFixture(): Promise<{
+  dir: string;
+  markdownPath: string;
+  target: { kind: 'docx'; token: string };
+  nestedMarkdown: string;
+  malformedMarkdown: string;
+  malformedBlocks: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+  malformedRootIds: string[];
+  malformedChildIds: string[];
+  oldFlatIds: string[];
+}> {
+  const dir = await mkdtemp(join(tmpdir(), 'fms-malformed-hierarchy-recovery-'));
+  const markdownPath = join(dir, 'doc.md');
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const nestedMarkdown = multiHierarchyMarkdown('nested');
+  const flatMarkdown = multiHierarchyMarkdown('flat');
+  const malformedMarkdown = multiHierarchyMarkdown('malformed');
+  const baseline = materializeTextBlockTrees(flatMarkdown, 'baseline');
+  const malformed = materializeTextBlockTrees(malformedHierarchyCreateMarkdown(), 'malformed');
+  const oldFlatIds = baseline.roots.slice(2, 14).map((block) => block.block_id!);
+  const malformedRootIds = malformed.roots.map((block) => block.block_id!);
+  const malformedChildIds = malformed.descendants.map((block) => block.block_id!);
+  const direct = [
+    ...baseline.roots.slice(0, 2),
+    ...malformed.roots,
+    ...baseline.roots.slice(2)
+  ];
+  const malformedBlocks = [
+    { block_id: 'doc_token', block_type: 1, children: direct.map((block) => block.block_id!) },
+    ...direct,
+    ...malformed.descendants
+  ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+
+  await writeFile(markdownPath, nestedMarkdown, 'utf8');
+  const localBaseSnapshot = await writeLocalBaseSnapshot({
+    cwd: dir,
+    target,
+    markdown: nestedMarkdown
+  });
+  const baselineBlocks = [
+    { block_id: 'doc_token', block_type: 1, children: baseline.roots.map((block) => block.block_id!) },
+    ...baseline.roots
+  ] as Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks'];
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd: dir,
+    target,
+    document: remoteSemanticDocument(baselineBlocks, 'doc_token')
+  });
+  await writePublishReceipt({
+    cwd: dir,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(nestedMarkdown),
+      publishDraftHash: hashText(nestedMarkdown),
+      remoteSnapshotHash: hashText(flatMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [],
+      updatedAt: '2026-07-17T00:00:00.000Z'
+    }
+  });
+  return {
+    dir,
+    markdownPath,
+    target,
+    nestedMarkdown,
+    malformedMarkdown,
+    malformedBlocks,
+    malformedRootIds,
+    malformedChildIds,
+    oldFlatIds
+  };
+}
+
+function multiHierarchyMarkdown(state: 'nested' | 'flat' | 'malformed'): string {
+  const nested = `## Before you start
+
+Intro.
+
+${nestedHierarchyCreateMarkdown()}`;
+  const flat = `## Before you start
+
+Intro.
+
+- **First requirement**
+
+First detail.
+
+Second detail.
+
+- **Second requirement**
+
+Second intro.
+
+- Nested one.
+
+- Nested two.
+
+- Nested three.
+
+Second follow-up.
+
+Second conclusion.
+
+- **Third requirement**
+
+Third detail.`;
+  const before = state === 'nested'
+    ? nested
+    : state === 'flat'
+      ? flat
+      : `${nested.split('\n\n').slice(0, 2).join('\n\n')}\n\n${malformedHierarchyCreateMarkdown()}\n\n${flat.split('\n\n').slice(2).join('\n\n')}`;
+  return `${before}\n\n## After\n\nStable paragraph.`;
+}
+
+function multiHierarchyMarkdownWithMalformedAttempts(count: number): string {
+  const flat = multiHierarchyMarkdown('flat');
+  const heading = '## Before you start\n\nIntro.';
+  const suffix = flat.slice(flat.indexOf('- **First requirement**'));
+  return `${heading}\n\n${Array.from({ length: count }, () => malformedHierarchyCreateMarkdown()).join('\n\n')}\n\n${suffix}`;
+}
+
+function nestedHierarchyCreateMarkdown(): string {
+  return `- **First requirement**
+
+    First detail.
+
+    Second detail.
+
+- **Second requirement**
+
+    Second intro.
+
+    - Nested one.
+    - Nested two.
+    - Nested three.
+
+    Second follow-up.
+
+    Second conclusion.
+
+- **Third requirement**
+
+    Third detail.`;
+}
+
+function malformedHierarchyCreateMarkdown(): string {
+  return `- **First requirement**First detail.Second detail.
+
+- **Second requirement**Second intro.
+
+    - Nested one.
+
+    - Nested two.
+
+    - Nested three.
+
+- **Third requirement**Third detail.`;
+}
+
+function nestedListMarkdown(nested: boolean): string {
+  return nested
+    ? `## Before you start
+
+- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+    1. Nested ordered.
+
+## After
+
+Stable paragraph.`
+    : `## Before you start
+
+- **Parent**
+
+Child paragraph.
+
+- Nested bullet.
+
+1. Nested ordered.
+
+## After
+
+Stable paragraph.`;
+}
+
+function nestedListBlocks(state: 'flat' | 'created' | 'final') {
+  const oldIds = ['old-parent', 'old-child', 'old-nested-bullet', 'old-nested-ordered'];
+  const rootIds = state === 'flat'
+    ? ['before-heading', ...oldIds, 'after-heading', 'after-text']
+    : state === 'created'
+      ? ['before-heading', 'new-parent', ...oldIds, 'after-heading', 'after-text']
+      : ['before-heading', 'new-parent', 'after-heading', 'after-text'];
+  const blocks = [
+    { block_id: 'doc_token', block_type: 1, children: rootIds },
+    {
+      block_id: 'before-heading',
+      block_type: 4,
+      heading2: { elements: [{ text_run: { content: 'Before you start', text_element_style: {} } }] }
+    },
+    {
+      block_id: 'after-heading',
+      block_type: 4,
+      heading2: { elements: [{ text_run: { content: 'After', text_element_style: {} } }] }
+    },
+    textBlock('after-text', 'Stable paragraph.')
+  ];
+  if (state !== 'final') {
+    blocks.push(
+      {
+        block_id: 'old-parent',
+        block_type: 12,
+        bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: { bold: true } } }] }
+      },
+      textBlock('old-child', 'Child paragraph.'),
+      {
+        block_id: 'old-nested-bullet',
+        block_type: 12,
+        bullet: { elements: [{ text_run: { content: 'Nested bullet.', text_element_style: {} } }] }
+      },
+      {
+        block_id: 'old-nested-ordered',
+        block_type: 13,
+        ordered: { elements: [{ text_run: { content: 'Nested ordered.', text_element_style: {} } }] }
+      }
+    );
+  }
+  if (state !== 'flat') {
+    blocks.push(
+      {
+        block_id: 'new-parent',
+        block_type: 12,
+        children: ['new-child', 'new-nested-bullet', 'new-nested-ordered'],
+        bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: { bold: true } } }] }
+      },
+      textBlock('new-child', 'Child paragraph.'),
+      {
+        block_id: 'new-nested-bullet',
+        block_type: 12,
+        bullet: { elements: [{ text_run: { content: 'Nested bullet.', text_element_style: {} } }] }
+      },
+      {
+        block_id: 'new-nested-ordered',
+        block_type: 13,
+        ordered: { elements: [{ text_run: { content: 'Nested ordered.', text_element_style: {} } }] }
+      }
+    );
+  }
+  return blocks;
+}
+
+function nestedChildMarkdown(child: string): string {
+  return `- **Parent**
+
+    ${child}
+
+    - Nested bullet.`;
+}
+
+function nestedChildBlocks(child: string) {
+  return [
+    { block_id: 'doc_token', block_type: 1, children: ['parent'] },
+    {
+      block_id: 'parent',
+      block_type: 12,
+      children: ['child', 'nested'],
+      bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: { bold: true } } }] }
+    },
+    textBlock('child', child),
+    {
+      block_id: 'nested',
+      block_type: 12,
+      bullet: { elements: [{ text_run: { content: 'Nested bullet.', text_element_style: {} } }] }
+    }
+  ];
+}
+
 function blocksForMarkdown(markdown: string, previous: Awaited<ReturnType<Required<FeishuAdapter>['fetchDocBlocks']>>['blocks']) {
   const page = previous.find((block) => block.block_type === 1);
   const parsed = markdownToFeishuBlocks(markdown);
   const body = parsed[0]?.block_type === 3 ? parsed.slice(1) : parsed;
   const usedPreviousIds = new Set<string>();
+  const previousBody = previous.filter((block) => block.block_type !== 1);
   const withIds = body.map((block, index) => {
     const rendered = feishuBlocksToMarkdown([block]).trim();
     const preserved = previous.find((candidate) => {
@@ -3702,8 +7519,14 @@ function blocksForMarkdown(markdown: string, previous: Awaited<ReturnType<Requir
         candidate.block_type === block.block_type &&
         feishuBlocksToMarkdown([candidate]).trim() === rendered;
     });
-    if (preserved?.block_id) usedPreviousIds.add(preserved.block_id);
-    return { ...block, block_id: preserved?.block_id ?? `after-${index}` };
+    const positional = previousBody[index];
+    const blockId = preserved?.block_id ?? (
+      positional?.block_id && positional.block_type === block.block_type && !usedPreviousIds.has(positional.block_id)
+        ? positional.block_id
+        : undefined
+    );
+    if (blockId) usedPreviousIds.add(blockId);
+    return { ...block, block_id: blockId ?? `after-${index}` };
   });
   return [
     { ...(page ?? { block_id: 'page', block_type: 1 }), children: withIds.map((block) => block.block_id as string) },
@@ -3748,7 +7571,7 @@ function markdownParameterTable(rows: Array<[string, string]>): string {
   return `| Parameter | Description |\n|-|-|\n${rows.map(([key, description]) => `| \`${key}\` | ${description} |`).join('\n')}`;
 }
 
-function feishuTableBlocks(rows: Array<[string, string]>, tableId: string) {
+function feishuTableBlocks(rows: Array<[string, string]>, tableId: string, boldHeaders = false) {
   const values = [['Parameter', 'Description'] as [string, string], ...rows];
   const cellIds = values.flatMap((_, row) => [`${tableId}-c${row}-0`, `${tableId}-c${row}-1`]);
   const blocks: Array<Record<string, unknown>> = [{
@@ -3767,7 +7590,9 @@ function feishuTableBlocks(rows: Array<[string, string]>, tableId: string) {
         text: {
           elements: [{ text_run: {
             content: value,
-            text_element_style: column === 0 && row > 0 ? { inline_code: true } : {}
+            text_element_style: row === 0 && boldHeaders
+              ? { bold: true }
+              : column === 0 && row > 0 ? { inline_code: true } : {}
           } }]
         }
       });

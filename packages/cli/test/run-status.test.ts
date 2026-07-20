@@ -6,6 +6,7 @@ import type { FeishuAdapter } from '../src/adapters/feishu-adapter.js';
 import { hashText, writeLocalBaseSnapshot, writePublishReceipt } from '../src/receipts/publish-receipt.js';
 import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
 import { runStatus } from '../src/status/run-status.js';
+import { remoteSemanticDocument } from '../src/semantic/remote-document.js';
 import { whiteboardRemoteStateHash } from '../src/whiteboards/remote-state.js';
 
 describe('runStatus', () => {
@@ -66,6 +67,61 @@ describe('runStatus', () => {
     expect(result.localChanged).toBe(false);
     expect(result.remoteChanged).toBe(false);
     expect(result.recommendation.action).toBe('no-action');
+  });
+
+  it('does not report clean when receipt-recorded list descendants are flat root siblings', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-nested-list-'));
+    const file = join(dir, 'doc.md');
+    const local = statusNestedListMarkdown(true);
+    const remote = statusNestedListMarkdown(false);
+    await writeFile(file, local, 'utf8');
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd: dir, target, markdown: local });
+    const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+      cwd: dir,
+      target,
+      document: remoteSemanticDocument(statusNestedListBlocks(), 'doc_token')
+    });
+    await writePublishReceipt({
+      cwd: dir,
+      receipt: {
+        version: 3,
+        target,
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        localSourceHash: hashText(local),
+        publishDraftHash: hashText(local),
+        remoteSnapshotHash: hashText(remote),
+        localBaseSnapshot,
+        remoteSemanticSnapshot,
+        updatedAt: '2026-07-17T00:00:00.000Z'
+      }
+    });
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({ markdown: remote, revision: '2' }),
+      fetchDocBlocks: async () => ({ blocks: statusNestedListBlocks() }),
+      replaceDocument: async () => {},
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target,
+      profile: 'none',
+      adapter
+    });
+
+    expect(result.state).toBe('local-changed');
+    expect(result.localChanged).toBe(true);
+    expect(result.scopeSummary.localChanged).toContainEqual({
+      sectionPath: ['Before you start'],
+      kind: 'text',
+      ordinal: 1
+    });
+    expect(result.recommendation.action).toBe('publish-dry-run');
   });
 
   it('reports local-changed when only the local publish draft changed', async () => {
@@ -453,6 +509,90 @@ describe('runStatus', () => {
     })]);
   });
 
+  it('reports a preserved tracked Whiteboard for an unchanged Zdoc direct SVG without sync opt-in', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-zdoc-whiteboard-protection-'));
+    const images = join(dir, 'images');
+    const file = join(dir, 'doc.md');
+    const markdown = 'Surrounding text.\n\n![Flow](./images/flow.svg)';
+    const remoteMarkdown = 'Surrounding text.\n\n![Flow](remote-whiteboard)';
+    await mkdir(images);
+    await writeFile(file, markdown, 'utf8');
+    await writeFile(join(images, 'flow.svg'), '<svg viewBox="0 0 10 10"><text>Flow</text></svg>', 'utf8');
+    await seedDirectSvgWhiteboardReceipt(dir, markdown, remoteMarkdown);
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: remoteMarkdown }),
+        fetchDocBlocks: async () => ({ blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['text_block', 'wb_block'] },
+          statusTextBlock('text_block', 'Surrounding text.'),
+          { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+        ] }),
+        replaceDocument: async () => {}
+      }
+    });
+
+    expect(result.whiteboardBlockers).toEqual([]);
+    expect(result.whiteboards).toEqual([expect.objectContaining({
+      assetKey: 'images/flow.png',
+      state: 'clean',
+      action: 'preserve tracked whiteboard',
+      blockId: 'wb_block',
+      whiteboardToken: 'wb_token'
+    })]);
+  });
+
+  it('reports one invalid-svg blocker for a changed tracked Zdoc direct SVG', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-status-zdoc-whiteboard-invalid-'));
+    const images = join(dir, 'images');
+    const file = join(dir, 'doc.md');
+    const markdown = 'Surrounding text.\n\n![Flow](./images/flow.svg)';
+    const remoteMarkdown = 'Surrounding text.\n\n![Flow](remote-whiteboard)';
+    await mkdir(images);
+    await writeFile(file, markdown, 'utf8');
+    await writeFile(join(images, 'flow.svg'), [
+      '<svg viewBox="0 0 10 10">',
+      '<defs><filter id="shadow"><feDropShadow/></filter><marker id="arrow"/></defs>',
+      '<path marker-end="url(#arrow)" filter="url(#shadow)"/>',
+      '</svg>'
+    ].join(''), 'utf8');
+    await seedDirectSvgWhiteboardReceipt(dir, markdown, remoteMarkdown);
+
+    const result = await runStatus({
+      cwd: dir,
+      sourcePath: file,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      adapter: {
+        fetchDocMarkdown: async () => ({ markdown: remoteMarkdown }),
+        fetchDocBlocks: async () => ({ blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['text_block', 'wb_block'] },
+          statusTextBlock('text_block', 'Surrounding text.'),
+          { block_id: 'wb_block', block_type: 43, whiteboard: { token: 'wb_token' } }
+        ] }),
+        replaceDocument: async () => {}
+      }
+    });
+
+    expect(result.whiteboards).toEqual([expect.objectContaining({
+      assetKey: 'images/flow.png',
+      state: 'local-changed',
+      action: 'repair invalid Whiteboard SVG',
+      local: 'changed',
+      remote: 'unchanged'
+    })]);
+    expect(result.whiteboardBlockers).toEqual([expect.objectContaining({
+      code: 'invalid-svg',
+      assetKey: 'images/flow.png'
+    })]);
+  });
+
   it('fails closed when explicit Whiteboard analysis throws', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-status-whiteboard-error-'));
     const file = join(dir, 'doc.md');
@@ -530,6 +670,67 @@ function proceduresReadAdapter(): FeishuAdapter {
   };
 }
 
+function statusNestedListMarkdown(nested: boolean): string {
+  return nested
+    ? `## Before you start
+
+- **Parent**
+
+    Child paragraph.
+
+    - Nested bullet.
+    1. Nested ordered.
+
+## After`
+    : `## Before you start
+
+- **Parent**
+
+Child paragraph.
+
+- Nested bullet.
+
+1. Nested ordered.
+
+## After`;
+}
+
+function statusNestedListBlocks() {
+  return [
+    {
+      block_id: 'doc_token',
+      block_type: 1,
+      children: ['before', 'parent', 'child', 'nested-bullet', 'nested-ordered', 'after']
+    },
+    {
+      block_id: 'before',
+      block_type: 4,
+      heading2: { elements: [{ text_run: { content: 'Before you start', text_element_style: {} } }] }
+    },
+    {
+      block_id: 'parent',
+      block_type: 12,
+      bullet: { elements: [{ text_run: { content: 'Parent', text_element_style: { bold: true } } }] }
+    },
+    statusTextBlock('child', 'Child paragraph.'),
+    {
+      block_id: 'nested-bullet',
+      block_type: 12,
+      bullet: { elements: [{ text_run: { content: 'Nested bullet.', text_element_style: {} } }] }
+    },
+    {
+      block_id: 'nested-ordered',
+      block_type: 13,
+      ordered: { elements: [{ text_run: { content: 'Nested ordered.', text_element_style: {} } }] }
+    },
+    {
+      block_id: 'after',
+      block_type: 4,
+      heading2: { elements: [{ text_run: { content: 'After', text_element_style: {} } }] }
+    }
+  ];
+}
+
 async function seedPublishReceipt(cwd: string, publishDraft: string, remoteSnapshot: string): Promise<void> {
   await writePublishReceipt({
     cwd,
@@ -582,6 +783,60 @@ async function seedWhiteboardReceipt(cwd: string, markdown: string, remoteMarkdo
         placementFingerprint: 'placement'
       }],
       updatedAt: '2026-07-13T00:00:00.000Z'
+    }
+  });
+}
+
+async function seedDirectSvgWhiteboardReceipt(
+  cwd: string,
+  markdown: string,
+  remoteMarkdown: string
+): Promise<void> {
+  const target = { kind: 'docx' as const, token: 'doc_token' };
+  const localBaseSnapshot = await writeLocalBaseSnapshot({ cwd, target, markdown });
+  const remoteSemanticSnapshot = await writeRemoteSemanticSnapshot({
+    cwd,
+    target,
+    document: { nodes: [
+      {
+        kind: 'text',
+        locator: { sectionPath: [], kind: 'text', ordinal: 0 },
+        blockType: 2,
+        markdown: 'Surrounding text.',
+        remoteBlockId: 'text_block'
+      },
+      {
+        kind: 'asset',
+        locator: { sectionPath: [], kind: 'asset', ordinal: 0 },
+        representation: 'whiteboard',
+        remoteBlockId: 'wb_block',
+        remoteToken: 'wb_token'
+      }
+    ] }
+  });
+  await writePublishReceipt({
+    cwd,
+    receipt: {
+      version: 3,
+      target,
+      resolvedDocumentId: 'doc_token',
+      profile: 'none',
+      localSourceHash: hashText(markdown),
+      publishDraftHash: hashText(markdown),
+      remoteSnapshotHash: hashText(remoteMarkdown),
+      localBaseSnapshot,
+      remoteSemanticSnapshot,
+      whiteboards: [{
+        assetKey: 'images/flow.png',
+        pngPath: 'images/flow.png',
+        svgPath: 'images/flow.svg',
+        svgHash: hashText('<svg viewBox="0 0 10 10"><text>Flow</text></svg>'),
+        whiteboardToken: 'wb_token',
+        blockId: 'wb_block',
+        remoteStateHash: 'remote-state',
+        placementFingerprint: 'placement'
+      }],
+      updatedAt: '2026-07-16T00:00:00.000Z'
     }
   });
 }

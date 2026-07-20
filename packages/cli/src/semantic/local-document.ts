@@ -13,6 +13,7 @@ import type { SemanticDocument, SemanticLocator, SemanticNode } from './types.js
 import type { ZdocComponentInventory } from '../zdoc/types.js';
 import { canonicalizeMarkdownSemantics } from './markdown-equivalence.js';
 import { semanticTableFromFeishuBlock } from './feishu-table.js';
+import { semanticTextChildren } from './text-tree.js';
 
 type LocalSegment =
   | { kind: 'markdown'; content: string }
@@ -132,11 +133,13 @@ export function localSemanticDocument(
         headingPath.length = level - 1;
         headingPath[level - 1] = title;
       }
+      const children = semanticTextChildren(block);
       nodes.push({
         kind: 'text',
         locator: nextLocator(headingPath, 'text', ordinals),
         blockType: block.block_type,
-        markdown: rendered
+        markdown: rendered,
+        ...(children ? { children } : {})
       });
     }
   }

@@ -30,6 +30,18 @@ export function renderableDirectChildBlocks(blocks: FeishuBlock[], pageBlock: Fe
   return directChildBlocks(blocks, pageBlock).flatMap((block) => renderableBlocks(block, byId));
 }
 
+export function resolvedChildBlocks(blocks: FeishuBlock[], parentBlockId: string): FeishuBlock[] {
+  const parent = blocks.find((block) => block.block_id === parentBlockId);
+  if (!parent) return [];
+  const byId = blockMapById(blocks);
+  return directChildBlocks(blocks, parent).map((block) => comparableBlock(block, byId));
+}
+
+export function resolvedBlockById(blocks: FeishuBlock[], blockId: string): FeishuBlock | undefined {
+  const block = blocks.find((candidate) => candidate.block_id === blockId);
+  return block ? comparableBlock(block, blockMapById(blocks)) : undefined;
+}
+
 function blockMapById(blocks: FeishuBlock[]): Map<string, FeishuBlock> {
   return new Map(blocks.flatMap((block) => block.block_id ? [[block.block_id, block] as const] : []));
 }
@@ -64,12 +76,8 @@ function resolveChildContainer(block: FeishuBlock, byId: Map<string, FeishuBlock
 }
 
 function comparableBlock(block: FeishuBlock, byId: Map<string, FeishuBlock>): FeishuBlock {
-  if (block.block_type === 49 && Array.isArray(block.children)) {
-    return resolveChildContainer(block, byId);
-  }
-
   if (block.block_type !== 31 || !isTableBlock(block)) {
-    return block;
+    return Array.isArray(block.children) ? resolveChildContainer(block, byId) : block;
   }
 
   const cellRefs = block.table.cells ?? [];

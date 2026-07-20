@@ -33,6 +33,7 @@ Unknown body components, invalid Procedures pairs, unsupported Admonitions, miss
 - Paragraphs
 - Unordered lists
 - Ordered lists
+- Indented child paragraphs and nested unordered/ordered lists inside document-body list items
 - Fenced code blocks
 - Tables
 - Tables through Feishu Markdown import/export
@@ -47,7 +48,7 @@ Unknown body components, invalid Procedures pairs, unsupported Admonitions, miss
 
 ## Official Feishu Markdown Export
 
-`pull`, `status`, `diff`, and `merge --target` use `lark-cli docs +fetch --doc-format markdown`.
+`pull`, `status`, `diff`, and `merge --target` use `lark-cli docs +fetch --doc-format markdown`. Standalone `pull` additionally reads native Docx blocks and repairs nested list child paragraphs when the official Markdown renderer concatenates them into parent bullet text or omits paragraphs after a nested list. The native sequence must match the fetched Markdown uniquely; otherwise pull stops instead of guessing. Status and publish readback already use the block tree for semantic hierarchy.
 
 `publish` uses `lark-cli docs +update/+create` for remote writes. In `auto`, it attempts a scoped block patch when every local change can be matched and verified safely. Unsafe or unsupported changes produce a `blocked` plan; `auto` never falls back to whole-document replacement.
 
@@ -125,6 +126,8 @@ Run `status`, `diff`, or `publish` with `--sync-whiteboards`. The PNG reference 
 
 The first publish requires exactly one corresponding image or Whiteboard block in the existing remote document. To avoid guessing between interchangeable positions, the first version blocks a section containing multiple untracked asset slots; place them under separate headings or establish receipts one at a time. Neighboring text must also match during initial adoption, so adopt the asset before making adjacent text changes. An image block is replaced by a Whiteboard; an existing Whiteboard is adopted. Later publishes update the same Whiteboard token.
 
+`zdoc-authoring` has one receipt-only compatibility path for authoring archives: a canonical standalone direct SVG reference may protect an already tracked Whiteboard when its normalized SVG path, PNG asset key, document block ID, and Whiteboard token match the receipt. Ordinary planning reports `preserve tracked whiteboard` and never creates or updates board content. If the direct SVG hash changes, the complete publish blocks until `--sync-whiteboards` and an exact asset-specific overwrite confirmation are both present. A missing or mismatched receipt blocks rather than treating the Whiteboard as an ordinary image.
+
 The supported editable SVG subset includes:
 
 - shapes: `rect`, `circle`, `ellipse`, and `polygon`
@@ -148,5 +151,5 @@ The CLI does not create SVGs, render SVG to PNG, or upload PNG bytes. Ordinary i
 - The merge algorithm is deterministic and line-based, not semantic Markdown merge.
 - `pull` does not reconstruct Zdoc frontmatter/imports/anchors, or Milvus variables and fragments.
 - Automatic merge is blocked for `zdoc-authoring` and `milvus-authoring` sources.
-- Direct SVG references do not initialize editable Whiteboards; Whiteboard sync still uses the PNG/SVG sibling convention and `--sync-whiteboards`.
-- Complex nested-list canonicalization remains outside the scoped publish feature.
+- Direct SVG references do not initialize editable Whiteboards. They are accepted only to protect or explicitly update an already receipt-tracked `zdoc-authoring` Whiteboard; initial adoption still uses the PNG/SVG sibling convention and `--sync-whiteboards`.
+- List descendants are limited to paragraphs and ordered/unordered lists. Nested Code blocks, tables, Callouts, images, and other container types remain outside scoped list publishing.

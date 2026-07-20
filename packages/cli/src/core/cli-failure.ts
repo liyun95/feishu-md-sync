@@ -16,6 +16,7 @@ export type CliFailureDetails = {
   hint?: string;
   requiredFlags?: string[];
   retryable: boolean;
+  providerCode?: number;
   missingScopes?: string[];
   consoleUrl?: string;
   partialWrite?: {

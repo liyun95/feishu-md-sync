@@ -1,7 +1,7 @@
 import type { WhiteboardReceiptEntry } from '../receipts/publish-receipt.js';
 import { semanticHash, stripExecutionMetadata } from '../semantic/normalize.js';
 import type { SemanticAssetNode, SemanticDocument, SemanticLocator, SemanticNode } from '../semantic/types.js';
-import type { LocalWhiteboardAsset } from './local-assets.js';
+import { normalizeAssetKey, type LocalWhiteboardAsset } from './local-assets.js';
 
 export type WhiteboardAssetState =
   | 'clean'
@@ -42,7 +42,7 @@ export type WhiteboardOperation =
     svgPath: string;
     svgHash: string;
     remoteStateHash: string;
-    reason: 'local-changed' | 'confirmed-remote-overwrite';
+    reason: 'local-changed' | 'confirmed-remote-overwrite' | 'confirmed-protected-overwrite';
   };
 
 export type WhiteboardAssetPlan = {
@@ -51,6 +51,9 @@ export type WhiteboardAssetPlan = {
   action: string;
   local: 'changed' | 'unchanged' | 'missing';
   remote: 'changed' | 'unchanged' | 'missing' | 'untracked';
+  protection?: 'tracked';
+  blockId?: string;
+  whiteboardToken?: string;
 };
 
 export type WhiteboardPlanBlocker = {
@@ -71,6 +74,7 @@ export type WhiteboardPlan = {
 };
 
 export type WhiteboardPlanningInput = {
+  intent?: 'sync' | 'protect';
   localDocument: SemanticDocument;
   remoteDocument: SemanticDocument;
   localAssets: LocalWhiteboardAsset[];
@@ -81,26 +85,30 @@ export type WhiteboardPlanningInput = {
 };
 
 export function planWhiteboardPublish(input: WhiteboardPlanningInput): WhiteboardPlan {
+  const intent = input.intent ?? 'sync';
   const blockers: WhiteboardPlanBlocker[] = [...input.discoveryBlockers];
-  const assets: WhiteboardAssetPlan[] = input.discoveryBlockers.map((blocker) => ({
-    assetKey: blocker.assetKey,
-    state: 'missing',
-    action: 'repair local Whiteboard asset',
-    local: 'missing',
-    remote: 'untracked'
-  }));
   const operations: WhiteboardOperation[] = [];
   const receiptsByKey = new Map(input.receiptEntries.map((entry) => [entry.assetKey, entry]));
-  const localKeys = new Set(input.localAssets.map((asset) => asset.assetKey));
+  const assets: WhiteboardAssetPlan[] = input.discoveryBlockers.map((blocker) => {
+    return discoveryBlockedAsset(blocker, receiptsByKey.has(blocker.assetKey));
+  });
+  const localKeys = new Set([
+    ...input.localAssets.map((asset) => asset.assetKey),
+    ...input.discoveryBlockers.map((blocker) => blocker.assetKey)
+  ]);
 
   for (const asset of input.localAssets) {
     if (blockers.some((blocker) => blocker.assetKey === asset.assetKey)) continue;
     const receipt = receiptsByKey.get(asset.assetKey);
     if (!receipt) {
-      planUntrackedAsset({ input, asset, blockers, assets, operations });
+      if (intent === 'protect') {
+        planUntrackedProtectedAsset({ input, asset, blockers, assets });
+      } else {
+        planUntrackedAsset({ input, asset, blockers, assets, operations });
+      }
       continue;
     }
-    planTrackedAsset({ input, asset, receipt, blockers, assets, operations });
+    planTrackedAsset({ input, asset, receipt, intent, blockers, assets, operations });
   }
 
   for (const receipt of input.receiptEntries) {
@@ -135,6 +143,45 @@ export function planWhiteboardPublish(input: WhiteboardPlanningInput): Whiteboar
   };
 }
 
+function discoveryBlockedAsset(
+  blocker: WhiteboardPlanningInput['discoveryBlockers'][number],
+  tracked: boolean
+): WhiteboardAssetPlan {
+  if (blocker.code === 'invalid-svg') {
+    return {
+      assetKey: blocker.assetKey,
+      state: 'local-changed',
+      action: 'repair invalid Whiteboard SVG',
+      local: 'changed',
+      remote: tracked ? 'unchanged' : 'untracked'
+    };
+  }
+  return {
+    assetKey: blocker.assetKey,
+    state: 'missing',
+    action: 'repair local Whiteboard asset',
+    local: 'missing',
+    remote: tracked ? 'unchanged' : 'untracked'
+  };
+}
+
+function planUntrackedProtectedAsset(input: {
+  input: WhiteboardPlanningInput;
+  asset: LocalWhiteboardAsset;
+  blockers: WhiteboardPlanBlocker[];
+  assets: WhiteboardAssetPlan[];
+}): void {
+  const candidates = correspondingRemoteAssets(input.input.remoteDocument, input.asset.locator)
+    .filter((candidate) => candidate.representation === 'whiteboard');
+  if (candidates.length === 0) return;
+  input.blockers.push({
+    code: 'tracked-whiteboard-receipt-missing',
+    assetKey: input.asset.assetKey,
+    message: `remote Whiteboard has no matching receipt identity: ${input.asset.assetKey}`
+  });
+  input.assets.push(missingAsset(input.asset.assetKey, 'restore or adopt the tracked Whiteboard receipt'));
+}
+
 function planUntrackedAsset(input: {
   input: WhiteboardPlanningInput;
   asset: LocalWhiteboardAsset;
@@ -142,6 +189,10 @@ function planUntrackedAsset(input: {
   assets: WhiteboardAssetPlan[];
   operations: WhiteboardOperation[];
 }): void {
+  if (input.asset.sourceKind === 'direct-svg') {
+    planUntrackedProtectedAsset(input);
+    return;
+  }
   if (hasMultipleUntrackedAssetSlots(input.input, input.asset.locator)) {
     input.blockers.push({
       code: 'whiteboard-correspondence-ambiguous',
@@ -237,28 +288,92 @@ function planTrackedAsset(input: {
   input: WhiteboardPlanningInput;
   asset: LocalWhiteboardAsset;
   receipt: WhiteboardReceiptEntry;
+  intent: 'sync' | 'protect';
   blockers: WhiteboardPlanBlocker[];
   assets: WhiteboardAssetPlan[];
   operations: WhiteboardOperation[];
 }): void {
+  if (normalizeAssetKey(input.receipt.svgPath) !== input.asset.svgKey) {
+    input.blockers.push({
+      code: 'tracked-whiteboard-source-mismatch',
+      assetKey: input.asset.assetKey,
+      message: `tracked Whiteboard SVG path does not match the canonical source: ${input.asset.assetKey}`
+    });
+    input.assets.push(missingAsset(input.asset.assetKey, 'repair the tracked Whiteboard source mapping'));
+    return;
+  }
   const remote = input.input.remoteDocument.nodes.find((node): node is SemanticAssetNode => {
     return node.kind === 'asset' &&
       node.representation === 'whiteboard' &&
       node.remoteBlockId === input.receipt.blockId &&
       node.remoteToken === input.receipt.whiteboardToken;
   });
-  const remoteState = input.input.remoteStates.get(input.receipt.whiteboardToken);
-  if (!remote || !remoteState) {
+  if (!remote) {
     input.blockers.push({
-      code: 'missing-remote-whiteboard',
+      code: input.intent === 'protect'
+        ? 'tracked-whiteboard-identity-mismatch'
+        : 'missing-remote-whiteboard',
       assetKey: input.asset.assetKey,
-      message: `tracked remote Whiteboard is missing: ${input.asset.assetKey}`
+      message: input.intent === 'protect'
+        ? `tracked remote Whiteboard block or token does not match the receipt: ${input.asset.assetKey}`
+        : `tracked remote Whiteboard is missing: ${input.asset.assetKey}`
     });
     input.assets.push(missingAsset(input.asset.assetKey, 'repair remote Whiteboard mapping'));
     return;
   }
+  if (!sameLocator(remote.locator, input.asset.locator)) {
+    input.blockers.push({
+      code: 'tracked-whiteboard-placement-mismatch',
+      assetKey: input.asset.assetKey,
+      message: `tracked remote Whiteboard is not at the canonical asset position: ${input.asset.assetKey}`
+    });
+    input.assets.push(missingAsset(input.asset.assetKey, 'restore the tracked Whiteboard placement'));
+    return;
+  }
 
   const localChanged = input.asset.svgHash !== input.receipt.svgHash;
+  if (input.intent === 'protect') {
+    if (localChanged) {
+      input.blockers.push({
+        code: 'protected-whiteboard-local-changed',
+        assetKey: input.asset.assetKey,
+        message: `tracked Whiteboard SVG changed; rerun with --sync-whiteboards and confirm this asset: ${input.asset.assetKey}`
+      });
+      input.assets.push({
+        assetKey: input.asset.assetKey,
+        state: 'local-changed',
+        action: 'request explicit whiteboard sync confirmation',
+        local: 'changed',
+        remote: 'unchanged',
+        protection: 'tracked',
+        blockId: input.receipt.blockId,
+        whiteboardToken: input.receipt.whiteboardToken
+      });
+      return;
+    }
+    input.assets.push({
+      assetKey: input.asset.assetKey,
+      state: 'clean',
+      action: 'preserve tracked whiteboard',
+      local: 'unchanged',
+      remote: 'unchanged',
+      protection: 'tracked',
+      blockId: input.receipt.blockId,
+      whiteboardToken: input.receipt.whiteboardToken
+    });
+    return;
+  }
+
+  const remoteState = input.input.remoteStates.get(input.receipt.whiteboardToken);
+  if (!remoteState) {
+    input.blockers.push({
+      code: 'missing-remote-whiteboard',
+      assetKey: input.asset.assetKey,
+      message: `tracked remote Whiteboard state is unavailable: ${input.asset.assetKey}`
+    });
+    input.assets.push(missingAsset(input.asset.assetKey, 'repair remote Whiteboard mapping'));
+    return;
+  }
   const remoteChanged = remoteState.hash !== input.receipt.remoteStateHash;
   const placementFingerprint = whiteboardPlacementFingerprint(input.input.localDocument, input.asset.locator);
   if (!localChanged && !remoteChanged) {
@@ -273,6 +388,24 @@ function planTrackedAsset(input: {
   }
 
   const confirmed = input.input.confirmedRemoteOverwrites.has(input.asset.assetKey);
+  if (input.asset.sourceKind === 'direct-svg' && localChanged && !confirmed) {
+    input.blockers.push({
+      code: 'protected-whiteboard-overwrite-confirmation-required',
+      assetKey: input.asset.assetKey,
+      message: `direct SVG update requires asset-specific Whiteboard confirmation: ${input.asset.assetKey}`
+    });
+    input.assets.push({
+      assetKey: input.asset.assetKey,
+      state: remoteChanged ? 'conflict' : 'local-changed',
+      action: 'confirm protected whiteboard overwrite',
+      local: 'changed',
+      remote: remoteChanged ? 'changed' : 'unchanged',
+      protection: 'tracked',
+      blockId: input.receipt.blockId,
+      whiteboardToken: input.receipt.whiteboardToken
+    });
+    return;
+  }
   if (remoteChanged && !confirmed) {
     const conflict = localChanged;
     input.blockers.push({
@@ -302,7 +435,9 @@ function planTrackedAsset(input: {
     svgPath: input.asset.svgPath,
     svgHash: input.asset.svgHash,
     remoteStateHash: remoteState.hash,
-    reason: remoteChanged ? 'confirmed-remote-overwrite' : 'local-changed'
+    reason: input.asset.sourceKind === 'direct-svg'
+      ? 'confirmed-protected-overwrite'
+      : remoteChanged ? 'confirmed-remote-overwrite' : 'local-changed'
   });
   input.assets.push({
     assetKey: input.asset.assetKey,
