@@ -9,6 +9,10 @@ export const ENGINE_CAPABILITIES = [
 
 export { canonicalHash } from './hash.js';
 export {
+  createDocumentSnapshot,
+  type CreateDocumentSnapshotInput,
+} from './snapshot.js';
+export {
   LarkCliProviderError,
   LarkCliTransport,
   type LarkCliErrorEnvelope,
