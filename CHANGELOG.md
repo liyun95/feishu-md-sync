@@ -4,21 +4,30 @@ All notable changes to the published `feishu-md-sync` package are documented her
 
 ## Unreleased
 
+## [0.5.0] - 2026-07-20
+
 ### Added
 
 - Add the `zdoc-authoring` round-trip dialect with Procedures token planning, managed Admonition titles, protected Supademo adoption, semantic canonicalization, and structured `zdocRoundTrip` safety reports.
 - Add receipt V5 for protected Supademo resource identity and readback verification.
+- Add explicit local-only `baseline adopt` so an operator can record an intentional L0/R0 divergence and publish only the later L0-to-L1 delta.
+- Add read-only Base resolver slug aliases for canonical document names that differ from local filenames.
 
 ### Changed
 
 - Remove the old generic Zdoc dialect name without a compatibility alias.
-- Update the Agent Skill with destination-role discovery and Zdoc authoring-archive verification.
+- Preserve nested list and text hierarchy through semantic snapshots, scoped planning, Docx writes, pull reconstruction, and strict readback verification.
+- Reconcile scoped text, Code, Callout, and table operations against L0/R0 correspondence while keeping ambiguous or overlapping changes fail closed.
+- Update the Agent Skill with baseline adoption, destination-role discovery, Zdoc authoring-archive verification, and partial-write recovery guidance.
 
 ### Fixed
 
 - Verify post-create Callout and Procedures mutations before writing a receipt, and report recoverable partial-write details when creation succeeds but planning, mutation, readback, or receipt persistence fails.
 - Match multiple Procedures pairs by exact semantic boundaries, report token deletion, block ambiguous deletion, and show required token creation during create dry-runs.
 - Block removal of tracked Supademo placeholders so protected ISV mappings cannot be silently dropped from receipt V5.
+- Checkpoint verified mutation prefixes after partial writes, use revision-aware scoped readback for eventually consistent tables, and resume without duplicating already-created blocks.
+- Normalize equivalent Feishu table, Callout, Code-language, and trailing-empty-paragraph representations without weakening destructive replacement or collaboration-risk protection.
+- Pull paragraph-wrapped or metadata-identified native Callouts when their type is unambiguous, while rejecting unknown custom Callout types.
 
 ## [0.4.0] - 2026-07-15
 

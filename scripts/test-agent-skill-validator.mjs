@@ -9,10 +9,10 @@ const validator = join(root, 'scripts', 'validate-agent-skill.mjs');
 const tempDir = mkdtempSync(join(tmpdir(), 'feishu-md-sync-skill-validator-'));
 
 try {
-  expectResult(createFakeCli('0.3.0', fullHelp()), [], false, 'outside the Skill range');
-  expectResult(createFakeCli('0.3.0', fullHelp()), ['--allow-development-version'], true);
-  expectResult(createFakeCli('0.4.0', fullHelp()), [], true);
-  expectResult(createFakeCli('0.4.0-rc.1', fullHelp()), [], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.4.0', fullHelp()), [], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.4.0', fullHelp()), ['--allow-development-version'], true);
+  expectResult(createFakeCli('0.5.0', fullHelp()), [], true);
+  expectResult(createFakeCli('0.5.0-rc.1', fullHelp()), [], false, 'outside the Skill range');
 
   const missingStatusFormat = fullHelp();
   missingStatusFormat.status = missingStatusFormat.status.replace('  --format <format>\n', '');
@@ -22,15 +22,25 @@ try {
   missingPullOutput.pull = missingPullOutput.pull.replace('  --output <file>\n', '');
   expectResult(createFakeCli('0.2.0', missingPullOutput), ['--allow-development-version'], false, 'pull help is missing --output');
 
-  expectResult(createFakeCli('0.5.0', fullHelp()), ['--allow-development-version'], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.6.0', fullHelp()), ['--allow-development-version'], false, 'outside the Skill range');
 
   const missingPublishDialect = fullHelp();
   missingPublishDialect.publish = missingPublishDialect.publish.replace('  --dialect <dialect>\n', '');
   expectResult(
-    createFakeCli('0.4.0', missingPublishDialect),
+    createFakeCli('0.5.0', missingPublishDialect),
     [],
     false,
     'publish help is missing --dialect'
+  );
+
+  const missingBaselineConfirmation = fullHelp();
+  missingBaselineConfirmation['baseline adopt'] = missingBaselineConfirmation['baseline adopt']
+    .replace('  --confirm-baseline-adoption <fingerprint>\n', '');
+  expectResult(
+    createFakeCli('0.5.0', missingBaselineConfirmation),
+    [],
+    false,
+    'baseline adopt help is missing --confirm-baseline-adoption'
   );
   process.stdout.write('Agent Skill validator regression checks passed.\n');
 } finally {
@@ -50,7 +60,7 @@ else process.stdout.write((${JSON.stringify(help)})[key] ?? '');
 
 function fullHelp() {
   return {
-    '': '  publish\n  status\n  diff\n  pull\n  merge\n  doctor\n',
+    '': '  publish\n  status\n  diff\n  pull\n  merge\n  baseline\n  doctor\n',
     publish: [
       '  --target <target>',
       '  --profile <profile>',
@@ -69,6 +79,16 @@ function fullHelp() {
     diff: '  --target <target>\n  --profile <profile>\n  --dialect <dialect>\n  --sync-whiteboards\n  --format <format>\n',
     pull: '  --target <target>\n  --output <file>\n  --profile <profile>\n  --overwrite\n  --format <format>\n',
     merge: '  --target <target>\n  --profile <profile>\n  --dialect <dialect>\n  --check\n  --abort\n  --format <format>\n',
+    'baseline adopt': [
+      '  --target <target>',
+      '  --profile <profile>',
+      '  --dialect <dialect>',
+      '  --local-baseline <file>',
+      '  --git-ref <ref>',
+      '  --apply',
+      '  --confirm-baseline-adoption <fingerprint>',
+      '  --format <format>'
+    ].join('\n') + '\n',
     'doctor auth': '  --format <format>\n'
   };
 }

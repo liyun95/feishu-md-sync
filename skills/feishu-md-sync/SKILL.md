@@ -47,7 +47,7 @@ command -v lark-cli
 
 When the user supplies an external read-only sync config, set `FEISHU_MD_SYNC_CONFIG` to that exact file before every related status, diff, baseline, and publish command. Do not copy the config into the source repository or silently substitute another config.
 
-For PATH-based stable use, require `feishu-md-sync >=0.4.0 <0.5.0`. Stop and give the matching npm upgrade command when the version is outside this range or cannot be parsed.
+For PATH-based stable use, require `feishu-md-sync >=0.5.0 <0.6.0`. Stop and give the matching npm upgrade command when the version is outside this range or cannot be parsed.
 
 `FEISHU_MD_SYNC_BIN` explicitly selects an unreleased development build. If its package version is outside the stable range, continue only when all of these probes succeed:
 
