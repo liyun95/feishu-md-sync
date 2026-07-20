@@ -128,6 +128,7 @@ npx skills add 'liyun95/feishu-md-sync#vX.Y.Z' --skill feishu-md-sync --global -
 | `v0.1.0` | New CLI surface, lark-cli onboarding, and initial npm packaging. | Published |
 | `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Published |
 | `v0.3.0` | Agent-ready CLI contract, version-matched Agent Skill, structured failures, and Skill distribution validation. | Published |
-| `v0.4.0` | Source dialect preprocessing, read-only Base link resolution, receipt V4 baselines, and non-GFM merge safety. | Ready for release |
+| `v0.4.0` | Source dialect preprocessing, read-only Base link resolution, receipt V4 baselines, and non-GFM merge safety. | Published |
+| `v0.5.0` | Verified Zdoc round trips, explicit baseline adoption, nested hierarchy recovery, and resumable scoped publishing. | Ready for release |
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.

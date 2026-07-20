@@ -21,7 +21,7 @@ assert(typeof frontmatter.description === 'string' && frontmatter.description.le
 assert(frontmatter.description.startsWith('Use when '), 'Skill description must start with "Use when"');
 assert(!skill.includes('TODO'), 'Skill contains a TODO placeholder');
 assert(!skill.includes('md2feishu'), 'Skill must not reference the retired md2feishu CLI');
-assert(skill.includes('>=0.4.0 <0.5.0'), 'Skill must declare the v0.4 compatibility range');
+assert(skill.includes('>=0.5.0 <0.6.0'), 'Skill must declare the v0.5 compatibility range');
 assert(skill.includes('dialectBlockers'), 'Skill must branch on dialect blockers');
 assert(skill.includes('dialectDiagnostics'), 'Skill must branch on dialect diagnostics');
 assert(skill.includes('linkResolution'), 'Skill must inspect link resolution');
@@ -53,7 +53,7 @@ const versionMatch = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/
 assert(versionMatch, `CLI version is not valid semver: ${version}`);
 
 const topHelp = runCli(['--help']);
-for (const command of ['publish', 'status', 'diff', 'pull', 'merge', 'doctor']) {
+for (const command of ['publish', 'status', 'diff', 'pull', 'merge', 'baseline', 'doctor']) {
   assert(new RegExp(`^  ${command}(?:\\s|\\[|<)`, 'm').test(topHelp), `top-level help is missing ${command}`);
 }
 
@@ -85,18 +85,30 @@ assertHelpOptions('pull', pullHelp, ['--target', '--output', '--profile', '--ove
 const mergeHelp = runCli(['merge', '--help']);
 assertHelpOptions('merge', mergeHelp, ['--target', '--profile', '--dialect', '--check', '--abort', '--format']);
 
+const baselineAdoptHelp = runCli(['baseline', 'adopt', '--help']);
+assertHelpOptions('baseline adopt', baselineAdoptHelp, [
+  '--target',
+  '--profile',
+  '--dialect',
+  '--local-baseline',
+  '--git-ref',
+  '--apply',
+  '--confirm-baseline-adoption',
+  '--format'
+]);
+
 const doctorAuthHelp = runCli(['doctor', 'auth', '--help']);
 assertHelpOptions('doctor auth', doctorAuthHelp, ['--format']);
 
 const major = Number(versionMatch[1]);
 const minor = Number(versionMatch[2]);
 const prerelease = versionMatch[4];
-const stableCompatible = major === 0 && minor === 4 && prerelease === undefined;
-const eligibleDevelopmentVersion = major === 0 && (minor < 4 || (minor === 4 && prerelease !== undefined));
+const stableCompatible = major === 0 && minor === 5 && prerelease === undefined;
+const eligibleDevelopmentVersion = major === 0 && (minor < 5 || (minor === 5 && prerelease !== undefined));
 if (!stableCompatible) {
   assert(
     allowDevelopmentVersion && eligibleDevelopmentVersion,
-    `CLI ${version} is outside the Skill range >=0.4.0 <0.5.0; update the Skill compatibility range before validating a later release line`
+    `CLI ${version} is outside the Skill range >=0.5.0 <0.6.0; update the Skill compatibility range before validating a later release line`
   );
   process.stdout.write(`Agent Skill valid for development CLI ${version}; required command contract is present.\n`);
 } else {

@@ -2,7 +2,7 @@
 
 Feishu Markdown Sync is a dry-run-first sync bridge between local Markdown and Feishu/Lark online documents. The official `lark-cli` owns Feishu authentication and document IO; `feishu-md-sync` adds local profiles, receipts, safety gates, status, diff, pull, merge, and publish UX.
 
-The primary product surface is the `feishu-md-sync` CLI: `publish`, `pull`, `status`, `diff`, and `merge`.
+The primary product surface is the `feishu-md-sync` CLI: `publish`, `pull`, `status`, `diff`, `merge`, and local-only `baseline adopt`.
 
 Docs site: <https://liyun95.github.io/feishu-md-sync/>
 
@@ -32,8 +32,8 @@ The selected `lark-cli` identity must have access to the target document, Drive 
 Install the Skill from the same release tag as the CLI:
 
 ```bash
-npm install --global feishu-md-sync@0.4.0
-npx skills add 'liyun95/feishu-md-sync#v0.4.0' --skill feishu-md-sync --global --yes
+npm install --global feishu-md-sync@0.5.0
+npx skills add 'liyun95/feishu-md-sync#v0.5.0' --skill feishu-md-sync --global --yes
 ```
 
 Then ask an Agent:
