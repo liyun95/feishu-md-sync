@@ -22,7 +22,7 @@ All notable changes to the published `feishu-md-sync` package are documented her
 ### Fixed
 
 - Accept the official provider's empty `parent_id` sentinel on page roots and directly referenced children while preserving fail-closed checks for every non-empty conflicting parent declaration.
-- Verify Code language and captions from revision-pinned full XML when the blocks API omits that metadata, while failing closed on revision or block-identity mismatches.
+- Verify Code language and captions from revision-pinned full XML when the blocks API omits that metadata, retry a bounded stale checkpoint view after a verified mutation, and fail closed on revision or block-identity mismatches.
 - Retry Feishu's transient `12330102` processing response during post-table semantic readback without repeating the successful table mutation.
 
 ## [0.5.0] - 2026-07-20

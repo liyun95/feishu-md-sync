@@ -5,8 +5,8 @@
   "cli": {
     "name": "feishu-md-sync",
     "version": "0.6.0",
-    "integrity": "sha512-xL1Gpb64zt178eHo5l0RiYE/ZxVxZFLsz6apKF5P15s21ypR+lPXP7DSpI3Fyk3O+JjGbL9EWT8YikWYAxecrA==",
-    "sha256": "8db286cfba746215038e76c7aca1644e3e83f9f72f41908265fe4dd7c03f5723"
+    "integrity": "sha512-FDmV3UfozULWpCfQEaBNaD6RyBIlrJYFoFCL0WExOzvG/1r7yMtkQ/cvWEsIJdJjQO1e07gHtAGnxBCBgLw7Jw==",
+    "sha256": "56110e188cb70891d8ebb67b26f943d3450ade66c0864459821142c843c43acc"
   },
   "engine": {
     "name": "feishu-docx-engine",
