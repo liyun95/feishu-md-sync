@@ -40,6 +40,7 @@ import {
   createVerifiedStructuredTree,
   StructuredTreeProgressError,
 } from './structured-tree.js';
+import { assessRecovery } from './recovery.js';
 import type { DocxTransport, ProviderBlock } from './transport.js';
 
 const WHITEBOARD_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
@@ -96,12 +97,8 @@ export function createFeishuDocxEngine(input: {
     snapshot,
     prepare: prepareMutationBatch,
     apply: (applyInput: ApplyMutationInput) => applyMutationBatch(transport, applyInput),
-    assessRecovery: async (_recoveryInput: AssessRecoveryInput): Promise<RecoveryAssessment> => {
-      throw new EngineExecutionError(
-        'recovery_not_supported',
-        'Recovery assessment is not available until the recovery implementation is installed.',
-      );
-    },
+    assessRecovery: (recoveryInput: AssessRecoveryInput): Promise<RecoveryAssessment> =>
+      assessRecovery(transport, recoveryInput),
   });
 }
 

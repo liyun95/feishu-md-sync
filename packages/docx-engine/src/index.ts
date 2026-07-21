@@ -37,6 +37,10 @@ export {
   type CreateDocumentSnapshotInput,
 } from './snapshot.js';
 export {
+  assessRecovery,
+  type RecoveryReason,
+} from './recovery.js';
+export {
   LarkCliProviderError,
   LarkCliTransport,
   type LarkCliErrorEnvelope,

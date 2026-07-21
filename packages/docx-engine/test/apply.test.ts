@@ -364,7 +364,11 @@ describe('createFeishuDocxEngine', () => {
     await expect(engine.assessRecovery({
       batch: prepared,
       checkpoint: { completedOperations: [], prewriteSnapshot: snapshot },
-    })).rejects.toMatchObject({ code: 'recovery_not_supported' });
+    })).resolves.toEqual({
+      disposition: 'resume_possible',
+      completedOperationIds: [],
+      pendingOperationIds: ['assert-a'],
+    });
   });
 });
 
