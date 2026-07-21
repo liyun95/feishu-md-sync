@@ -112,16 +112,18 @@ CONTROLLED_DOC='<dedicated-controlled-doc-url-or-token>' \
 
 Then run the Task 13 CLI parity commands exactly:
 
+Use `packages/cli/test/fixtures/live/zdoc-engine-controlled.md`. The production-shaped Hugging Face dialect fixture is intentionally not used for this gate because it contains a relative document link and therefore correctly requires the configured Base link resolver; without that resolver it is expected to block rather than serve as a standalone controlled parity source.
+
 ```bash
 export CONTROLLED_DOC='<dedicated-controlled-doc-url-or-token>'
-npm run dev -- status packages/cli/test/fixtures/dialects/zdoc-authoring/hugging-face.md \
+npm run dev -- status packages/cli/test/fixtures/live/zdoc-engine-controlled.md \
   --target "$CONTROLLED_DOC" --dialect zdoc-authoring --profile none --format json
 
-npm run dev -- diff packages/cli/test/fixtures/dialects/zdoc-authoring/hugging-face.md \
+npm run dev -- diff packages/cli/test/fixtures/live/zdoc-engine-controlled.md \
   --target "$CONTROLLED_DOC" --dialect zdoc-authoring --profile none --format json
 ```
 
-Save stdout, exit codes, target identity, document ID, revision, semantic hashes, operation summary, blockers, warnings, `zdocRoundTrip`, link resolution, and engine diagnostics. Compare with the pre-extraction fixture. Only explicitly additive engine diagnostic fields may differ. These commands must not include `--write`, `--create`, or any `--confirm-*` flag.
+Save stdout, exit codes, target identity, document ID, revision, semantic hashes, operation summary, blockers, warnings, `zdocRoundTrip`, link resolution, and engine diagnostics. Confirm the controlled source remains blocker-free and the remote preserves its note Callout, nested continuation/list hierarchy, and native table semantics. These commands must not include `--write`, `--create`, or any `--confirm-*` flag.
 
 Current result: skipped because `CONTROLLED_DOC` is unset. Required input is one explicitly approved, non-production existing Feishu doc URL/token accessible to the configured identity.
 
