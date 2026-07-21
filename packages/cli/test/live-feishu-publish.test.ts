@@ -306,7 +306,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     }
   }, 180_000);
 
-  it('round-trips Code content, language, captions, movement, conflicts, and deletion', async () => {
+  it.only('round-trips Code content, language, captions, movement, conflicts, and deletion', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
     const targetIdentity = parseFeishuTarget(target);
     const cwd = new URL('..', import.meta.url).pathname;
@@ -357,6 +357,13 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
         'publish', file, '--target', target, '--profile', 'none', '--write',
         '--confirm-collaboration-risk', '--format', 'json'
       ]);
+      if (disjoint.status !== 0) {
+        const observed = await findCodeBlocks(adapter, documentId);
+        throw new Error(
+          `[DEBUG-code-readback] ${JSON.stringify(observed)}\n` +
+          `CLI stderr:\n${disjoint.stderr}`
+        );
+      }
       assertCliSuccess(disjoint, 'merge disjoint Code content and language');
       const afterDisjoint = await findCodeBlocks(adapter, documentId);
       expect(afterDisjoint[0]).toMatchObject({ content: 'print("local")', language: 'go', caption: 'Example' });
