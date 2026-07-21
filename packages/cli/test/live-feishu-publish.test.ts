@@ -436,7 +436,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  }, 300_000);
+  }, 600_000);
 
   it('creates and tracks an SVG Whiteboard from an existing image block', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
