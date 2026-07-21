@@ -2119,10 +2119,12 @@ function isCheckpointReadTransientError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const record = error as {
     code?: unknown;
+    message?: unknown;
     details?: { providerCode?: unknown };
     cause?: unknown;
   };
   if (record.code === 12330102 || record.details?.providerCode === 12330102) return true;
+  if (record.message === 'Code block readback differs from the desired content or language.') return true;
   return record.cause !== undefined && isCheckpointReadTransientError(record.cause);
 }
 

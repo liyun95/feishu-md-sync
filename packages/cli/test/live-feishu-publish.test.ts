@@ -29,7 +29,7 @@ const runDisposableEngineWrite = runLive &&
   process.env.FEISHU_MD_SYNC_ENGINE_LIVE_WRITE === '1' &&
   Boolean(process.env.FEISHU_MD_SYNC_ENGINE_TEST_PARENT);
 const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
-const LIVE_COMMAND_TIMEOUT_MS = 60_000;
+const LIVE_COMMAND_TIMEOUT_MS = 120_000;
 
 describe.skipIf(!runLive)('live Feishu publish', () => {
   it('publishes a Zilliz draft to an existing test doc with guarded document replace', async () => {
@@ -120,7 +120,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     const status = await runCli(['status', file, '--target', target, '--profile', 'none', '--format', 'json']);
     assertCliSuccess(status, 'status after mixed scoped publish');
     expect(status.stdout).toContain('"state": "clean"');
-  }, 60_000);
+  }, 180_000);
 
   it('round-trips tracked Callout bodies while preserving presentation and container identity', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');

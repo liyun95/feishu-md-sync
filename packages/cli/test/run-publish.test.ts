@@ -1458,6 +1458,94 @@ Next text.`, 'utf8');
     ]);
   });
 
+  it('retries stale checkpoint Code metadata without repeating the verified mutation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-code-checkpoint-retry-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const base = '```python\nprint("old")\n```';
+    const local = '```python\nprint("local")\n```';
+    const remote = '```go\nprint("old")\n```';
+    const merged = '```go\nprint("local")\n```';
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, local, 'utf8');
+    await writePublishBaselineBundle({
+      cwd: dir,
+      target,
+      localBaseline: base,
+      publishBaseline: base,
+      remoteSemantic: remoteSemanticDocument([
+        { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+        codeBlock('code1', 'print("old")', 49)
+      ], 'doc_token'),
+      receipt: {
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        dialect: 'gfm',
+        dialectDraftHash: hashText(base),
+        dialectDependencies: [],
+        linkResolutionFingerprint: semanticHash([]),
+        resolvedLinks: [],
+        localSourceHash: hashText(base),
+        publishDraftHash: hashText(base),
+        remoteSnapshotHash: hashText(base),
+        remoteRevision: '1',
+        whiteboards: [],
+        updatedAt: new Date().toISOString()
+      }
+    });
+    let mutated = false;
+    let mutationCount = 0;
+    let staleMetadataReads = 1;
+    let metadataReadsAfterMutation = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: mutated ? merged : remote,
+        revision: mutated ? '3' : '2'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+        codeBlock('code1', mutated ? 'print("local")' : 'print("old")', 22)
+      ] }),
+      fetchDocCodeMetadata: async () => {
+        if (mutated) {
+          metadataReadsAfterMutation += 1;
+          if (staleMetadataReads > 0) {
+            staleMetadataReads -= 1;
+            return [{ blockId: 'code1', language: 'python' }];
+          }
+        }
+        return [{ blockId: 'code1', language: 'go' }];
+      },
+      replaceDocument: async () => {},
+      replaceBlock: async ({ content, format }) => {
+        expect(format).toBe('xml');
+        expect(content).toBe('<pre lang="go"><code>print("local")</code></pre>');
+        mutationCount += 1;
+        mutated = true;
+        return { revision: '3' };
+      },
+      insertBlocksAfter: async () => {},
+      moveBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    })).resolves.toMatchObject({ mode: 'write' });
+
+    expect(mutationCount).toBe(1);
+    expect(staleMetadataReads).toBe(0);
+    expect(metadataReadsAfterMutation).toBeGreaterThanOrEqual(2);
+  });
+
   it('reports a partial write when the first Code mutation fails readback verification', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-code-readback-partial-'));
     const markdownPath = join(dir, 'doc.md');
