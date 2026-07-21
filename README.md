@@ -10,7 +10,7 @@ The repository also builds `feishu-docx-engine`, a separately versioned package 
 
 `feishu-md-sync` remains the product layer. It owns Markdown dialects and profiles, semantic correspondence and planning, confirmation gates, Base-backed link resolution, receipts, recovery checkpoints, and user-facing CLI/JSON behavior. The engine does not interpret Markdown, approve a write, or advance a product baseline.
 
-The unreleased `feishu-md-sync` 0.6 line is designed for `feishu-docx-engine >=0.1.0 <0.2.0`; its npm artifact pins `feishu-docx-engine` to exactly `0.1.0` so an installed CLI has one reproducible physical execution contract. The packages remain independent release artifacts even though they are developed in this monorepo.
+`feishu-md-sync` 0.6 uses `feishu-docx-engine >=0.1.0 <0.2.0`; its npm artifact pins `feishu-docx-engine` to exactly `0.1.0` so an installed CLI has one reproducible physical execution contract. The packages remain independent release artifacts even though they are developed in this monorepo.
 
 Docs site: <https://liyun95.github.io/feishu-md-sync/>
 
@@ -40,8 +40,8 @@ The selected `lark-cli` identity must have access to the target document, Drive 
 Install the Skill from the same release tag as the CLI:
 
 ```bash
-npm install --global feishu-md-sync@0.5.0
-npx skills add 'liyun95/feishu-md-sync#v0.5.0' --skill feishu-md-sync --global --yes
+npm install --global feishu-md-sync@0.6.0
+npx skills add 'liyun95/feishu-md-sync#v0.6.0' --skill feishu-md-sync --global --yes
 ```
 
 Then ask an Agent:

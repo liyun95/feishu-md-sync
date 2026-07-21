@@ -92,8 +92,8 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 
 1. Review the target milestone and confirm all intended pull requests are merged.
 2. Calculate the version from the highest `release:*` impact in the milestone.
-3. Update `packages/cli/package.json` and `package-lock.json` to the target version.
-4. Add or update the changelog and draft the GitHub Release notes from the milestone pull requests.
+3. Update `packages/cli/package.json`, any separately versioned workspace package manifests, and `package-lock.json`. A CLI dependency on a workspace package must pin the exact release version.
+4. Add or update the changelog and final GitHub Release notes from the milestone pull requests. Create the tag-keyed JSON release manifest with both package identities, npm integrity, SHA-256, whether the engine is published in this release, and the engine provenance tag/ref/commit identity.
 5. Run:
 
    ```bash
@@ -102,14 +102,15 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
    npm run typecheck
    npm run test:package
    npm run test:skill:release
+   npm run test:release-workflow
    npm run docs:build
    ```
 
 6. Run the live Feishu smoke tests with the dedicated test document and identity.
 7. Merge the Release PR after all required checks pass.
-8. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. The workflow then publishes through npm Trusted Publishing, verifies the signed Sigstore provenance against that tag and commit, and creates the matching GitHub Release.
-9. Install the released CLI and matching tagged Skill in an isolated environment, then run the Skill validation and a read-only Feishu dogfood.
-10. Confirm the npm package, GitHub Release, and tagged Skill are available. If a post-publish step fails, rerun the same tag workflow; recovery accepts only matching package bytes and provenance from that exact tag commit.
+8. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. For a release with workspace packages, the workflow publishes them in dependency order. It publishes `feishu-docx-engine` first, waits for the exact registry integrity, installs that exact registry version in isolation, and only then publishes `feishu-md-sync`. Every package uses npm Trusted Publishing and receives separate signed Sigstore provenance bound to the same tag and commit.
+9. Install the released engine and CLI plus the matching tagged Skill in isolated environments, then run package checks, Skill validation, and a read-only Feishu dogfood.
+10. Confirm every npm package, provenance bundle, GitHub Release, and tagged Skill is available. If a post-publish step fails, rerun the same tag workflow; recovery accepts an existing package only when its registry integrity matches the freshly packed bytes exactly. A mismatched existing version is a hard stop.
 11. Close the milestone.
 
 `npm run test:skill` permits only an older pre-release development CLI while the next release is being assembled. Release PRs and tagged releases must use `npm run test:skill:release`, which rejects any CLI version outside the Skill's declared compatibility range.
@@ -129,6 +130,7 @@ npx skills add 'liyun95/feishu-md-sync#vX.Y.Z' --skill feishu-md-sync --global -
 | `v0.2.0` | Executable packaging fixes, npm installation docs, scoped table publishing, editable Whiteboard assets, scoped Callouts, and first-class Code block publishing. | Published |
 | `v0.3.0` | Agent-ready CLI contract, version-matched Agent Skill, structured failures, and Skill distribution validation. | Published |
 | `v0.4.0` | Source dialect preprocessing, read-only Base link resolution, receipt V4 baselines, and non-GFM merge safety. | Published |
-| `v0.5.0` | Verified Zdoc round trips, explicit baseline adoption, nested hierarchy recovery, and resumable scoped publishing. | Ready for release |
+| `v0.5.0` | Verified Zdoc round trips, explicit baseline adoption, nested hierarchy recovery, and resumable scoped publishing. | Published |
+| `v0.6.0` | Separately versioned shared Docx engine, engine-backed scoped writes, nested-list/native-table verification, and dependency-ordered release provenance. | Published |
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.

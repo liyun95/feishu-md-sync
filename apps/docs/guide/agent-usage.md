@@ -7,14 +7,14 @@
 Install the CLI and Skill from the same release:
 
 ```bash
-npm install --global feishu-md-sync@0.5.0
-npx skills add 'liyun95/feishu-md-sync#v0.5.0' \
+npm install --global feishu-md-sync@0.6.0
+npx skills add 'liyun95/feishu-md-sync#v0.6.0' \
   --skill feishu-md-sync \
   --global \
   --yes
 ```
 
-The `v0.5.x` Skill requires `feishu-md-sync >=0.5.0 <0.6.0`. Stable users should install from a release tag, not `main`, because `main` may describe unreleased CLI behavior.
+The `v0.6.x` Skill requires `feishu-md-sync >=0.6.0 <0.7.0`. Stable users should install from a release tag, not `main`, because `main` may describe unreleased CLI behavior.
 
 ## Invoke The Skill
 
@@ -93,8 +93,8 @@ export FEISHU_MD_SYNC_BIN='/path/to/worktree/packages/cli/dist/cli/index.js'
 Upgrade the CLI and reinstall the Skill from the same new tag:
 
 ```bash
-npm install --global feishu-md-sync@0.5.0
-npx skills add 'liyun95/feishu-md-sync#v0.5.0' --skill feishu-md-sync --global --yes
+npm install --global feishu-md-sync@0.6.0
+npx skills add 'liyun95/feishu-md-sync#v0.6.0' --skill feishu-md-sync --global --yes
 ```
 
 Do not update the Skill independently to `main` while keeping an older npm CLI.
