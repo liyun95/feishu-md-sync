@@ -29,7 +29,8 @@ const runDisposableEngineWrite = runLive &&
   process.env.FEISHU_MD_SYNC_ENGINE_LIVE_WRITE === '1' &&
   Boolean(process.env.FEISHU_MD_SYNC_ENGINE_TEST_PARENT);
 const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
-const LIVE_COMMAND_TIMEOUT_MS = 120_000;
+const LIVE_CLI_COMMAND_TIMEOUT_MS = 240_000;
+const LIVE_LARK_COMMAND_TIMEOUT_MS = 120_000;
 
 describe.skipIf(!runLive)('live Feishu publish', () => {
   it('publishes a Zilliz draft to an existing test doc with guarded document replace', async () => {
@@ -667,7 +668,7 @@ function runCliOnce(args: string[]): Promise<{ stdout: string; stderr: string; s
     execFile(process.execPath, ['--import', 'tsx', 'src/cli/index.ts', ...args], {
       cwd: new URL('..', import.meta.url),
       env: process.env,
-      timeout: LIVE_COMMAND_TIMEOUT_MS
+      timeout: LIVE_CLI_COMMAND_TIMEOUT_MS
     }, (error, stdout, stderr) => {
       resolve({
         stdout,
@@ -710,7 +711,7 @@ function runLarkCli(
     execFile('lark-cli', fullArgs, {
       cwd: options.cwd,
       env: process.env,
-      timeout: LIVE_COMMAND_TIMEOUT_MS
+      timeout: LIVE_LARK_COMMAND_TIMEOUT_MS
     }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(`lark-cli setup failed\nstdout:\n${stdout}\nstderr:\n${stderr}`));
