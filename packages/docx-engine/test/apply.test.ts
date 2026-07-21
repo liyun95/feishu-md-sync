@@ -66,6 +66,7 @@ class MemoryTransport implements DocxTransport {
   failWriteCause?: unknown;
   returnMissingCreatedId = false;
   replaceWithNewId = false;
+  insertedCodeLanguageOverride?: string;
   lastReplaceInput?: Parameters<DocxTransport['replaceBlock']>[0];
   driftAfterWrite = false;
   private nextId = 1;
@@ -226,6 +227,10 @@ class MemoryTransport implements DocxTransport {
         block_id: blockId,
         parent_id: input.parentBlockId,
       };
+      if (this.insertedCodeLanguageOverride && createdBlock.block_type === 14) {
+        const code = createdBlock.code as { style?: { language?: unknown } } | undefined;
+        code!.style!.language = this.insertedCodeLanguageOverride;
+      }
       this.blocks.push(createdBlock);
       return createdBlock;
     });
@@ -622,6 +627,32 @@ describe('verified mutation execution', () => {
     });
     expect(outcome.operations[0]!.createdBlockIds).toEqual(['new-1', 'new-2']);
     expect(outcome.finalSnapshot.nodes[0]!.childBlockIds).toEqual(['a', 'new-1', 'new-2', 'b', 'c']);
+  });
+
+  it.each([
+    ['Bash', 'bash'],
+    ['JavaScript', 'javascript'],
+    ['Plain Text', 'plaintext'],
+    ['C++', 'cpp'],
+    ['Visual Basic', 'vb'],
+    ['Visual Basic .NET', 'vb'],
+    ['Protocol Buffers', 'protobuf'],
+  ])('accepts provider Code language label %s for canonical %s during insert readback', async (providerLanguage, language) => {
+    const transport = new MemoryTransport();
+    transport.insertedCodeLanguageOverride = providerLanguage;
+    await expect(createFeishuDocxEngine({ transport }).apply({
+      batch: batch(transport, [{
+        operationId: 'insert-code-display-language',
+        kind: 'insert',
+        parentBlockId: 'root',
+        insertAfterBlockId: 'a',
+        insertBeforeBlockId: 'b',
+        desired: [{ kind: 'code', language, text: 'echo rewritten' }],
+      }]),
+      journal: journal(),
+    })).resolves.toMatchObject({
+      operations: [{ operationId: 'insert-code-display-language', verified: true }],
+    });
   });
 
   it('verifies a list item with a continuation paragraph followed by a recursive nested list', async () => {

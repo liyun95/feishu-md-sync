@@ -330,7 +330,7 @@ describe('remote semantic document', () => {
         block_type: 14,
         code: {
           elements: [{ text_run: { content: 'print(1)', text_element_style: {} } }],
-          style: { language: 'go' }
+          style: { language: 'go', caption: '' }
         }
       }
     ], 'doc_token', undefined, [{ blockId: 'code1', language: 'python', caption: 'Stale caption' }]);

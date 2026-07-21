@@ -105,6 +105,7 @@ const CODE_LANGUAGE_ALIASES: Record<string, keyof typeof CODE_LANGUAGE_IDS> = {
   restful: 'bash',
   sh: 'shell',
   zsh: 'shell',
+  'c++': 'cpp',
   cxx: 'cpp',
   golang: 'go',
   js: 'javascript',
@@ -113,9 +114,13 @@ const CODE_LANGUAGE_ALIASES: Record<string, keyof typeof CODE_LANGUAGE_IDS> = {
   md: 'markdown',
   py: 'python',
   ps1: 'powershell',
+  'protocol buffer': 'protobuf',
+  'protocol buffers': 'protobuf',
   proto: 'protobuf',
   rs: 'rust',
   ts: 'typescript',
+  'visual basic': 'vb',
+  'visual basic .net': 'vb',
   visualbasic: 'vb',
   yml: 'yaml',
 };
@@ -706,7 +711,7 @@ function codeLanguageId(language: string): number {
   return CODE_LANGUAGE_IDS[canonical];
 }
 
-function canonicalCodeLanguage(language: string): keyof typeof CODE_LANGUAGE_IDS {
+export function canonicalCodeLanguage(language: string): keyof typeof CODE_LANGUAGE_IDS {
   assertString(language, 'Code language');
   const source = language.trim().toLowerCase() || 'plaintext';
   const canonical = source in CODE_LANGUAGE_IDS

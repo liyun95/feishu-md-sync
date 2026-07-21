@@ -23,6 +23,9 @@ All notable changes to the published `feishu-md-sync` package are documented her
 
 - Accept the official provider's empty `parent_id` sentinel on page roots and directly referenced children while preserving fail-closed checks for every non-empty conflicting parent declaration.
 - Verify Code language and captions from revision-pinned block metadata enriched by same-revision full XML when needed, prevent stale external metadata from overriding it, and fail closed on revision or block-identity mismatches.
+- Accept the new Code block ID returned by Feishu replacement only when the exact section locator, content, language, and caption match; Code movement still requires preserved identity and fails closed if its exact ID disappears.
+- Propagate replacement Code block IDs through section reconcile checkpoints and later moves instead of failing receipt verification against the retired ID.
+- Canonicalize provider display-case Code language labels during engine readback so native creates such as `Bash` verify against their canonical language without weakening content or caption checks.
 - Retry Feishu's transient `12330102` processing response during post-table semantic readback without repeating the successful table mutation.
 
 ## [0.5.0] - 2026-07-20

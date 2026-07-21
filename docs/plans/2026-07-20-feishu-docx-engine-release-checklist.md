@@ -22,8 +22,8 @@ Local candidate tarballs were generated in a disposable `/tmp` directory. Repack
 
 | Package | npm shasum (SHA-1) | SHA-256 | npm integrity |
 | --- | --- | --- | --- |
-| `feishu-docx-engine@0.1.0` | `0b338a2135c5766912adbbae05bbd28dbe549e1d` | `70c4c2e7aeaa0360b25a79b84e46fed072f1890e383e02bc4e0ab2213d6b9943` | `sha512-a7yCxKX7mxEpjtzjvUHnl0CMA5FeLKd425iSiLd9tliakkeImjHq1WM6TocFsGKWlvAJyH3y/znw3rO56H8kbw==` |
-| `feishu-md-sync@0.6.0` | `93e9a25b0e8c8e76368348dee3049f2ca5970d7e` | `fab21f5b381376e4f52ae3085f025763ec68ab7cd56153a752c4e9206e0f482d` | `sha512-Q506f6sT+D4sN2VQZ1HGDmgYhwZsMFkl/5Zi1PeAjK+9ak039aCfgOAIttm7r6uFQu17nBeSPksga5O6a1sOqg==` |
+| `feishu-docx-engine@0.1.0` | `4970237dcc20c83e0bf8f9e9bc2ab4e92f73198d` | `8a7b5bb051648fda62c9d0adcb1fe99a61679481ae4f68fa93859bedd5340ec6` | `sha512-tkiErZ5rC5623noByFcy56bguOdzPkdMvHsSghj/OukoxcgIIt+xEXo/zyN54wN+Z7YeqRW7NsgNJNt9Og2wig==` |
+| `feishu-md-sync@0.6.0` | `5b38b2402cf6fd3e13bf89eb303ada844f568e43` | `7063594627703687588af76abff92200800cb19a38cd360b5f4447fafd845a17` | `sha512-xq+/IeYnWXJXvN/IMq3E1aSTHdwXBmFqSNRnA5zwGmv7jzajzhQRMmCE7ktr79FaBIUjIlcYA8wkOvO+T9n9TA==` |
 
 ## Hard pre-publish blockers discovered
 
@@ -31,8 +31,9 @@ Local candidate tarballs were generated in a disposable `/tmp` directory. Repack
 - Public registry ownership is visible for the existing CLI as `liyun95 <yun.li95@hotmail.com>`, but ownership of the new package cannot exist until its first publish.
 - `feishu-md-sync@latest` is currently `0.5.0`; `feishu-docx-engine` returns registry `E404`.
 - The candidate `.github/workflows/release.yml` now implements dependency-ordered publication and separate provenance verification, but it must be reviewed, committed through the Release PR, merged into `main`, and configured in the protected npm environment before a tag may be created.
-- `feishu-docx-engine` is a new unscoped package. Confirm how the npm account/protected environment establishes first-publish ownership and Trusted Publishing authorization before relying on OIDC. Do not assume the existing `feishu-md-sync` ownership automatically grants the new package name.
-Do not use a local unauthenticated/manual publish to bypass these blockers. Resolve first-publish ownership and merge the reviewed release candidate, then use the repository's protected `npm` environment.
+- npm Trusted Publishing cannot bootstrap a package name that does not yet exist. After the Release PR is merged but before the immutable `v0.6.0` tag is created, obtain separate explicit approval for a conventional authenticated seed publish of `feishu-docx-engine@0.0.0` with dist-tag `bootstrap`, then configure that package's Trusted Publisher for `liyun95/feishu-md-sync`, workflow `release.yml`, environment `npm`.
+- The seed must be packed from a clean disposable checkout of the merged source with only the engine version changed to `0.0.0`. It must not use the candidate `0.1.0` version or the `latest` tag.
+Do not use an unauthenticated publish, do not publish `feishu-docx-engine@0.1.0` manually, and do not create `v0.6.0` until the seed package exists and both package Trusted Publisher configurations have been verified.
 
 ## Local, no-side-effect preflight
 
@@ -59,6 +60,8 @@ node -e "import('feishu-docx-engine').then(({ENGINE_VERSION,ENGINE_CAPABILITIES}
 ```
 
 Inspect all generated package contents with both dry-run and local packs:
+
+Use the release workflow's Node 24 runtime and npm `11.18.0` for every approved pack. npm tarball gzip bytes can differ across Node/zlib versions even when package contents are equivalent.
 
 ```bash
 PACK_DIR_ONE="$(mktemp -d /tmp/feishu-docx-release-one-XXXXXX)"
@@ -88,12 +91,13 @@ The repository does not currently pin an `actionlint` binary or action. `scripts
 Observed local result on 2026-07-21:
 
 - `npm ci`, build, root typecheck, and `git diff --check`: passed.
-- Engine tests: 186 passed; coverage 88.60% statements, 77.84% branches, 98.40% functions, 88.60% lines.
-- CLI tests: 731 passed and 11 live tests skipped; coverage 87.80% statements, 82.30% branches, 95.60% functions, 87.80% lines.
+- Engine tests: 193 passed; coverage 88.61% statements, 77.95% branches, 98.40% functions, 88.61% lines.
+- CLI tests: 735 passed and 11 live tests skipped; coverage 88.15% statements, 82.41% branches, 95.75% functions, 88.15% lines.
 - Package smokes, release Skill validator/install smoke, Skill tree hash regression, docs build, structured workflow/manifest test, and workflow YAML parse: passed.
 - The strengthened live assertions compile and are discovered as eight skipped tests across the two targeted live files when their explicit environment gates are absent.
+- The focused Code live regression passed end to end with Lark CLI 1.0.73 in a disposable Agent Drive document: content/language merge, caption preservation, conflict detection, strict-identity movement, reconcile, deletion, and exact cleanup all passed in 114.7 seconds. The scenario timeout is 300 seconds while each individual CLI command remains capped at 120 seconds.
 - `npm audit`: six development-tool findings (2 moderate, 2 high, 2 critical) in Vitest/Vite/VitePress dependency paths; `npm audit --omit=dev` reports zero production vulnerabilities. Do not apply an automatic audit fix during release preparation; review upgrades separately.
-- Two independent real `npm pack` runs with the workflow-pinned npm `11.18.0` produced byte-identical engine and CLI tarballs. Both runs matched every committed integrity and SHA-256 field in `.github/releases/v0.6.0.json` exactly. npm 10.x produced the same bytes as an additional cross-version check.
+- Two independent real `npm pack` runs with the workflow-pinned npm `11.18.0` produced byte-identical engine and CLI tarballs. Both runs matched every committed integrity and SHA-256 field in `.github/releases/v0.6.0.json` exactly.
 
 ## Read-only Feishu parity gate
 
@@ -110,14 +114,14 @@ CONTROLLED_DOC='<dedicated-controlled-doc-url-or-token>' \
 
 Then run the Task 13 CLI parity commands exactly:
 
-Use `packages/cli/test/fixtures/live/zdoc-engine-controlled.md`. The production-shaped Hugging Face dialect fixture is intentionally not used for this gate because it contains a relative document link and therefore correctly requires the configured Base link resolver; without that resolver it is expected to block rather than serve as a standalone controlled parity source.
+Use `test/fixtures/live/zdoc-engine-controlled.md` because the root `npm run dev` command executes the CLI workspace with `packages/cli` as its working directory. The production-shaped Hugging Face dialect fixture is intentionally not used for this gate because it contains a relative document link and therefore correctly requires the configured Base link resolver; without that resolver it is expected to block rather than serve as a standalone controlled parity source.
 
 ```bash
 export CONTROLLED_DOC='<dedicated-controlled-doc-url-or-token>'
-npm run dev -- status packages/cli/test/fixtures/live/zdoc-engine-controlled.md \
+npm run dev -- status test/fixtures/live/zdoc-engine-controlled.md \
   --target "$CONTROLLED_DOC" --dialect zdoc-authoring --profile none --format json
 
-npm run dev -- diff packages/cli/test/fixtures/live/zdoc-engine-controlled.md \
+npm run dev -- diff test/fixtures/live/zdoc-engine-controlled.md \
   --target "$CONTROLLED_DOC" --dialect zdoc-authoring --profile none --format json
 ```
 
@@ -126,9 +130,10 @@ Save stdout, exit codes, target identity, document ID, revision, semantic hashes
 Observed controlled result on 2026-07-21:
 
 - `CONTROLLED_DOC=https://zilliverse.feishu.cn/docx/DiOjdMCpIocoayxEzQwcyppbn5M` is a dedicated non-production document in the approved Agent Drive folder.
-- Final document revision is `11`; the engine snapshot hash is `c7e56e0aa70099de5512e75af0909a0b6aaa756ced3606b2b0774e723eba82ee`.
+- Final document revision is `25`; the engine snapshot hash is `e4d042886e343e514d22eaf16690008aa55246fb11636457127cd7d8298fff05`.
 - The root child kinds are exactly `heading`, `paragraph`, `callout`, `heading`, `list`, `heading`, `table` in that order.
 - The note Callout contains the managed `Notes` title plus the expected body. The bullet item owns its continuation paragraph and ordered child. The native table is a verified unmerged 2-by-2 table with all four expected cell values.
+- After an accidental Code live-test overwrite, the degraded list subtree was restored through the engine's native structured child creation path. The final write changed only the malformed list root; all other root block IDs and hashes remained unchanged.
 - The engine no-op live assertion passed without recording a mutation or changing the document revision/hash.
 - CLI `status` and `diff` exited `0` with no dialect, link, Callout, Code, table, Whiteboard, or scoped blockers. `zdocRoundTrip.safeToPublish` was `true` with only the expected `metadata-ignored` informational item.
 - CLI publish dry-run returned `strategy: no-op`, zero scoped operations, zero blockers, and zero warnings. It still reports untracked-remote and Callout-adoption confirmation requirements because this controlled document intentionally has no publish receipt; no confirmation flag or receipt adoption was applied for this read-only gate.
@@ -188,9 +193,10 @@ npm view feishu-md-sync dist-tags versions --json
 npm view feishu-docx-engine dist-tags versions --json
 ```
 
-Before first publish, verify in the protected GitHub `npm` environment:
+Before creating the `v0.6.0` tag, verify in the protected GitHub `npm` environment:
 
-- Trusted Publishing is configured for `liyun95/feishu-md-sync` and `.github/workflows/release.yml`.
+- `feishu-docx-engine@0.0.0` exists with dist-tag `bootstrap` after the separately approved conventional seed publish; `latest` must still be absent for the engine.
+- Trusted Publishing is configured separately for both `feishu-docx-engine` and `feishu-md-sync`, using owner `liyun95`, repository `feishu-md-sync`, workflow `release.yml`, and environment `npm`.
 - The job has `id-token: write` and no long-lived npm token is introduced.
 - The release commit is merged into `main`; tag `v0.6.0` is immutable and points to that commit.
 - Before any publish, the workflow must repack both artifacts and match name, version, npm integrity, and SHA-256 against `.github/releases/v0.6.0.json`.
@@ -201,7 +207,16 @@ Before first publish, verify in the protected GitHub `npm` environment:
 
 ## Exact npm external-action preview
 
-Repository policy requires the reviewed tag workflow. Do not run the following until the dependency-ordered workflow, release notes, and release candidate commit are approved and merged.
+Repository policy requires the reviewed tag workflow. Do not run the following until the dependency-ordered workflow, release notes, and release candidate commit are approved and merged; the separately approved `feishu-docx-engine@0.0.0` bootstrap seed exists; and both Trusted Publisher configurations have been verified.
+
+The one-time seed publish is a separate irreversible action and is not authorization to publish either release candidate manually:
+
+```bash
+npm publish ./seed-artifacts/feishu-docx-engine-0.0.0.tgz \
+  --access public --tag bootstrap
+```
+
+The seed artifact must come from the clean disposable merged-source checkout described above. Stop after verifying `bootstrap -> 0.0.0` and configuring the engine Trusted Publisher; do not move `latest` and do not publish `0.1.0` outside the protected tag workflow.
 
 The external trigger requiring approval is:
 

@@ -1,6 +1,7 @@
 import { canonicalHash } from './hash.js';
 import {
   assertNonEmptyWhiteboardRaw,
+  canonicalCodeLanguage,
   canonicalWhiteboardRawHash,
   normalizeProviderLinkUrl,
   providerBlocksToXml,
@@ -2023,7 +2024,7 @@ function decodeOrdinaryNode(node: SnapshotNode): DesiredNode | undefined {
       kind: 'code',
       language: providerLanguageName(style?.language),
       text: inlineText(decodeInline(node.raw, 'code')),
-      ...(typeof style?.caption === 'string' ? { caption: style.caption } : {}),
+      ...(typeof style?.caption === 'string' && style.caption !== '' ? { caption: style.caption } : {}),
     };
   }
   return undefined;
@@ -2054,7 +2055,7 @@ function decodeInline(rawBlock: Record<string, unknown>, key: string): InlineCon
 }
 
 function providerLanguageName(value: unknown): string {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return canonicalCodeLanguage(value);
   const known: Record<number, string> = {
     1: 'plaintext', 7: 'bash', 9: 'cpp', 10: 'c', 12: 'css', 15: 'dart',
     18: 'dockerfile', 19: 'erlang', 22: 'go', 23: 'groovy', 24: 'html', 26: 'http',

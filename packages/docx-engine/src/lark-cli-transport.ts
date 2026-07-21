@@ -538,9 +538,10 @@ function codeMetadataFromXml(xml: string): Map<string, { language: string; capti
     if (metadata.has(blockId)) {
       throw invalidResponseError(`lark-cli full XML readback repeated Code block ID ${blockId}.`);
     }
+    const caption = attributes.caption?.replace(/\n+$/g, '');
     metadata.set(blockId, {
       language,
-      ...(attributes.caption !== undefined ? { caption: attributes.caption.replace(/\n+$/g, '') } : {}),
+      ...(caption ? { caption } : {}),
     });
   }
   return metadata;

@@ -108,10 +108,11 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 
 6. Run the live Feishu smoke tests with the dedicated test document and identity.
 7. Merge the Release PR after all required checks pass.
-8. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. For a release with workspace packages, the workflow publishes them in dependency order. It publishes `feishu-docx-engine` first, waits for the exact registry integrity, installs that exact registry version in isolation, and only then publishes `feishu-md-sync`. Every package uses npm Trusted Publishing and receives separate signed Sigstore provenance bound to the same tag and commit.
-9. Install the released engine and CLI plus the matching tagged Skill in isolated environments, then run package checks, Skill validation, and a read-only Feishu dogfood.
-10. Confirm every npm package, provenance bundle, GitHub Release, and tagged Skill is available. If a post-publish step fails, rerun the same tag workflow; recovery accepts an existing package only when its registry integrity matches the freshly packed bytes exactly. A mismatched existing version is a hard stop.
-11. Close the milestone.
+8. Before tagging a release that introduces a new npm package name, confirm the package already exists and has a Trusted Publisher. If npm returns `E404`, obtain separate explicit approval, prepare `0.0.0` from a clean disposable checkout of the merged source, conventionally publish it with `--tag bootstrap --access public`, and configure its Trusted Publisher for this repository's `release.yml` workflow and `npm` environment. Never seed the real candidate version and never move `latest` during bootstrap.
+9. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit only after every new package is bootstrapped and both existing and new package Trusted Publisher settings are verified. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. For a release with workspace packages, the workflow publishes them in dependency order. It publishes `feishu-docx-engine` first, waits for the exact registry integrity, installs that exact registry version in isolation, and only then publishes `feishu-md-sync`. Every candidate package uses npm Trusted Publishing and receives separate signed Sigstore provenance bound to the same tag and commit.
+10. Install the released engine and CLI plus the matching tagged Skill in isolated environments, then run package checks, Skill validation, and a read-only Feishu dogfood.
+11. Confirm every npm package, provenance bundle, GitHub Release, and tagged Skill is available. If a post-publish step fails, rerun the same tag workflow; recovery accepts an existing package only when its registry integrity matches the freshly packed bytes exactly. A mismatched existing version is a hard stop.
+12. Close the milestone.
 
 `npm run test:skill` permits only an older pre-release development CLI while the next release is being assembled. Release PRs and tagged releases must use `npm run test:skill:release`, which rejects any CLI version outside the Skill's declared compatibility range.
 
@@ -131,6 +132,6 @@ npx skills add 'liyun95/feishu-md-sync#vX.Y.Z' --skill feishu-md-sync --global -
 | `v0.3.0` | Agent-ready CLI contract, version-matched Agent Skill, structured failures, and Skill distribution validation. | Published |
 | `v0.4.0` | Source dialect preprocessing, read-only Base link resolution, receipt V4 baselines, and non-GFM merge safety. | Published |
 | `v0.5.0` | Verified Zdoc round trips, explicit baseline adoption, nested hierarchy recovery, and resumable scoped publishing. | Published |
-| `v0.6.0` | Separately versioned shared Docx engine, engine-backed scoped writes, nested-list/native-table verification, and dependency-ordered release provenance. | Published |
+| `v0.6.0` | Separately versioned shared Docx engine, engine-backed scoped writes, nested-list/native-table verification, and dependency-ordered release provenance. | Release PR |
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.

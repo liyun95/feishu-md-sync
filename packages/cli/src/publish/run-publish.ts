@@ -1225,6 +1225,7 @@ export async function applyScopedOperations(input: {
   }
   const completed = [...(input.completedOperations ?? [])];
   const verifiedOperations = input.verifiedOperations ?? [];
+  const replacementCodeBlockIds = new Map<string, string>();
   for (let index = 0; index < input.operations.length; index += 1) {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
@@ -1289,6 +1290,7 @@ export async function applyScopedOperations(input: {
           verifiedOperations,
           recordCheckpoint: input.recordCheckpoint,
           recoveryCheckpoint: input.recoveryCheckpoint,
+          replacementCodeBlockIds,
           pendingAfter: [
             ...input.operations.slice(index + 1).map(summarizeScopedOperation),
             ...(input.pendingAfter ?? [])
@@ -1328,26 +1330,38 @@ async function applyScopedOperationThroughEngine(input: {
     verifiedOperations: ScopedPatchOperation[]
   ) => Promise<void>;
   recoveryCheckpoint?: { written: boolean; revision?: string };
+  replacementCodeBlockIds: Map<string, string>;
   pendingAfter: PublishWriteOperationSummary[];
 }): Promise<void> {
   const engine = createFeishuDocxEngine({ transport: docxTransportForAdapter(input.adapter) });
-  const resolution = await resolveScopedEngineOperation(input);
+  const remappedOperation = remapReplacementCodeBlockId(input.operation, input.replacementCodeBlockIds);
+  const resolution = await resolveScopedEngineOperation({ ...input, operation: remappedOperation });
+  const effectiveOperation = withResolvedCodeBlockId(remappedOperation, resolution.resolvedRemoteBlockId);
   const snapshot = await engine.snapshot({ kind: 'docx', token: input.doc });
   const intents = scopedOperationToMutationIntents({
-    operation: input.operation,
+    operation: effectiveOperation,
     snapshot,
     callouts: input.callouts,
     ...resolution
   });
-  const operationsById = new Map(intents.map((intent) => [intent.operationId, input.operation] as const));
+  const operationsById = new Map(intents.map((intent) => [intent.operationId, effectiveOperation] as const));
+  const originalCodeBlockId = input.operation.kind === 'code-update'
+    ? input.operation.remoteBlockId
+    : undefined;
   const durableJournal = createDocxEngineJournal({
     operationsById,
     completedOperations: input.completedOperations,
     verifiedOperations: input.verifiedOperations,
     recordCheckpoint: input.recordCheckpoint,
-    summarize: summarizeScopedOperation
+    summarize: summarizeScopedOperation,
+    onVerified: (operation, evidence) => {
+      if (operation.kind !== 'code-update' || !originalCodeBlockId || evidence.createdBlockIds.length !== 1) return;
+      const replacementBlockId = evidence.createdBlockIds[0]!;
+      input.replacementCodeBlockIds.set(originalCodeBlockId, replacementBlockId);
+      operation.remoteBlockId = replacementBlockId;
+    }
   });
-  const tableOperation = input.operation.kind === 'table-replace' || input.operation.kind === 'table-create';
+  const tableOperation = effectiveOperation.kind === 'table-replace' || effectiveOperation.kind === 'table-create';
   let bufferedEvidence: import('feishu-docx-engine').VerifiedOperationEvidence | undefined;
   const journal: MutationJournal = tableOperation
     ? { recordVerified: async (evidence) => { bufferedEvidence = evidence; } }
@@ -1422,6 +1436,27 @@ async function applyScopedOperationThroughEngine(input: {
     }
     throw bridgeEngineCause(error);
   }
+}
+
+function remapReplacementCodeBlockId<T extends Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>>(
+  operation: T,
+  replacements: ReadonlyMap<string, string>
+): T {
+  if ((operation.kind !== 'code-update' && operation.kind !== 'code-move' && operation.kind !== 'code-delete') ||
+    !operation.remoteBlockId) return operation;
+  const replacementBlockId = replacements.get(operation.remoteBlockId);
+  return replacementBlockId ? { ...operation, remoteBlockId: replacementBlockId } : operation;
+}
+
+function withResolvedCodeBlockId<T extends Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>>(
+  operation: T,
+  resolvedRemoteBlockId: string | undefined
+): T {
+  if (!resolvedRemoteBlockId ||
+    (operation.kind !== 'code-update' && operation.kind !== 'code-move' && operation.kind !== 'code-delete')) {
+    return operation;
+  }
+  return { ...operation, remoteBlockId: resolvedRemoteBlockId };
 }
 
 function tablePostApplyPartialWriteError(input: {
@@ -1802,10 +1837,13 @@ async function applyCodeSectionReconcileThroughEngine(input: {
       recordCheckpoint: input.recordCheckpoint,
       summarize: () => physical.summary,
       onVerified: (operation, evidence) => {
-        if (operation.kind === 'code-create' && evidence.createdBlockIds.length === 1) {
+        if ((operation.kind === 'code-create' || operation.kind === 'code-update') &&
+          evidence.createdBlockIds.length === 1) {
+          const replacementBlockId = evidence.createdBlockIds[0]!;
+          if (operation.kind === 'code-update') operation.remoteBlockId = replacementBlockId;
           operation.desiredCode = {
             ...operation.desiredCode,
-            remoteBlockId: evidence.createdBlockIds[0]
+            remoteBlockId: replacementBlockId
           };
         }
       }
@@ -2137,6 +2175,10 @@ function isRateLimitError(error: unknown): boolean {
 
 function resolveRemoteCode(document: SemanticDocument, operation: Exclude<CodeBlockOperation, { kind: 'code-create' | 'code-section-reconcile' }>): SemanticCodeBlock {
   const byId = codeNodes(document).find((code) => code.remoteBlockId && code.remoteBlockId === operation.remoteBlockId);
+  if (operation.kind === 'code-move') {
+    if (!byId) throw new Error('Code move identity is no longer resolvable by its exact remote block ID.');
+    return byId;
+  }
   const byLocator = findCodeByLocator(document, operation.sourceLocator);
   const matched = byId ?? byLocator;
   if (!matched) throw new Error(`Code block correspondence is no longer resolvable at ${locatorKey(operation.sourceLocator)}.`);
@@ -2797,12 +2839,16 @@ function verifyCodeOperation(operation: CodeBlockOperation, remote: SemanticDocu
   if (!matched || !codeManagedEqual(matched, desired)) {
     throw new Error('Code block readback differs from the desired content or language.');
   }
-  if (desired.caption !== undefined && matched.caption !== desired.caption) {
+  if (!codeReadbackMatches(matched, desired)) {
     throw new Error('Code block readback did not preserve the remote caption.');
   }
   if (operation.kind === 'code-create' || operation.kind === 'code-move') {
     verifyCodePlacement(remote, matched, operation.afterLocator, operation.afterCodeFingerprint);
   }
+}
+
+export function codeReadbackMatches(actual: SemanticCodeBlock, desired: SemanticCodeBlock): boolean {
+  return codeManagedEqual(actual, desired) && actual.caption === desired.caption;
 }
 
 function verifyCodePlacement(

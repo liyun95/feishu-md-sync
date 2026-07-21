@@ -156,7 +156,8 @@ function remoteCodeBlock(
     : typeof code?.caption === 'string'
       ? code.caption
       : undefined;
-  const caption = pinnedLanguage ? embeddedCaption : metadata?.caption ?? embeddedCaption;
+  const captionValue = pinnedLanguage ? embeddedCaption : metadata?.caption ?? embeddedCaption;
+  const caption = captionValue === '' ? undefined : captionValue;
   return {
     kind: 'code',
     locator,

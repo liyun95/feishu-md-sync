@@ -1,4 +1,5 @@
 import {
+  canonicalCodeLanguage,
   canonicalWhiteboardRawHash,
   normalizeProviderLinkUrl,
   svgExpectedTexts,
@@ -998,7 +999,7 @@ function decodeNode(snapshot: DocumentSnapshot, node: SnapshotNode | undefined):
     const caption = asRecord(payload?.style)?.caption;
     return {
       kind: 'code', language, text: decodeInline(node.raw, 'code').map(({ text }) => text).join(''),
-      ...(typeof caption === 'string' ? { caption } : {}),
+      ...(typeof caption === 'string' && caption !== '' ? { caption } : {}),
     };
   }
   if (node.kind === 'list') {
@@ -1078,7 +1079,7 @@ function decodeInline(raw: Record<string, unknown>, key: string): InlineContent[
 }
 
 function providerLanguageName(value: unknown): string {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return canonicalCodeLanguage(value);
   const known: Record<number, string> = {
     1: 'plaintext', 7: 'bash', 9: 'cpp', 10: 'c', 12: 'css', 15: 'dart',
     18: 'dockerfile', 19: 'erlang', 22: 'go', 23: 'groovy', 24: 'html', 26: 'http',
