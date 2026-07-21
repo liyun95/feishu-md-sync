@@ -31,6 +31,9 @@ const runDisposableEngineWrite = runLive &&
 const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
 const LIVE_CLI_COMMAND_TIMEOUT_MS = 240_000;
 const LIVE_LARK_COMMAND_TIMEOUT_MS = 120_000;
+const LIVE_REVISION_STABLE_WINDOW_MS = 30_000;
+const LIVE_REVISION_SETTLE_TIMEOUT_MS = 90_000;
+const LIVE_REVISION_POLL_MS = 3_000;
 
 describe.skipIf(!runLive)('live Feishu publish', () => {
   it('publishes a Zilliz draft to an existing test doc with guarded document replace', async () => {
@@ -447,6 +450,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     const documentId = await retryRateLimited(() => {
       return adapter.resolveDocumentId({ target: targetIdentity });
     });
+    await waitForRemoteRevisionToSettle(adapter, documentId);
     const dir = await mkdtemp(join(tmpdir(), 'fms-live-whiteboard-'));
     const file = join(dir, 'doc.md');
     const png = join(dir, 'architecture.png');
@@ -515,7 +519,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 240_000);
 
   it.runIf(process.env.FEISHU_MD_SYNC_TEST_CREATE_PARENT)('creates a Zilliz draft under a test parent', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_CREATE_PARENT');
@@ -689,6 +693,29 @@ async function retryRateLimited<T>(operation: () => Promise<T>): Promise<T> {
       await delay(delayMs);
     }
   }
+}
+
+async function waitForRemoteRevisionToSettle(
+  adapter: Pick<LarkCliAdapter, 'fetchDocMarkdown'>,
+  documentId: string,
+): Promise<void> {
+  const startedAt = Date.now();
+  let stableSince = startedAt;
+  let previousFingerprint: string | undefined;
+  while (Date.now() - startedAt <= LIVE_REVISION_SETTLE_TIMEOUT_MS) {
+    const remote = await retryRateLimited(() => adapter.fetchDocMarkdown({ doc: documentId }));
+    const fingerprint = `${remote.revision ?? '<unknown>'}\u0000${remote.markdown}`;
+    if (fingerprint !== previousFingerprint) {
+      previousFingerprint = fingerprint;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= LIVE_REVISION_STABLE_WINDOW_MS) {
+      return;
+    }
+    await delay(LIVE_REVISION_POLL_MS);
+  }
+  throw new Error(
+    `shared live document did not remain revision-stable for ${LIVE_REVISION_STABLE_WINDOW_MS}ms`,
+  );
 }
 
 function isRateLimited(value: string): boolean {
