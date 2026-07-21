@@ -2119,12 +2119,10 @@ function isCheckpointReadTransientError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const record = error as {
     code?: unknown;
-    message?: unknown;
     details?: { providerCode?: unknown };
     cause?: unknown;
   };
   if (record.code === 12330102 || record.details?.providerCode === 12330102) return true;
-  if (record.message === 'Code block readback differs from the desired content or language.') return true;
   return record.cause !== undefined && isCheckpointReadTransientError(record.cause);
 }
 
@@ -2968,7 +2966,18 @@ async function fetchRemoteCodeMetadata(
   documentId: string,
   blocks: import('../feishu/types.js').FeishuBlock[]
 ): Promise<import('../adapters/feishu-adapter.js').RemoteCodeMetadata[]> {
-  if (!blocks.some((block) => block.block_type === 14) || !adapter.fetchDocCodeMetadata) return [];
+  const codeBlocks = blocks.filter((block) => block.block_type === 14);
+  if (codeBlocks.length === 0 || !adapter.fetchDocCodeMetadata) return [];
+  const allRevisionPinned = codeBlocks.every((block) => {
+    const code = block.code && typeof block.code === 'object' && !Array.isArray(block.code)
+      ? block.code as Record<string, unknown>
+      : undefined;
+    const style = code?.style && typeof code.style === 'object' && !Array.isArray(code.style)
+      ? code.style as Record<string, unknown>
+      : undefined;
+    return typeof style?.language === 'string' && style.language.trim().length > 0;
+  });
+  if (allRevisionPinned) return [];
   return withRateLimitRetry(() => adapter.fetchDocCodeMetadata!({ doc: documentId }));
 }
 

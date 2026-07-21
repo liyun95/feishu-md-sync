@@ -34,7 +34,4 @@ jobs:
         run: |
           printf "%s" "$LARK_APP_SECRET" | lark-cli config init --app-id "$LARK_APP_ID" --app-secret-stdin --brand feishu
       - run: lark-cli auth status
-      - run: >-
-          npm exec --workspace=feishu-md-sync -- vitest run
-          test/live-feishu-publish.test.ts
-          -t 'round-trips Code content, language, captions, movement, conflicts, and deletion'
+      - run: npm run test:live:feishu

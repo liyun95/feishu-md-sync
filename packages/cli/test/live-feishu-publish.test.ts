@@ -357,13 +357,6 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
         'publish', file, '--target', target, '--profile', 'none', '--write',
         '--confirm-collaboration-risk', '--format', 'json'
       ]);
-      if (disjoint.status !== 0) {
-        const observed = await findCodeBlocks(adapter, documentId);
-        throw new Error(
-          `[DEBUG-code-readback] ${JSON.stringify(observed)}\n` +
-          `CLI stderr:\n${disjoint.stderr}`
-        );
-      }
       assertCliSuccess(disjoint, 'merge disjoint Code content and language');
       const afterDisjoint = await findCodeBlocks(adapter, documentId);
       expect(afterDisjoint[0]).toMatchObject({ content: 'print("local")', language: 'go', caption: 'Example' });

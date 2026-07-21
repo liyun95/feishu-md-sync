@@ -1458,7 +1458,7 @@ Next text.`, 'utf8');
     ]);
   });
 
-  it('retries stale checkpoint Code metadata without repeating the verified mutation', async () => {
+  it('uses pinned Code metadata without a redundant external checkpoint fetch', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-code-checkpoint-retry-'));
     const target = { kind: 'docx' as const, token: 'doc_token' };
     const base = '```python\nprint("old")\n```';
@@ -1494,8 +1494,7 @@ Next text.`, 'utf8');
     });
     let mutated = false;
     let mutationCount = 0;
-    let staleMetadataReads = 1;
-    let metadataReadsAfterMutation = 0;
+    let metadataFetches = 0;
     const adapter: FeishuAdapter = {
       fetchDocMarkdown: async () => ({
         markdown: mutated ? merged : remote,
@@ -1503,17 +1502,21 @@ Next text.`, 'utf8');
       }),
       fetchDocBlocks: async () => ({ blocks: [
         { block_id: 'doc_token', block_type: 1, children: ['code1'] },
-        codeBlock('code1', mutated ? 'print("local")' : 'print("old")', 22)
-      ] }),
-      fetchDocCodeMetadata: async () => {
-        if (mutated) {
-          metadataReadsAfterMutation += 1;
-          if (staleMetadataReads > 0) {
-            staleMetadataReads -= 1;
-            return [{ blockId: 'code1', language: 'python' }];
+        {
+          block_id: 'code1',
+          block_type: 14,
+          code: {
+            elements: [{ text_run: {
+              content: mutated ? 'print("local")' : 'print("old")',
+              text_element_style: {}
+            } }],
+            style: { language: 'go' }
           }
         }
-        return [{ blockId: 'code1', language: 'go' }];
+      ] }),
+      fetchDocCodeMetadata: async () => {
+        metadataFetches += 1;
+        return [{ blockId: 'code1', language: mutated ? 'python' : 'go' }];
       },
       replaceDocument: async () => {},
       replaceBlock: async ({ content, format }) => {
@@ -1542,8 +1545,7 @@ Next text.`, 'utf8');
     })).resolves.toMatchObject({ mode: 'write' });
 
     expect(mutationCount).toBe(1);
-    expect(staleMetadataReads).toBe(0);
-    expect(metadataReadsAfterMutation).toBeGreaterThanOrEqual(2);
+    expect(metadataFetches).toBe(0);
   });
 
   it('reports a partial write when the first Code mutation fails readback verification', async () => {
