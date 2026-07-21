@@ -1,5 +1,10 @@
 import { canonicalHash } from './hash.js';
-import type { DesiredNode, InlineContent, PreparedProviderBlock } from './model.js';
+import type {
+  DesiredListChildNode,
+  DesiredNode,
+  InlineContent,
+  PreparedProviderBlock,
+} from './model.js';
 import type { ProviderBlock } from './transport.js';
 
 type NonTableDesiredNode = Exclude<DesiredNode, { kind: 'table' }>;
@@ -444,7 +449,7 @@ function listItemBlock(
   if (!Array.isArray(item.children)) throw new Error(`${location}.children must be an array`);
   const key = ordered ? 'ordered' : 'bullet';
   const children = item.children.flatMap((child, index) =>
-    listBlocks(child, `${location}.children[${index}]`)
+    listChildBlocks(child, `${location}.children[${index}]`)
   );
   return {
     block_type: ordered ? BLOCK_TYPE.ordered : BLOCK_TYPE.bullet,
@@ -454,6 +459,13 @@ function listItemBlock(
     },
     ...(children.length > 0 ? { children } : {}),
   };
+}
+
+function listChildBlocks(child: DesiredListChildNode, location: string): ProviderBlock[] {
+  assertRecord(child, location);
+  if (child.kind === 'paragraph') return [toProviderBlock(child)];
+  if (child.kind === 'list') return listBlocks(child, location);
+  throw new Error(`unsupported list item child node: ${nodeKind(child)}`);
 }
 
 function tableDimensions(
@@ -557,10 +569,19 @@ function listToXml(node: ListNode, location: string): string {
     if (!Array.isArray(item.children)) throw new Error(`${itemLocation}.children must be an array`);
     return `<li>${inlineXml(item.content, `${itemLocation}.content`)}` +
       `${item.children.map((child, childIndex) =>
-        listToXml(child, `${itemLocation}.children[${childIndex}]`)
+        listChildToXml(child, `${itemLocation}.children[${childIndex}]`)
       ).join('')}</li>`;
   }).join('');
   return `<${tag}>${items}</${tag}>`;
+}
+
+function listChildToXml(child: DesiredListChildNode, location: string): string {
+  assertRecord(child, location);
+  if (child.kind === 'paragraph') {
+    return `<p>${inlineXml(child.content, `${location}.content`)}</p>`;
+  }
+  if (child.kind === 'list') return listToXml(child, location);
+  throw new Error(`unsupported list item child node: ${nodeKind(child)}`);
 }
 
 function assertCalloutChildren(nodes: DesiredNode[]): void {

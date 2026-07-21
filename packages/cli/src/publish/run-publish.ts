@@ -1,4 +1,12 @@
 import { confirmationRequired, validationFailure } from '../core/cli-failure.js';
+import {
+  createFeishuDocxEngine,
+  EngineExecutionError,
+  PartialMutationError,
+  type DocumentSnapshot,
+  type MutationIntent,
+  type MutationJournal,
+} from 'feishu-docx-engine';
 import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
 import { renderCodeBlockXml } from '../code-blocks/code-xml.js';
 import {
@@ -65,6 +73,16 @@ import {
   resolvedChildBlocks
 } from './block-state.js';
 import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
+import {
+  bridgeEngineCause,
+  docxTransportForAdapter,
+  enginePartialWriteError,
+  lastDocxEngineProviderRevision,
+  operationIdForScopedOperation,
+  scopedOperationToMutationIntents,
+  whiteboardOperationToMutationIntent,
+} from './docx-engine-operations.js';
+import { createDocxEngineJournal } from './docx-engine-journal.js';
 import type { CalloutOperation } from './callout-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
 import { buildPublishContext, type PublishContext } from './publish-context.js';
@@ -1189,7 +1207,7 @@ export function partitionScopedOperations(operations: ScopedPatchOperation[]): {
   return result;
 }
 
-async function applyScopedOperations(input: {
+export async function applyScopedOperations(input: {
   adapter: FeishuAdapter;
   doc: string;
   operations: ScopedPatchOperation[];
@@ -1203,7 +1221,8 @@ async function applyScopedOperations(input: {
   recoveryCheckpoint?: { written: boolean; revision?: string };
   verifiedOperations?: ScopedPatchOperation[];
 }): Promise<PublishWriteOperationSummary[]> {
-  if (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks || !input.adapter.fetchDocBlocks) {
+  if (!input.adapter.fetchDocBlocks || (!input.adapter.docxTransport &&
+    (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks))) {
     throw new Error('Configured Feishu adapter does not support scoped block-patch writes');
   }
   const completed = [...(input.completedOperations ?? [])];
@@ -1211,214 +1230,76 @@ async function applyScopedOperations(input: {
   for (let index = 0; index < input.operations.length; index += 1) {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
-    let appliedOperation: ScopedPatchOperation = operation;
-    let mutationCompleted = false;
-    let mutationRevision: string | undefined;
-    let textUpdateReadback: TextUpdateReadbackExpectation | undefined;
     try {
-      if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
-        operation.kind === 'code-move' || operation.kind === 'code-delete' ||
-        operation.kind === 'code-section-reconcile') {
-        await applyCodeOperation({
-          adapter: input.adapter,
-          doc: input.doc,
-          operation: operation as CodeBlockOperation
-        });
-      } else if (operation.kind === 'update') {
+      if (operation.kind === 'update') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyTextOperationParent(operation, before.blocks);
-        textUpdateReadback = textUpdateReadbackExpectation(operation, before.blocks);
         if (operation.recoveryExpectedRemoteMarkdown) {
           verifyRecoveryUpdatePreflight(operation, before.blocks, input.doc, input.callouts);
         }
-        const result = await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-        mutationRevision = result?.revision;
-      } else if (operation.kind === 'create') {
-        const insertAfterBlockId = await resolveCurrentInsertionAnchor({
-          adapter: input.adapter,
-          doc: input.doc,
-          originalBlockId: operation.insertAfterBlockId,
-          afterLocator: operation.afterLocator,
-          callouts: input.callouts
-        });
-        appliedOperation = { ...operation, insertAfterBlockId };
-        const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyTextOperationParent(appliedOperation, before.blocks);
-        const desiredTrees = markdownToFeishuBlocks(operation.desiredMarkdown);
-        const structured = desiredTrees.some((block) => childBlockObjects(block).length > 0);
-        if (structured) {
-          await createStructuredTextTrees({
-            adapter: input.adapter,
-            doc: input.doc,
-            operation: appliedOperation,
-            desiredTrees,
-            beforeBlocks: before.blocks
-          });
-        } else {
-          const result = await input.adapter.insertBlocksAfter({
-            doc: input.doc,
-            blockId: insertAfterBlockId,
-            content: operation.desiredMarkdown,
-            format: 'markdown'
-          });
-          mutationRevision = result?.revision;
-        }
       } else if (operation.kind === 'delete') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyTextOperationParent(operation, before.blocks);
         if (operation.recovery) {
           verifyRecoveryDeletePreflight(operation, before.blocks, input.doc, input.callouts);
         }
-        await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
-      } else if (operation.kind === 'table-replace') {
-        const result = await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: renderTableXml(operation.desiredTable),
-          format: 'xml'
-        });
-        mutationRevision = result?.revision;
       } else if (operation.kind === 'table-create') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
         verifyTableCreateAnchors(operation, before.blocks, input.doc);
-        await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          content: renderTableXml(operation.desiredTable),
-          format: 'xml'
-        });
-      } else if (operation.kind === 'callout-create') {
-        const insertAfterBlockId = await resolveCurrentInsertionAnchor({
-          adapter: input.adapter,
-          doc: input.doc,
-          originalBlockId: operation.insertAfterBlockId,
-          afterLocator: operation.afterLocator,
-          callouts: input.callouts
-        });
-        appliedOperation = { ...operation, insertAfterBlockId };
-        const result = await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: insertAfterBlockId,
-          content: renderCalloutXml({ callout: operation.desiredCallout, config: input.callouts }),
-          format: 'xml'
-        });
-        mutationRevision = result?.revision;
-      } else if (operation.kind === 'callout-child-update') {
-        await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-      } else if (operation.kind === 'callout-title-update') {
-        await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-      } else if (operation.kind === 'callout-child-create') {
-        await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-      } else if (operation.kind === 'callout-child-delete' || operation.kind === 'callout-delete') {
-        await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
-      } else if (operation.kind === 'authoring-token-create') {
-        await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          content: renderAuthoringTokenXml(operation.token),
-          format: 'xml'
-        });
-      } else if (operation.kind === 'authoring-token-move') {
-        if (!input.adapter.moveBlocksAfter) {
-          throw new Error('Configured Feishu adapter does not support Procedures token movement.');
-        }
-        await input.adapter.moveBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          sourceBlockIds: [operation.remoteBlockId]
-        });
-      } else if (operation.kind === 'authoring-token-delete') {
-        await input.adapter.deleteBlocks({
-          doc: input.doc,
-          blockIds: [operation.remoteBlockId]
-        });
-      } else {
-        const unsupported: never = operation;
-        throw new Error(`Unsupported scoped operation: ${String(unsupported)}`);
       }
-      mutationCompleted = true;
-      if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
-        operation.kind === 'code-move' || operation.kind === 'code-delete' ||
-        operation.kind === 'code-section-reconcile') {
-        verifyCodeOperation(operation, await fetchRemoteSemantic(input.adapter, input.doc, input.callouts));
-      } else {
-        await verifyScopedOperationReadback({
+
+      if (operation.kind === 'code-section-reconcile') {
+        await applyCodeSectionReconcileThroughEngine({
           adapter: input.adapter,
           doc: input.doc,
-          operation: appliedOperation,
+          operation,
           callouts: input.callouts,
-          mutationRevision,
-          textUpdateReadback
+          completedOperations: completed,
+          verifiedOperations,
+          recordCheckpoint: input.recordCheckpoint,
+          recoveryCheckpoint: input.recoveryCheckpoint,
+          pendingAfter: [
+            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+            ...(input.pendingAfter ?? [])
+          ]
         });
-      }
-      completed.push(summary);
-      verifiedOperations.push(appliedOperation);
-      if (input.recordCheckpoint) {
-        try {
-          await input.recordCheckpoint(completed, verifiedOperations);
-        } catch (error) {
-          throw new PartialWriteError({
-            completedOperations: completed,
-            failedOperation: { kind: 'receipt-write' },
-            pendingOperations: [
-              ...input.operations.slice(index + 1).map(summarizeScopedOperation),
-              ...(input.pendingAfter ?? [])
-            ],
-            recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
-            recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
-            cause: error
-          });
+        verifyCodeOperation(operation, await fetchRemoteSemantic(input.adapter, input.doc, input.callouts));
+        completed.push(summary);
+        verifiedOperations.push(operation);
+        if (input.recordCheckpoint) {
+          try {
+            await input.recordCheckpoint(completed, verifiedOperations);
+          } catch (error) {
+            throw new PartialWriteError({
+              completedOperations: completed,
+              failedOperation: { kind: 'receipt-write' },
+              pendingOperations: [
+                ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+                ...(input.pendingAfter ?? [])
+              ],
+              recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+              recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
+              cause: error
+            });
+          }
         }
+      } else {
+        await applyScopedOperationThroughEngine({
+          adapter: input.adapter,
+          doc: input.doc,
+          operation,
+          callouts: input.callouts,
+          completedOperations: completed,
+          verifiedOperations,
+          recordCheckpoint: input.recordCheckpoint,
+          recoveryCheckpoint: input.recoveryCheckpoint,
+          pendingAfter: [
+            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+            ...(input.pendingAfter ?? [])
+          ]
+        });
       }
     } catch (error) {
       if (error instanceof PartialWriteError) {
-        if (error.failedOperation.kind === 'receipt-write') throw error;
-        throw new PartialWriteError({
-          completedOperations: [...completed, ...error.completedOperations],
-          failedOperation: error.failedOperation,
-          pendingOperations: [
-            ...error.pendingOperations,
-            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
-            ...(input.pendingAfter ?? [])
-          ],
-          document: error.document,
-          recoveryCheckpointWritten: error.recoveryCheckpointWritten || input.recoveryCheckpoint?.written,
-          recoveryCheckpointRevision: error.recoveryCheckpointRevision ?? input.recoveryCheckpoint?.revision,
-          cause: error
-        });
-      }
-      if (mutationCompleted) {
-        throw new PartialWriteError({
-          completedOperations: [...completed, summary],
-          failedOperation: readbackFailureSummary(operation),
-          pendingOperations: [
-            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
-            ...(input.pendingAfter ?? [])
-          ],
-          recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
-          recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
-          cause: error
-        });
+        throw error;
       }
       if (completed.length === 0) throw error;
       throw new PartialWriteError({
@@ -1435,6 +1316,203 @@ async function applyScopedOperations(input: {
     }
   }
   return completed;
+}
+
+async function applyScopedOperationThroughEngine(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>;
+  callouts: CalloutConfig;
+  completedOperations: PublishWriteOperationSummary[];
+  verifiedOperations: ScopedPatchOperation[];
+  recordCheckpoint?: (
+    completedOperations: PublishWriteOperationSummary[],
+    verifiedOperations: ScopedPatchOperation[]
+  ) => Promise<void>;
+  recoveryCheckpoint?: { written: boolean; revision?: string };
+  pendingAfter: PublishWriteOperationSummary[];
+}): Promise<void> {
+  const engine = createFeishuDocxEngine({ transport: docxTransportForAdapter(input.adapter) });
+  const resolution = await resolveScopedEngineOperation(input);
+  const snapshot = await engine.snapshot({ kind: 'docx', token: input.doc });
+  const intents = scopedOperationToMutationIntents({
+    operation: input.operation,
+    snapshot,
+    callouts: input.callouts,
+    ...resolution
+  });
+  const operationsById = new Map(intents.map((intent) => [intent.operationId, input.operation] as const));
+  const durableJournal = createDocxEngineJournal({
+    operationsById,
+    completedOperations: input.completedOperations,
+    verifiedOperations: input.verifiedOperations,
+    recordCheckpoint: input.recordCheckpoint,
+    summarize: summarizeScopedOperation
+  });
+  const tableOperation = input.operation.kind === 'table-replace' || input.operation.kind === 'table-create';
+  let bufferedEvidence: import('feishu-docx-engine').VerifiedOperationEvidence | undefined;
+  const journal: MutationJournal = tableOperation
+    ? { recordVerified: async (evidence) => { bufferedEvidence = evidence; } }
+    : durableJournal;
+  const batch = engine.prepare({
+    snapshot,
+    operations: intents,
+    idempotencyNamespace: `feishu-md-sync:${input.doc}`
+  });
+  try {
+    await engine.apply({ batch, journal });
+    if (tableOperation) {
+      if (!bufferedEvidence) throw new Error('Docx engine did not journal verified table evidence.');
+      try {
+        await verifyScopedOperationReadback({
+          adapter: input.adapter,
+          doc: input.doc,
+          operation: input.operation,
+          callouts: input.callouts,
+          mutationRevision: lastDocxEngineProviderRevision(input.adapter) ??
+            (input.adapter.docxTransport ? bufferedEvidence.revision : undefined)
+        });
+      } catch (cause) {
+        throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: false });
+      }
+      try {
+        await durableJournal.recordVerified(bufferedEvidence);
+      } catch (cause) {
+        throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: true });
+      }
+    }
+  } catch (error) {
+    if (error instanceof PartialMutationError) {
+      if ((input.operation.kind === 'table-replace' || input.operation.kind === 'table-create') &&
+        error.evidence.failedOperation.kind === 'verification') {
+        try {
+          await verifyScopedOperationReadback({
+            adapter: input.adapter,
+            doc: input.doc,
+            operation: input.operation,
+            callouts: input.callouts,
+            mutationRevision: lastDocxEngineProviderRevision(input.adapter) ??
+              (input.adapter.docxTransport ? error.evidence.lastObservedRevision : undefined)
+          });
+        } catch (cause) {
+          throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: false });
+        }
+        const recovered = await engine.snapshot({ kind: 'docx', token: input.doc });
+        try {
+          await durableJournal.recordVerified({
+            operationId: intents[0]!.operationId,
+            createdBlockIds: [...error.evidence.createdBlockIds],
+            revision: recovered.revision,
+            afterSnapshotHash: recovered.canonicalHash,
+            verified: true
+          });
+        } catch (cause) {
+          throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: true });
+        }
+        return;
+      }
+      throw enginePartialWriteError({
+        error,
+        operationsById,
+        completedOperations: input.completedOperations,
+        pendingAfter: input.pendingAfter,
+        recoveryCheckpoint: input.recoveryCheckpoint,
+        summarize: summarizeScopedOperation,
+        readbackSummary: readbackFailureSummary(input.operation),
+        unplannedAsCheckpointFailure: input.recordCheckpoint !== undefined
+      });
+    }
+    throw bridgeEngineCause(error);
+  }
+}
+
+function tablePostApplyPartialWriteError(input: {
+  operation: Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>;
+  completedOperations: PublishWriteOperationSummary[];
+  pendingAfter: PublishWriteOperationSummary[];
+  recoveryCheckpoint?: { written: boolean; revision?: string };
+  checkpointFailure: boolean;
+  cause: unknown;
+}): PartialWriteError {
+  return new PartialWriteError({
+    completedOperations: [
+      ...input.completedOperations,
+      summarizeScopedOperation(input.operation)
+    ],
+    failedOperation: input.checkpointFailure
+      ? { kind: 'receipt-write' }
+      : readbackFailureSummary(input.operation),
+    pendingOperations: input.pendingAfter,
+    recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+    recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
+    cause: input.cause
+  });
+}
+
+async function resolveScopedEngineOperation(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>;
+  callouts: CalloutConfig;
+}): Promise<{
+  resolvedParentBlockId?: string;
+  resolvedInsertAfterBlockId?: string;
+  resolvedRemoteBlockId?: string;
+}> {
+  const operation = input.operation;
+  if (operation.kind === 'create' || operation.kind === 'callout-create') {
+    return {
+      resolvedInsertAfterBlockId: await resolveCurrentInsertionAnchor({
+        adapter: input.adapter,
+        doc: input.doc,
+        originalBlockId: operation.insertAfterBlockId,
+        afterLocator: operation.afterLocator,
+        callouts: input.callouts
+      })
+    };
+  }
+  if (operation.kind !== 'code-create' && operation.kind !== 'code-update' &&
+    operation.kind !== 'code-move' && operation.kind !== 'code-delete') return {};
+
+  const remote = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+  if (operation.kind === 'code-create') {
+    const anchor = resolveAnchorBlockId(
+      remote,
+      operation.afterLocator,
+      input.doc,
+      operation.afterCodeFingerprint
+    );
+    return {
+      resolvedParentBlockId: parentBlockIdForAnchor(
+        await createFeishuDocxEngine({ transport: docxTransportForAdapter(input.adapter) })
+          .snapshot({ kind: 'docx', token: input.doc }),
+        anchor
+      ),
+      resolvedInsertAfterBlockId: anchor
+    };
+  }
+  const matched = resolveRemoteCode(remote, operation);
+  if (!matched.remoteBlockId) throw new Error('Code block write cannot resolve a current remote block ID.');
+  if (operation.kind === 'code-move') {
+    return {
+      resolvedRemoteBlockId: matched.remoteBlockId,
+      resolvedInsertAfterBlockId: resolveAnchorBlockId(
+        remote,
+        operation.afterLocator,
+        input.doc,
+        operation.afterCodeFingerprint,
+        matched.remoteBlockId
+      )
+    };
+  }
+  return { resolvedRemoteBlockId: matched.remoteBlockId };
+}
+
+function parentBlockIdForAnchor(snapshot: DocumentSnapshot, anchorBlockId: string): string {
+  if (anchorBlockId === snapshot.rootBlockId) return snapshot.rootBlockId;
+  const anchor = snapshot.nodes.find((node) => node.blockId === anchorBlockId);
+  if (!anchor?.parentBlockId) throw new Error(`Code insertion anchor ${anchorBlockId} has no parent.`);
+  return anchor.parentBlockId;
 }
 
 async function verifyScopedOperationReadback(input: {
@@ -1683,6 +1761,294 @@ function readbackFailureSummary(operation: ScopedPatchOperation): PublishWriteOp
     return { kind: 'code-readback', locator: operation.locator };
   }
   return { kind: 'scoped-readback', locator: operation.locator };
+}
+
+async function applyCodeSectionReconcileThroughEngine(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: CodeSectionReconcileOperation;
+  callouts: CalloutConfig;
+  completedOperations: PublishWriteOperationSummary[];
+  verifiedOperations: ScopedPatchOperation[];
+  recordCheckpoint?: (
+    completedOperations: PublishWriteOperationSummary[],
+    verifiedOperations: ScopedPatchOperation[]
+  ) => Promise<void>;
+  recoveryCheckpoint?: { written: boolean; revision?: string };
+  pendingAfter: PublishWriteOperationSummary[];
+}): Promise<void> {
+  let physicalOrdinal = 0;
+  let failureSummary: PublishWriteOperationSummary = summarizeScopedOperation(input.operation);
+  const execute = async (physical: {
+    operation: ScopedPatchOperation;
+    summary: PublishWriteOperationSummary;
+    build: (snapshot: DocumentSnapshot, operationId: string) => MutationIntent;
+  }): Promise<void> => {
+    failureSummary = physical.summary;
+    const engine = createFeishuDocxEngine({ transport: docxTransportForAdapter(input.adapter) });
+    const snapshot = await engine.snapshot({ kind: 'docx', token: input.doc });
+    const operationId = `${operationIdForScopedOperation(input.operation)}:${physicalOrdinal}`;
+    physicalOrdinal += 1;
+    const intent = physical.build(snapshot, operationId);
+    const batch = engine.prepare({
+      snapshot,
+      operations: [intent],
+      idempotencyNamespace: `feishu-md-sync:${input.doc}:code-reconcile`
+    });
+    const operationsById = new Map([[operationId, physical.operation]]);
+    const journal = createDocxEngineJournal({
+      operationsById,
+      completedOperations: input.completedOperations,
+      verifiedOperations: input.verifiedOperations,
+      recordCheckpoint: input.recordCheckpoint,
+      summarize: () => physical.summary,
+      onVerified: (operation, evidence) => {
+        if (operation.kind === 'code-create' && evidence.createdBlockIds.length === 1) {
+          operation.desiredCode = {
+            ...operation.desiredCode,
+            remoteBlockId: evidence.createdBlockIds[0]
+          };
+        }
+      }
+    });
+    try {
+      await engine.apply({ batch, journal });
+    } catch (error) {
+      if (error instanceof PartialMutationError) {
+        throw enginePartialWriteError({
+          error,
+          operationsById,
+          completedOperations: input.completedOperations,
+          pendingAfter: input.pendingAfter,
+          recoveryCheckpoint: input.recoveryCheckpoint,
+          summarize: () => physical.summary,
+          readbackSummary: { kind: 'code-readback', locator: physical.summary.locator },
+          unplannedAsCheckpointFailure: input.recordCheckpoint !== undefined,
+          ...(physical.operation.kind === 'code-create'
+            ? {
+                createdSummary: (_operation: ScopedPatchOperation, blockIds: string[]) => ({
+                  ...physical.summary,
+                  blockIds
+                })
+              }
+            : {})
+        });
+      }
+      throw bridgeEngineCause(error);
+    }
+  };
+
+  try {
+    const beforePhase = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+    const unrelatedBefore = codeScopeHashOutsideSections(beforePhase, input.operation.sectionPaths);
+
+    if (input.operation.phase === 'delete') {
+      const obsoleteIds = findObsoleteCodeIdsForReconcile(
+        beforePhase,
+        input.operation.desiredCodes.map(({ code }) => code),
+        input.operation.sectionPaths
+      );
+      if (obsoleteIds.length > 0) {
+        await execute({
+          operation: input.operation,
+          summary: { kind: 'code-reconcile-delete', locator: input.operation.locator },
+          build: (snapshot, operationId) => {
+            const parentBlockId = commonSnapshotParent(snapshot, obsoleteIds, 'Code reconcile delete');
+            return {
+              operationId,
+              kind: 'delete',
+              parentBlockId,
+              blockIds: obsoleteIds,
+              expectedHashes: obsoleteIds.map((blockId) => snapshotNodeHash(snapshot, blockId))
+            };
+          }
+        });
+      }
+      failureSummary = { kind: 'code-readback', locator: input.operation.locator };
+      const afterDeletion = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+      assertUnrelatedCodeScopesUnchanged(unrelatedBefore, afterDeletion, input.operation.sectionPaths);
+      return;
+    }
+
+    const exactMatches = assignCodeReconcileExactMatches(
+      beforePhase,
+      input.operation.desiredCodes.map(({ code }) => code),
+      input.operation.sectionPaths
+    );
+    const reservedExactIds = new Set(exactMatches.values());
+    const consumedRemoteBlockIds = new Set<string>();
+    for (const [desiredIndex, desired] of input.operation.desiredCodes.entries()) {
+      let current = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+      const exactMatchId = exactMatches.get(desiredIndex);
+      const unavailableIds = new Set([...consumedRemoteBlockIds, ...reservedExactIds]);
+      if (exactMatchId) unavailableIds.delete(exactMatchId);
+      let remote = exactMatchId
+        ? codeNodes(current).find((candidate) => candidate.remoteBlockId === exactMatchId)
+        : findCodeReconcileCandidate(
+          current,
+          desired.code,
+          input.operation.sectionPaths,
+          unavailableIds
+        );
+      if (!remote) {
+        const anchor = resolveAnchorBlockId(
+          current,
+          desired.afterLocator,
+          input.doc,
+          desired.afterCodeFingerprint
+        );
+        const synthetic: Extract<ScopedPatchOperation, { kind: 'code-create' }> = {
+          kind: 'code-create',
+          locator: desired.code.locator,
+          ...(desired.afterLocator ? { afterLocator: desired.afterLocator } : {}),
+          ...(desired.afterCodeFingerprint
+            ? { afterCodeFingerprint: desired.afterCodeFingerprint }
+            : {}),
+          desiredCode: { ...desired.code }
+        };
+        await execute({
+          operation: synthetic,
+          summary: { kind: 'code-reconcile-create', locator: desired.code.locator },
+          build: (snapshot, operationId) => ({
+            operationId,
+            kind: 'insert',
+            parentBlockId: parentBlockIdForAnchor(snapshot, anchor),
+            insertAfterBlockId: anchor,
+            desired: [{
+              kind: 'code',
+              language: desired.code.resolvedLanguage,
+              text: desired.code.content,
+              ...(desired.code.caption !== undefined ? { caption: desired.code.caption } : {})
+            }]
+          })
+        });
+        failureSummary = { kind: 'code-readback', locator: desired.code.locator };
+        current = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+        remote = findCodeReconcileCandidate(
+          current,
+          desired.code,
+          input.operation.sectionPaths,
+          unavailableIds
+        );
+        if (!remote) throw new Error('Code section reconcile could not resolve the created block.');
+      } else if (!codeManagedEqual(remote, desired.code)) {
+        if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot replace a block without an ID.');
+        const blockId = remote.remoteBlockId;
+        const caption = remote.caption;
+        const synthetic: Extract<ScopedPatchOperation, { kind: 'code-update' }> = {
+          kind: 'code-update',
+          locator: desired.code.locator,
+          sourceLocator: remote.locator,
+          remoteBlockId: blockId,
+          desiredCode: {
+            ...desired.code,
+            ...(caption !== undefined ? { caption } : {})
+          }
+        };
+        await execute({
+          operation: synthetic,
+          summary: { kind: 'code-reconcile-update', locator: desired.code.locator },
+          build: (snapshot, operationId) => ({
+            operationId,
+            kind: 'replace',
+            targetBlockId: blockId,
+            expectedHash: snapshotNodeHash(snapshot, blockId),
+            desired: {
+              kind: 'code',
+              language: desired.code.resolvedLanguage,
+              text: desired.code.content,
+              ...(caption !== undefined ? { caption } : {})
+            }
+          })
+        });
+        failureSummary = { kind: 'code-readback', locator: desired.code.locator };
+        current = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+        remote = findCodeReconcileCandidate(
+          current,
+          desired.code,
+          input.operation.sectionPaths,
+          unavailableIds
+        );
+        if (!remote) throw new Error('Code section reconcile could not resolve the replaced block.');
+      }
+
+      if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot move a block without an ID.');
+      if (remote.caption !== undefined) desired.code = { ...desired.code, caption: remote.caption };
+      consumedRemoteBlockIds.add(remote.remoteBlockId);
+      if (reconcileCandidateNeedsMove(
+        current,
+        remote,
+        desired.afterLocator,
+        desired.afterCodeFingerprint
+      )) {
+        const anchor = resolveAnchorBlockId(
+          current,
+          desired.afterLocator,
+          input.doc,
+          desired.afterCodeFingerprint,
+          remote.remoteBlockId
+        );
+        const blockId = remote.remoteBlockId;
+        const synthetic: Extract<ScopedPatchOperation, { kind: 'code-move' }> = {
+          kind: 'code-move',
+          locator: desired.code.locator,
+          sourceLocator: remote.locator,
+          ...(desired.afterLocator ? { afterLocator: desired.afterLocator } : {}),
+          ...(desired.afterCodeFingerprint
+            ? { afterCodeFingerprint: desired.afterCodeFingerprint }
+            : {}),
+          remoteBlockId: blockId,
+          desiredCode: { ...desired.code }
+        };
+        await execute({
+          operation: synthetic,
+          summary: { kind: 'code-reconcile-move', locator: desired.code.locator },
+          build: (snapshot, operationId) => ({
+            operationId,
+            kind: 'move',
+            parentBlockId: commonSnapshotParent(snapshot, [blockId], 'Code reconcile move'),
+            blockIds: [blockId],
+            insertAfterBlockId: anchor
+          })
+        });
+      }
+    }
+    failureSummary = { kind: 'code-readback', locator: input.operation.locator };
+    const afterPlacement = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+    assertUnrelatedCodeScopesUnchanged(unrelatedBefore, afterPlacement, input.operation.sectionPaths);
+  } catch (error) {
+    if (error instanceof PartialWriteError) throw error;
+    const cause = bridgeEngineCause(error);
+    if (input.completedOperations.length === 0) throw cause;
+    throw new PartialWriteError({
+      completedOperations: [...input.completedOperations],
+      failedOperation: failureSummary,
+      pendingOperations: input.pendingAfter,
+      recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+      recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
+      cause
+    });
+  }
+}
+
+function snapshotNodeHash(snapshot: DocumentSnapshot, blockId: string): string {
+  const node = snapshot.nodes.find((candidate) => candidate.blockId === blockId);
+  if (!node) throw new Error(`Docx engine snapshot does not contain block ${blockId}.`);
+  return node.canonicalHash;
+}
+
+function commonSnapshotParent(
+  snapshot: DocumentSnapshot,
+  blockIds: string[],
+  label: string
+): string {
+  const parents = new Set(blockIds.map((blockId) => {
+    const node = snapshot.nodes.find((candidate) => candidate.blockId === blockId);
+    if (!node?.parentBlockId) throw new Error(`${label} block ${blockId} has no parent.`);
+    return node.parentBlockId;
+  }));
+  if (parents.size !== 1) throw new Error(`${label} blocks do not share one parent.`);
+  return [...parents][0]!;
 }
 
 async function applyCodeOperation(input: {
@@ -2118,11 +2484,9 @@ async function applyWhiteboardPlan(input: {
   completedOperations: PublishWriteOperationSummary[];
   pendingAfter?: PublishWriteOperationSummary[];
 }): Promise<{ entries: WhiteboardReceiptEntry[]; completedOperations: PublishWriteOperationSummary[] }> {
-  const replaceImageWithWhiteboard = input.adapter.replaceImageWithWhiteboard?.bind(input.adapter);
-  const queryWhiteboard = input.adapter.queryWhiteboard?.bind(input.adapter);
-  const updateWhiteboard = input.adapter.updateWhiteboard?.bind(input.adapter);
-  const fetchDocBlocks = input.adapter.fetchDocBlocks?.bind(input.adapter);
-  if (!replaceImageWithWhiteboard || !queryWhiteboard || !updateWhiteboard || !fetchDocBlocks) {
+  if (!input.adapter.docxTransport &&
+    (!input.adapter.replaceBlock || !input.adapter.queryWhiteboard || !input.adapter.updateWhiteboard ||
+      !input.adapter.fetchDocBlocks)) {
     throw new Error('Configured Feishu adapter does not support verified Whiteboard writes.');
   }
 
@@ -2135,38 +2499,72 @@ async function applyWhiteboardPlan(input: {
     try {
       const asset = localByKey.get(operation.assetKey);
       if (!asset) throw new Error(`local Whiteboard asset unavailable during write: ${operation.assetKey}`);
-
-      let blockId: string;
-      let whiteboardToken: string;
-      if (operation.kind === 'whiteboard-create') {
-        const created = await replaceImageWithWhiteboard({
-          doc: input.doc,
-          blockId: operation.remoteImageBlockId,
-          svg: asset.svgSource
-        });
-        blockId = created.blockId;
-        whiteboardToken = created.whiteboardToken;
-      } else {
-        blockId = operation.blockId;
-        whiteboardToken = operation.whiteboardToken;
-        await updateWhiteboardWithApplyingRetry({
-          updateWhiteboard,
-          request: {
-            whiteboardToken,
-            svg: asset.svgSource,
-            idempotencyToken: `fms-${semanticHash({
-              whiteboardToken,
-              svgHash: asset.svgHash,
-              remoteStateHash: operation.remoteStateHash
-            }).slice(0, 32)}`
-          }
-        });
+      const whiteboardIdempotencyToken = operation.kind === 'whiteboard-create'
+        ? undefined
+        : `fms-${semanticHash({
+          whiteboardToken: operation.whiteboardToken,
+          svgHash: asset.svgHash,
+          remoteStateHash: operation.remoteStateHash
+        }).slice(0, 32)}`;
+      input.adapter.setDocxEngineWhiteboardIdempotencyToken?.(whiteboardIdempotencyToken);
+      const engine = createFeishuDocxEngine({
+        transport: docxTransportForAdapter(input.adapter, { whiteboardIdempotencyToken })
+      });
+      const snapshot = await engine.snapshot({ kind: 'docx', token: input.doc });
+      const intent = whiteboardOperationToMutationIntent({
+        operation,
+        snapshot,
+        svg: asset.svgSource
+      });
+      let verifiedEvidence: import('feishu-docx-engine').VerifiedOperationEvidence | undefined;
+      const operationsById = new Map([[intent.operationId, operation]] as const);
+      const journal = createDocxEngineJournal({
+        operationsById,
+        completedOperations: completed,
+        verifiedOperations: [] as WhiteboardOperation[],
+        summarize: summarizeWhiteboardOperation,
+        onVerified: (_verifiedOperation, evidence) => {
+          verifiedEvidence = evidence;
+        }
+      });
+      const batch = engine.prepare({
+        snapshot,
+        operations: [intent],
+        idempotencyNamespace: `feishu-md-sync:${input.doc}:whiteboard`
+      });
+      try {
+        await engine.apply({ batch, journal });
+      } catch (error) {
+        if (error instanceof PartialMutationError) {
+          throw enginePartialWriteError({
+            error,
+            operationsById,
+            completedOperations: completed,
+            pendingAfter: [
+              ...input.plan.operations.slice(index + 1).map(summarizeWhiteboardOperation),
+              ...(input.pendingAfter ?? [])
+            ],
+            summarize: summarizeWhiteboardOperation,
+            cause: whiteboardEvidenceFailure(error, asset.expectedTexts)
+          });
+        }
+        throw bridgeEngineCause(error);
       }
 
-      const remote = await queryWhiteboardReadback({ queryWhiteboard, whiteboardToken });
-      verifyWhiteboardReadback({ raw: remote.raw, expectedTexts: asset.expectedTexts });
-      const blocks = await fetchDocBlocks({ doc: input.doc });
-      verifyWhiteboardIdentity(blocks.blocks, input.doc, blockId, whiteboardToken);
+      const evidence = verifiedEvidence;
+      if (!evidence) throw new Error('Docx engine did not journal verified Whiteboard evidence.');
+      const blockId = operation.kind === 'whiteboard-create'
+        ? evidence.createdBlockIds[0]
+        : operation.blockId;
+      const whiteboardToken = operation.kind === 'whiteboard-create'
+        ? evidence.resourceTokens?.[0]
+        : operation.whiteboardToken;
+      const raw = evidence.verifiedResourceEvidence?.find((item) => {
+        return item.resourceKind === 'whiteboard' && item.token === whiteboardToken;
+      })?.raw;
+      if (!blockId || !whiteboardToken || raw === undefined) {
+        throw new Error('Docx engine Whiteboard evidence is missing block, token, or raw readback state.');
+      }
       entries.set(operation.assetKey, {
         assetKey: operation.assetKey,
         pngPath: operation.assetKey,
@@ -2174,11 +2572,11 @@ async function applyWhiteboardPlan(input: {
         svgHash: asset.svgHash,
         whiteboardToken,
         blockId,
-        remoteStateHash: whiteboardRemoteStateHash(remote.raw),
+        remoteStateHash: whiteboardRemoteStateHash(raw),
         placementFingerprint: operation.placementFingerprint
       });
-      completed.push(summary);
     } catch (error) {
+      if (error instanceof PartialWriteError) throw error;
       throw new PartialWriteError({
         completedOperations: completed,
         failedOperation: summary,
@@ -2194,6 +2592,16 @@ async function applyWhiteboardPlan(input: {
     entries: [...entries.values()].sort((left, right) => left.assetKey.localeCompare(right.assetKey)),
     completedOperations: completed
   };
+}
+
+function whiteboardEvidenceFailure(
+  error: PartialMutationError,
+  expectedTexts: string[]
+): Error | undefined {
+  const message = error.evidence.failedOperation.message;
+  if (!/does not contain the prepared SVG evidence/i.test(message)) return undefined;
+  const expected = expectedTexts[0];
+  return expected ? new Error(`Whiteboard readback is missing expected text: ${expected}`) : undefined;
 }
 
 async function updateWhiteboardWithApplyingRetry(input: {
@@ -2854,7 +3262,12 @@ function verifyCodeOperation(operation: CodeBlockOperation, remote: SemanticDocu
   }
   const desired = operation.desiredCode;
   const expectedLocator = operation.kind === 'code-update' ? operation.sourceLocator : operation.locator;
-  const matched = findCodeByLocator(remote, expectedLocator);
+  const expectedBlockId = operation.kind === 'code-create'
+    ? desired.remoteBlockId
+    : operation.remoteBlockId;
+  const matched = expectedBlockId
+    ? codeNodes(remote).find((code) => code.remoteBlockId === expectedBlockId)
+    : findCodeByLocator(remote, expectedLocator);
   if (!matched || !codeManagedEqual(matched, desired)) {
     throw new Error('Code block readback differs from the desired content or language.');
   }

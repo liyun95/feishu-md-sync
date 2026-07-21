@@ -65,6 +65,7 @@ class MemoryTransport implements DocxTransport {
   throwAfterWriteNumber?: number;
   failWriteCause?: unknown;
   returnMissingCreatedId = false;
+  replaceWithNewId = false;
   lastReplaceInput?: Parameters<DocxTransport['replaceBlock']>[0];
   driftAfterWrite = false;
   private nextId = 1;
@@ -182,6 +183,13 @@ class MemoryTransport implements DocxTransport {
       delete target.callout;
       if (target.block_id !== 'root') delete target.children;
     }
+    if (this.replaceWithNewId && target.block_id !== 'root') {
+      const oldId = target.block_id!;
+      const newId = `replacement-${this.nextId++}`;
+      const parent = this.find(target.parent_id!);
+      parent.children = (parent.children as string[]).map((blockId) => blockId === oldId ? newId : blockId);
+      target.block_id = newId;
+    }
     this.afterWrite();
     this.afterSuccessfulWrite();
     return { revision: String(this.revision) };
@@ -221,7 +229,9 @@ class MemoryTransport implements DocxTransport {
       this.blocks.push(createdBlock);
       return createdBlock;
     });
-    (parent.children as string[]).splice(input.index, 0, ...created.map(({ block_id }) => block_id!));
+    const childIds = Array.isArray(parent.children) ? parent.children as string[] : [];
+    childIds.splice(input.index, 0, ...created.map(({ block_id }) => block_id!));
+    parent.children = childIds;
     this.afterWrite();
     this.afterSuccessfulWrite();
     const returned = this.returnMissingCreatedId
@@ -460,6 +470,25 @@ describe('verified mutation execution', () => {
     expect(outcome.finalSnapshot.revision).toBe('2');
   });
 
+  it('accepts a provider replacement with a new block ID at the exact prepared boundary', async () => {
+    const transport = new MemoryTransport();
+    transport.replaceWithNewId = true;
+    const before = transport.snapshot();
+    const outcome = await createFeishuDocxEngine({ transport }).apply({
+      batch: batch(transport, [{
+        operationId: 'replace-a-with-new-id',
+        kind: 'replace',
+        targetBlockId: 'a',
+        expectedHash: before.nodes[1]!.canonicalHash,
+        desired: paragraph('Updated'),
+      }]),
+      journal: journal(),
+    });
+
+    expect(outcome.finalSnapshot.nodes[0]!.childBlockIds).toEqual(['replacement-1', 'b', 'c']);
+    expect(outcome.operations[0]).toMatchObject({ operationId: 'replace-a-with-new-id', verified: true });
+  });
+
   it.each(['*value*', 'a`b', '- leading', 'a & <b>\nnext'])('uses lossless XML for literal ordinary text %s', async (text) => {
     const transport = new MemoryTransport();
     const before = transport.snapshot();
@@ -593,6 +622,51 @@ describe('verified mutation execution', () => {
     });
     expect(outcome.operations[0]!.createdBlockIds).toEqual(['new-1', 'new-2']);
     expect(outcome.finalSnapshot.nodes[0]!.childBlockIds).toEqual(['a', 'new-1', 'new-2', 'b', 'c']);
+  });
+
+  it('verifies a list item with a continuation paragraph followed by a recursive nested list', async () => {
+    const transport = new MemoryTransport();
+    const desired = {
+      kind: 'list' as const,
+      ordered: false,
+      items: [{
+        content: [{ kind: 'text' as const, text: 'Parent' }],
+        children: [
+          paragraph('Continuation'),
+          {
+            kind: 'list' as const,
+            ordered: true,
+            items: [{
+              content: [{ kind: 'text' as const, text: 'Nested' }],
+              children: [{
+                kind: 'list' as const,
+                ordered: false,
+                items: [{
+                  content: [{ kind: 'text' as const, text: 'Deep' }],
+                  children: [],
+                }],
+              }],
+            }],
+          },
+        ],
+      }],
+    };
+
+    const outcome = await createFeishuDocxEngine({ transport }).apply({
+      batch: batch(transport, [{
+        operationId: 'insert-list-continuation', kind: 'insert', parentBlockId: 'root',
+        insertAfterBlockId: 'a', insertBeforeBlockId: 'b', desired: [desired],
+      }]),
+      journal: journal(),
+    });
+
+    expect(outcome.operations[0]).toMatchObject({
+      operationId: 'insert-list-continuation',
+      verified: true,
+      createdBlockIds: ['new-1', 'new-2', 'new-3', 'new-4'],
+    });
+    expect(outcome.finalSnapshot.nodes.find(({ blockId }) => blockId === 'new-1')!.childBlockIds)
+      .toEqual(['new-2', 'new-3']);
   });
 
   it('inserts an ordinary XML callout segment and records descendant IDs', async () => {

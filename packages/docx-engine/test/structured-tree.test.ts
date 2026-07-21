@@ -74,6 +74,27 @@ function linkedTree(url: string) {
   };
 }
 
+function continuationTree() {
+  return {
+    kind: 'list' as const,
+    ordered: false,
+    items: [{
+      content: [{ kind: 'text' as const, text: 'Parent' }],
+      children: [
+        paragraph('Continuation'),
+        {
+          kind: 'list' as const,
+          ordered: true,
+          items: [{
+            content: [{ kind: 'text' as const, text: 'Nested' }],
+            children: [list(false, [{ text: 'Deep' }])],
+          }],
+        },
+      ],
+    }],
+  };
+}
+
 function paragraph(text: string) {
   return { kind: 'paragraph' as const, content: [{ kind: 'text' as const, text }] };
 }
@@ -228,6 +249,32 @@ describe('verified structured provider-tree creation', () => {
     ]);
     expect(result.finalSnapshot.nodes.find(({ blockId }) => blockId === 'root')!.childBlockIds)
       .toEqual(['a', 'made-1', 'made-2', 'b']);
+  });
+
+  it('creates continuation paragraphs and recursive nested lists under the same list item without flattening', async () => {
+    const transport = new TreeTransport();
+    const batch = prepareMutationBatch({
+      snapshot: transport.snapshot(),
+      idempotencyNamespace: 'continuation-tree-test',
+      operations: [{
+        operationId: 'insert-continuation-tree', kind: 'insert', parentBlockId: 'root',
+        insertAfterBlockId: 'a', insertBeforeBlockId: 'b', desired: [continuationTree()],
+      }],
+    });
+
+    const result = await createFeishuDocxEngine({ transport }).apply({ batch, journal: journal() });
+
+    expect(transport.createCalls.map(({ parentBlockId }) => parentBlockId)).toEqual([
+      'root', 'made-1', 'made-3',
+    ]);
+    expect(transport.createCalls[1]!.blocks.map(({ block_type }) => block_type)).toEqual([2, 13]);
+    expect(result.operations[0]).toMatchObject({
+      operationId: 'insert-continuation-tree',
+      verified: true,
+      createdBlockIds: ['made-1', 'made-2', 'made-3', 'made-4'],
+    });
+    expect(result.finalSnapshot.nodes.find(({ blockId }) => blockId === 'made-1')!.childBlockIds)
+      .toEqual(['made-2', 'made-3']);
   });
 
   it('uses stable, path-distinct tokens and verifies between every write', async () => {

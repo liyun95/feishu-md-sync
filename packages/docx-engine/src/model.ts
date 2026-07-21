@@ -15,22 +15,31 @@ export type InlineContent =
   | { kind: 'code'; text: string }
   | { kind: 'link'; text: string; url: string };
 
+export type DesiredParagraphNode = {
+  kind: 'paragraph';
+  content: InlineContent[];
+};
+
+export type DesiredListNode = {
+  kind: 'list';
+  ordered: boolean;
+  items: Array<{
+    content: InlineContent[];
+    children: DesiredListChildNode[];
+  }>;
+};
+
+export type DesiredListChildNode = DesiredParagraphNode | DesiredListNode;
+
 export type DesiredNode =
   | { kind: 'title'; content: InlineContent[] }
-  | { kind: 'paragraph'; content: InlineContent[] }
+  | DesiredParagraphNode
   | {
       kind: 'heading';
       level: 1 | 2 | 3 | 4 | 5 | 6;
       content: InlineContent[];
     }
-  | {
-      kind: 'list';
-      ordered: boolean;
-      items: Array<{
-        content: InlineContent[];
-        children: DesiredListNode[];
-      }>;
-    }
+  | DesiredListNode
   | { kind: 'table'; rows: Array<{ cells: Array<{ content: DesiredNode[] }> }> }
   | { kind: 'code'; language: string; text: string; caption?: string }
   | { kind: 'quote'; content: InlineContent[] }
@@ -40,8 +49,6 @@ export type DesiredNode =
       title?: string;
       children: DesiredNode[];
     };
-
-export type DesiredListNode = Extract<DesiredNode, { kind: 'list' }>;
 
 export interface SnapshotNode {
   blockId: string;

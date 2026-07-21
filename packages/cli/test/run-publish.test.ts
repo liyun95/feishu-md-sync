@@ -18,6 +18,7 @@ import {
 import { writeRemoteSemanticSnapshot } from '../src/receipts/semantic-snapshot.js';
 import { writePublishBaselineBundle } from '../src/receipts/publish-baseline-bundle.js';
 import {
+  applyScopedOperations,
   assertCheckpointHasNoUnrelatedChanges,
   runPublish,
   textCreatePlacementMatches
@@ -1495,6 +1496,195 @@ Next text.`, 'utf8');
     });
   });
 
+  it('preserves created Code reconcile IDs when engine readback fails', async () => {
+    const state = codeReconcileState([
+      headingBlock('build', 'Build'),
+      codeBlock('old-code', 'old', 49),
+      headingBlock('search', 'Search'),
+      textBlock('anchor', 'Anchor.')
+    ]);
+    let inserted = false;
+    let postInsertReads = 0;
+    const adapter = codeReconcileAdapter(state, {
+      fetchDocBlocks: async () => {
+        if (inserted && ++postInsertReads === 2) {
+          throw new CliFailure({
+            type: 'network',
+            subtype: 'provider_readback_failed',
+            message: 'provider readback failed',
+            retryable: true,
+            providerCode: 429
+          });
+        }
+        return { blocks: state.blocks() };
+      },
+      insertBlocksAfter: async ({ blockId }) => {
+        state.insertAfter(blockId, codeBlock('created-code', 'new', 49));
+        inserted = true;
+      }
+    });
+
+    await expect(applyScopedOperations({
+      adapter,
+      doc: 'doc_token',
+      operations: [codeReconcileOperation({
+        desiredContent: 'new',
+        desiredSection: 'Search',
+        afterLocator: { sectionPath: ['Search'], kind: 'text', ordinal: 1 },
+        remoteCodes: [{ section: 'Build', content: 'old', blockId: 'old-code' }]
+      })],
+      callouts: { noteTitle: 'Notes', warningTitle: 'Warning' }
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({
+        kind: 'code-reconcile-create',
+        blockIds: ['created-code']
+      })],
+      failedOperation: expect.objectContaining({ kind: 'code-readback' }),
+      causeDetails: expect.objectContaining({
+        type: 'network',
+        retryable: true,
+        providerCode: 429
+      })
+    });
+  });
+
+  it('merges earlier top-level completions when a Code reconcile move fails', async () => {
+    const state = codeReconcileState([
+      headingBlock('search', 'Search'),
+      codeBlock('code-1', 'old', 49),
+      textBlock('anchor', 'Anchor.')
+    ]);
+    const earlier = { kind: 'update' as const, locator: { sectionPath: [], kind: 'text' as const, ordinal: 0 } };
+    const pending = { kind: 'delete' as const, locator: { sectionPath: ['Later'], kind: 'text' as const, ordinal: 0 } };
+    const adapter = codeReconcileAdapter(state, {
+      replaceBlock: async ({ blockId }) => {
+        state.replace(blockId, codeBlock(blockId, 'new', 49));
+      },
+      moveBlocksAfter: async () => {
+        throw new CliFailure({
+          type: 'network',
+          subtype: 'move_failed',
+          message: 'move failed',
+          retryable: true
+        });
+      }
+    });
+
+    await expect(applyScopedOperations({
+      adapter,
+      doc: 'doc_token',
+      operations: [codeReconcileOperation({
+        desiredContent: 'new',
+        desiredSection: 'Search',
+        afterLocator: { sectionPath: ['Search'], kind: 'text', ordinal: 1 },
+        remoteCodes: [{ section: 'Search', content: 'old', blockId: 'code-1' }]
+      })],
+      callouts: { noteTitle: 'Notes', warningTitle: 'Warning' },
+      completedOperations: [earlier],
+      pendingAfter: [pending],
+      recoveryCheckpoint: { written: true, revision: '9' }
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [
+        earlier,
+        expect.objectContaining({ kind: 'code-reconcile-update' })
+      ],
+      failedOperation: expect.objectContaining({ kind: 'code-reconcile-move' }),
+      pendingOperations: [pending],
+      recoveryCheckpointWritten: true,
+      recoveryCheckpointRevision: '9',
+      causeDetails: expect.objectContaining({ type: 'network', retryable: true })
+    });
+  });
+
+  it('preserves pending operations and checkpoint state when Code reconcile delete readback fails', async () => {
+    const state = codeReconcileState([
+      headingBlock('build', 'Build'),
+      codeBlock('obsolete-code', 'old', 49),
+      headingBlock('search', 'Search'),
+      codeBlock('desired-code', 'new', 49)
+    ]);
+    let deleted = false;
+    const pending = { kind: 'table-create' as const, locator: { sectionPath: ['Later'], kind: 'table' as const, ordinal: 0 } };
+    const adapter = codeReconcileAdapter(state, {
+      fetchDocBlocks: async () => {
+        if (deleted) throw new Error('delete readback failed');
+        return { blocks: state.blocks() };
+      },
+      deleteBlocks: async ({ blockIds }) => {
+        state.delete(blockIds);
+        deleted = true;
+      }
+    });
+
+    await expect(applyScopedOperations({
+      adapter,
+      doc: 'doc_token',
+      operations: [{
+        ...codeReconcileOperation({
+          desiredContent: 'new',
+          desiredSection: 'Search',
+          remoteCodes: [
+            { section: 'Build', content: 'old', blockId: 'obsolete-code' },
+            { section: 'Search', content: 'new', blockId: 'desired-code' }
+          ]
+        }),
+        phase: 'delete'
+      }],
+      callouts: { noteTitle: 'Notes', warningTitle: 'Warning' },
+      completedOperations: [{ kind: 'update' }],
+      pendingAfter: [pending],
+      recoveryCheckpoint: { written: true, revision: '11' }
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [
+        expect.objectContaining({ kind: 'update' }),
+        expect.objectContaining({ kind: 'code-reconcile-delete' })
+      ],
+      failedOperation: expect.objectContaining({ kind: 'code-readback' }),
+      pendingOperations: [pending],
+      recoveryCheckpointWritten: true,
+      recoveryCheckpointRevision: '11'
+    });
+  });
+
+  it('reports a Code reconcile checkpoint failure as receipt-write', async () => {
+    const state = codeReconcileState([
+      headingBlock('search', 'Search'),
+      textBlock('anchor', 'Anchor.'),
+      codeBlock('code-1', 'old', 49)
+    ]);
+    const pending = { kind: 'delete' as const, locator: { sectionPath: ['Later'], kind: 'text' as const, ordinal: 0 } };
+    const adapter = codeReconcileAdapter(state, {
+      replaceBlock: async ({ blockId }) => {
+        state.replace(blockId, codeBlock(blockId, 'new', 49));
+      }
+    });
+
+    await expect(applyScopedOperations({
+      adapter,
+      doc: 'doc_token',
+      operations: [codeReconcileOperation({
+        desiredContent: 'new',
+        desiredSection: 'Search',
+        afterLocator: { sectionPath: ['Search'], kind: 'text', ordinal: 0 },
+        remoteCodes: [{ section: 'Search', content: 'old', blockId: 'code-1' }]
+      })],
+      callouts: { noteTitle: 'Notes', warningTitle: 'Warning' },
+      pendingAfter: [pending],
+      recordCheckpoint: async () => { throw new Error('checkpoint failed'); },
+      recoveryCheckpoint: { written: false, revision: '12' }
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({ kind: 'code-reconcile-update' })],
+      failedOperation: { kind: 'receipt-write' },
+      pendingOperations: [pending],
+      recoveryCheckpointWritten: false,
+      recoveryCheckpointRevision: '12'
+    });
+  });
+
   it('plans a language repair when the remote Code language is missing', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-run-'));
     const markdownPath = join(dir, 'doc.md');
@@ -2785,6 +2975,122 @@ Next text.`, 'utf8');
       receiptWritten: false
     });
     await expect(readPublishReceipt({ cwd: dir, target: { kind: 'docx', token: 'doc_token' } })).resolves.toBeUndefined();
+  });
+
+  it('reports a first table write as completed when post-engine semantic readback fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-table-post-engine-readback-'));
+    const markdownPath = join(dir, 'doc.md');
+    const before = [['ef', 'Old.']] as Array<[string, string]>;
+    const after = [['ef', 'Updated.']] as Array<[string, string]>;
+    await writeFile(markdownPath, htmlParameterTable(after), 'utf8');
+    let mutated = false;
+    let postMutationReads = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: markdownParameterTable(mutated ? after : before),
+        revision: mutated ? '2' : '1'
+      }),
+      fetchDocBlocks: async () => {
+        if (mutated && postMutationReads++ > 0) throw new Error('terminal table semantic readback failure');
+        return { blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+          ...feishuTableBlocks(mutated ? after : before, 'table1')
+        ] };
+      },
+      replaceDocument: async () => {},
+      replaceBlock: async () => { mutated = true; },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({ kind: 'table-replace' })],
+      failedOperation: expect.objectContaining({ kind: 'scoped-readback' }),
+      receiptWritten: false
+    });
+  });
+
+  it('reports a first table checkpoint failure as receipt-write after verified remote success', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-table-post-engine-checkpoint-'));
+    const target = { kind: 'docx' as const, token: 'doc_token' };
+    const before = [['ef', 'Old.']] as Array<[string, string]>;
+    const after = [['ef', 'Updated.']] as Array<[string, string]>;
+    const base = htmlParameterTable(before);
+    const desired = htmlParameterTable(after);
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(markdownPath, desired, 'utf8');
+    await writePublishBaselineBundle({
+      cwd: dir,
+      target,
+      localBaseline: base,
+      publishBaseline: base,
+      remoteSemantic: remoteSemanticDocument([
+        { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+        ...feishuTableBlocks(before, 'table1')
+      ], 'doc_token'),
+      receipt: {
+        resolvedDocumentId: 'doc_token',
+        profile: 'none',
+        dialect: 'gfm',
+        dialectDraftHash: hashText(base),
+        dialectDependencies: [],
+        linkResolutionFingerprint: semanticHash([]),
+        resolvedLinks: [],
+        localSourceHash: hashText(base),
+        publishDraftHash: hashText(base),
+        remoteSnapshotHash: hashText(markdownParameterTable(before)),
+        remoteRevision: '1',
+        whiteboards: [],
+        updatedAt: new Date().toISOString()
+      }
+    });
+    let mutated = false;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => {
+        if (mutated) throw new Error('checkpoint persistence read failed');
+        return { markdown: markdownParameterTable(before), revision: '1' };
+      },
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+        ...feishuTableBlocks(mutated ? after : before, 'table1')
+      ] }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => { mutated = true; },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target,
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmCollaborationRisk: true,
+      adapter
+    })).rejects.toMatchObject({
+      name: 'PartialWriteError',
+      completedOperations: [expect.objectContaining({ kind: 'table-replace' })],
+      failedOperation: { kind: 'receipt-write' },
+      recoveryCheckpointWritten: false,
+      receiptWritten: false
+    });
   });
 
   it('retries table readback without repeating a successful table mutation', async () => {
@@ -5580,6 +5886,13 @@ After.`, 'utf8');
             stderr: ''
           };
         }
+        if (args[0] === 'api' && args[1] === 'GET' &&
+          args[2] === '/open-apis/docx/v1/documents/doc_token') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { document: { revision_id: 2 } } }),
+            stderr: ''
+          };
+        }
         if (args[0] === 'api' && args[1] === 'GET' && args[2]?.includes('/blocks')) {
           return {
             stdout: JSON.stringify({
@@ -5671,6 +5984,13 @@ After.`, 'utf8');
             stderr: ''
           };
         }
+        if (args[0] === 'api' && args[1] === 'GET' &&
+          args[2] === '/open-apis/docx/v1/documents/doc_token') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { document: { revision_id: 2 } } }),
+            stderr: ''
+          };
+        }
         if (args[0] === 'api' && args[1] === 'GET' && args[2]?.includes('/blocks')) {
           return {
             stdout: JSON.stringify({
@@ -5754,6 +6074,13 @@ After.`, 'utf8');
             stderr: ''
           };
         }
+        if (args[0] === 'api' && args[1] === 'GET' &&
+          args[2] === '/open-apis/docx/v1/documents/doc_token') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { document: { revision_id: 2 } } }),
+            stderr: ''
+          };
+        }
         if (args[0] === 'api' && args[1] === 'GET' && args[2]?.includes('/blocks')) {
           return {
             stdout: JSON.stringify({
@@ -5833,6 +6160,13 @@ After.`, 'utf8');
         if (args[0] === 'docs' && args[1] === '+fetch') {
           return {
             stdout: JSON.stringify({ ok: true, data: { content: remoteMarkdown, revision_id: 2 } }),
+            stderr: ''
+          };
+        }
+        if (args[0] === 'api' && args[1] === 'GET' &&
+          args[2] === '/open-apis/docx/v1/documents/doc_token') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { document: { revision_id: 2 } } }),
             stderr: ''
           };
         }
@@ -7298,6 +7632,119 @@ function codeBlock(blockId: string, content: string, language?: number) {
       elements: [{ text_run: { content, text_element_style: {} } }],
       style: language === undefined ? {} : { language }
     }
+  };
+}
+
+function headingBlock(blockId: string, content: string): FeishuBlock {
+  return {
+    block_id: blockId,
+    block_type: 4,
+    heading2: {
+      elements: [{ text_run: { content, text_element_style: {} } }]
+    }
+  };
+}
+
+function codeReconcileState(initialBlocks: FeishuBlock[]): {
+  blocks: () => FeishuBlock[];
+  insertAfter: (blockId: string, block: FeishuBlock) => void;
+  replace: (blockId: string, block: FeishuBlock) => void;
+  delete: (blockIds: string[]) => void;
+  moveAfter: (blockId: string, sourceBlockIds: string[]) => void;
+} {
+  const direct = [...initialBlocks];
+  return {
+    blocks: () => [{
+      block_id: 'doc_token',
+      block_type: 1,
+      children: direct.flatMap((block) => block.block_id ? [block.block_id] : [])
+    }, ...direct],
+    insertAfter(blockId, block) {
+      const index = direct.findIndex((candidate) => candidate.block_id === blockId);
+      if (index < 0) throw new Error(`Code reconcile insert anchor ${blockId} is missing.`);
+      direct.splice(index + 1, 0, block);
+    },
+    replace(blockId, block) {
+      const index = direct.findIndex((candidate) => candidate.block_id === blockId);
+      if (index < 0) throw new Error(`Code reconcile replacement ${blockId} is missing.`);
+      direct[index] = block;
+    },
+    delete(blockIds) {
+      for (const blockId of blockIds) {
+        const index = direct.findIndex((candidate) => candidate.block_id === blockId);
+        if (index >= 0) direct.splice(index, 1);
+      }
+    },
+    moveAfter(blockId, sourceBlockIds) {
+      const moving = sourceBlockIds.flatMap((sourceBlockId) => {
+        const index = direct.findIndex((candidate) => candidate.block_id === sourceBlockId);
+        return index >= 0 ? direct.splice(index, 1) : [];
+      });
+      const anchorIndex = direct.findIndex((candidate) => candidate.block_id === blockId);
+      if (anchorIndex < 0) throw new Error(`Code reconcile move anchor ${blockId} is missing.`);
+      direct.splice(anchorIndex + 1, 0, ...moving);
+    }
+  };
+}
+
+function codeReconcileAdapter(
+  state: ReturnType<typeof codeReconcileState>,
+  overrides: Partial<FeishuAdapter>
+): FeishuAdapter {
+  return {
+    fetchDocMarkdown: async () => ({ markdown: '' }),
+    fetchDocBlocks: async () => ({ blocks: state.blocks() }),
+    replaceDocument: async () => {},
+    replaceBlock: async ({ blockId }) => {
+      state.replace(blockId, codeBlock(blockId, 'new', 49));
+    },
+    insertBlocksAfter: async ({ blockId }) => {
+      state.insertAfter(blockId, codeBlock('created-code', 'new', 49));
+    },
+    moveBlocksAfter: async ({ blockId, sourceBlockIds }) => {
+      state.moveAfter(blockId, sourceBlockIds);
+    },
+    deleteBlocks: async ({ blockIds }) => {
+      state.delete(blockIds);
+    },
+    ...overrides
+  };
+}
+
+function codeReconcileOperation(input: {
+  desiredContent: string;
+  desiredSection: string;
+  afterLocator?: SemanticCodeBlock['locator'];
+  remoteCodes: Array<{ section: string; content: string; blockId: string }>;
+}): Extract<ScopedPatchOperation, { kind: 'code-section-reconcile' }> {
+  const desiredCode: SemanticCodeBlock = {
+    kind: 'code',
+    locator: { sectionPath: [input.desiredSection], kind: 'code', ordinal: 0 },
+    content: input.desiredContent,
+    sourceLanguage: 'python',
+    resolvedLanguage: 'python',
+    issues: []
+  };
+  return {
+    kind: 'code-section-reconcile',
+    locator: desiredCode.locator,
+    sectionPaths: [...new Set([
+      ...input.remoteCodes.map(({ section }) => section),
+      input.desiredSection
+    ])].map((section) => [section]),
+    desiredCodes: [{
+      code: desiredCode,
+      ...(input.afterLocator ? { afterLocator: input.afterLocator } : {})
+    }],
+    remoteCodes: input.remoteCodes.map(({ section, content, blockId }) => ({
+      kind: 'code',
+      locator: { sectionPath: [section], kind: 'code', ordinal: 0 },
+      content,
+      sourceLanguage: 'python',
+      resolvedLanguage: 'python',
+      remoteBlockId: blockId,
+      issues: []
+    }))
   };
 }
 

@@ -168,6 +168,58 @@ describe('typed Docx codec', () => {
     ]);
   });
 
+  it('preserves paragraph continuations and nested lists as ordered list-item children', () => {
+    expect(toProviderTree([{
+      kind: 'list',
+      ordered: false,
+      items: [{
+        content: [{ kind: 'text', text: 'Parent' }],
+        children: [
+          {
+            kind: 'paragraph',
+            content: [{ kind: 'text', text: 'Continuation' }],
+          },
+          {
+            kind: 'list',
+            ordered: true,
+            items: [{
+              content: [{ kind: 'text', text: 'Nested' }],
+              children: [],
+            }],
+          },
+        ],
+      }],
+    }])).toEqual([{
+      block_type: 12,
+      bullet: { elements: [textRun('Parent')], style: {} },
+      children: [
+        {
+          block_type: 2,
+          text: { elements: [textRun('Continuation')], style: { align: 1 } },
+        },
+        {
+          block_type: 13,
+          ordered: { elements: [textRun('Nested')], style: {} },
+        },
+      ],
+    }]);
+  });
+
+  it('fails closed for unsupported list-item child shapes', () => {
+    expect(() => toProviderTree([{
+      kind: 'list',
+      ordered: false,
+      items: [{
+        content: [{ kind: 'text', text: 'Parent' }],
+        children: [{
+          kind: 'heading',
+          level: 2,
+          content: [{ kind: 'text', text: 'Unsupported' }],
+        }],
+      }],
+    } as unknown as DesiredNode])).toThrow('unsupported list item child node: heading');
+  });
+
   it('encodes Code language and caption metadata and quote content', () => {
     expect(toProviderBlock({
       kind: 'code',

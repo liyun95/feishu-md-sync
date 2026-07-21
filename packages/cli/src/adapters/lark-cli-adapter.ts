@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { LarkCliTransport, type DocxTransport } from 'feishu-docx-engine';
 import { CliFailure, type CliFailureType } from '../core/cli-failure.js';
 import type { FeishuBlock } from '../feishu/types.js';
 import { normalizeMarkdownLinkUrl } from '../markdown/links.js';
@@ -32,10 +33,39 @@ export type LarkCliIdentity = 'auto' | 'bot' | 'user';
 export class LarkCliAdapter implements FeishuAdapter {
   private readonly exec: LarkCliExecutor;
   private readonly identity: LarkCliIdentity;
+  readonly docxTransport: DocxTransport;
+  private nextWhiteboardIdempotencyToken?: string;
 
   constructor(input: { exec?: LarkCliExecutor; identity?: LarkCliIdentity } = {}) {
     this.exec = input.exec ?? runLarkCli;
     this.identity = input.identity ?? larkCliIdentityFromEnv();
+    const transport = new LarkCliTransport({
+      exec: (args, execInput) => this.exec(args, execInput),
+      identity: this.identity
+    });
+    this.docxTransport = {
+      resolveDocument: (selector) => transport.resolveDocument(selector),
+      fetchBlocks: (documentId) => transport.fetchBlocks(documentId),
+      replaceBlock: (request) => transport.replaceBlock(request),
+      insertAfter: (request) => transport.insertAfter(request),
+      createChildren: (request) => transport.createChildren(request),
+      moveAfter: (request) => transport.moveAfter(request),
+      deleteBlocks: (request) => transport.deleteBlocks(request),
+      createDocument: (request) => transport.createDocument(request),
+      queryWhiteboard: (token) => transport.queryWhiteboard(token),
+      overwriteWhiteboard: (request) => transport.overwriteWhiteboard({
+        ...request,
+        idempotencyToken: this.effectiveWhiteboardIdempotencyToken(request.idempotencyToken)
+      })
+    };
+  }
+
+  setDocxEngineWhiteboardIdempotencyToken(token?: string): void {
+    this.nextWhiteboardIdempotencyToken = token;
+  }
+
+  private effectiveWhiteboardIdempotencyToken(fallback: string): string {
+    return this.nextWhiteboardIdempotencyToken ?? fallback;
   }
 
   async resolveBaseUrl(input: { url: string }): Promise<{ baseToken: string }> {

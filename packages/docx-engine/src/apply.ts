@@ -1621,23 +1621,21 @@ function assertExactStructuralDelta(
       const expected = [...(beforeNodes.get(parentId)?.childBlockIds ?? [])];
       const actual = afterNodes.get(parentId)?.childBlockIds;
       assertParentSemanticUnchanged(beforeNodes.get(parentId), afterNodes.get(parentId), step.operationId);
-      if (step.intent.desired.kind === 'table') {
-        const boundary = step.assertions.preflight.find((item) => item.kind === 'sibling-boundary');
-        if (!boundary || boundary.kind !== 'sibling-boundary' || !actual) {
-          return fail('Table replacement has no exact prepared sibling boundary.', { parentBlockId: parentId });
-        }
-        const replacements = idsBetween(
-          actual,
-          parentId,
-          boundary.precedingBlockId,
-          boundary.followingBlockId,
-        );
-        if (replacements.length !== 1) {
-          fail('Table replacement did not produce exactly one table block.', { replacements });
-        }
-        const index = expected.indexOf(step.intent.targetBlockId);
-        expected.splice(index, 1, replacements[0]!);
+      const boundary = step.assertions.preflight.find((item) => item.kind === 'sibling-boundary');
+      if (!boundary || boundary.kind !== 'sibling-boundary' || !actual) {
+        return fail('Replace operation has no exact prepared sibling boundary.', { parentBlockId: parentId });
       }
+      const replacements = idsBetween(
+        actual,
+        parentId,
+        boundary.precedingBlockId,
+        boundary.followingBlockId,
+      );
+      if (replacements.length === 0) {
+        fail('Replace operation did not produce a replacement block.', { replacements });
+      }
+      const index = expected.indexOf(step.intent.targetBlockId);
+      expected.splice(index, 1, ...replacements);
       if (!sameStrings(actual, expected)) {
         fail('Replace operation changed parent child order.', {
           parentBlockId: parentId,
@@ -1983,8 +1981,7 @@ function matchesDesiredList(
     const item = desired.items[itemIndex]!;
     if (!block || block.kind !== 'list' || block.blockType !== (desired.ordered ? 13 : 12)) return false;
     if (canonicalHash(decodeInline(block.raw, desired.ordered ? 'ordered' : 'bullet')) !== canonicalHash(item.content)) return false;
-    if (item.children.length === 0) return block.childBlockIds.length === 0;
-    return item.children.length === 1 && matchesDesiredList(snapshot, block.childBlockIds, item.children[0]!);
+    return matchesDesiredIds(snapshot, block.childBlockIds, item.children);
   });
 }
 

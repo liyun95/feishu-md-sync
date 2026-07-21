@@ -870,9 +870,7 @@ function matchesDesiredList(
       canonicalHash(decodeInline(actual.raw, desired.ordered ? 'ordered' : 'bullet')) !== canonicalHash(item.content)) {
       return false;
     }
-    return item.children.length === 0
-      ? actual.childBlockIds.length === 0
-      : item.children.length === 1 && matchesDesiredList(snapshot, actual.childBlockIds, item.children[0]!);
+    return matchesDesiredIds(snapshot, actual.childBlockIds, item.children);
   });
 }
 
@@ -1007,10 +1005,13 @@ function decodeNode(snapshot: DocumentSnapshot, node: SnapshotNode | undefined):
     const key = node.blockType === 13 ? 'ordered' : node.blockType === 12 ? 'bullet' : undefined;
     if (!key) return undefined;
     const children = node.childBlockIds.map((id) => decodeNode(snapshot, nodeIndex(snapshot).get(id)));
-    if (children.some((value) => value?.kind !== 'list')) return undefined;
+    if (children.some((value) => value?.kind !== 'list' && value?.kind !== 'paragraph')) return undefined;
     return {
       kind: 'list', ordered: node.blockType === 13,
-      items: [{ content: decodeInline(node.raw, key), children: children as Extract<DesiredNode, { kind: 'list' }>[] }],
+      items: [{
+        content: decodeInline(node.raw, key),
+        children: children as Array<Extract<DesiredNode, { kind: 'list' | 'paragraph' }>>,
+      }],
     };
   }
   if (node.kind === 'table') return decodeTable(snapshot, node);
