@@ -1,0 +1,376 @@
+[
+  {
+    "block_id": "doc",
+    "block_type": 1,
+    "revision_id": 17,
+    "page": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Hugging Face",
+            "text_element_style": {}
+          }
+        }
+      ]
+    },
+    "children": [
+      "overview-heading",
+      "overview-text",
+      "before-heading",
+      "before-intro",
+      "nested-parent",
+      "parameters-heading",
+      "parameters-table",
+      "example-code",
+      "note-callout",
+      "architecture-board",
+      "synced-source",
+      "synced-reference",
+      "unknown-block"
+    ]
+  },
+  {
+    "block_id": "overview-heading",
+    "parent_id": "doc",
+    "block_type": 3,
+    "heading1": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Hugging Face embedding functions",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "overview-text",
+    "parent_id": "doc",
+    "block_type": 2,
+    "document_revision_id": 17,
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Use Hugging Face models to generate embeddings.",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "before-heading",
+    "parent_id": "doc",
+    "block_type": 4,
+    "heading2": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Before you start",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "before-intro",
+    "parent_id": "doc",
+    "block_type": 2,
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Install the required packages:",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "nested-parent",
+    "parent_id": "doc",
+    "block_type": 12,
+    "bullet": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Create a Hugging Face account.",
+            "text_element_style": {}
+          }
+        }
+      ]
+    },
+    "children": [
+      {
+        "block_id": "nested-child",
+        "parent_id": "nested-parent",
+        "block_type": 13,
+        "ordered": {
+          "elements": [
+            {
+              "text_run": {
+                "content": "Generate an access token.",
+                "text_element_style": {
+                  "bold": true
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "block_id": "parameters-heading",
+    "parent_id": "doc",
+    "block_type": 5,
+    "heading3": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Parameters",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "parameters-table",
+    "parent_id": "doc",
+    "block_type": 31,
+    "children": [
+      "parameter-cell",
+      "description-cell",
+      "model-cell",
+      "model-description-cell"
+    ],
+    "table": {
+      "property": {
+        "row_size": 2,
+        "column_size": 2
+      },
+      "cells": [
+        "parameter-cell",
+        "description-cell",
+        "model-cell",
+        "model-description-cell"
+      ]
+    }
+  },
+  {
+    "block_id": "parameter-cell",
+    "parent_id": "parameters-table",
+    "block_type": 32,
+    "children": ["parameter-label"]
+  },
+  {
+    "block_id": "parameter-label",
+    "parent_id": "parameter-cell",
+    "block_type": 2,
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Parameter",
+            "text_element_style": {
+              "bold": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "description-cell",
+    "parent_id": "parameters-table",
+    "block_type": 32,
+    "children": ["description-label"]
+  },
+  {
+    "block_id": "description-label",
+    "parent_id": "description-cell",
+    "block_type": 2,
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "Description",
+            "text_element_style": {
+              "bold": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "model-cell",
+    "parent_id": "parameters-table",
+    "block_type": 32,
+    "children": ["model-label"]
+  },
+  {
+    "block_id": "model-label",
+    "parent_id": "model-cell",
+    "block_type": 2,
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "model_name",
+            "text_element_style": {
+              "inline_code": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "model-description-cell",
+    "parent_id": "parameters-table",
+    "block_type": 32,
+    "children": ["model-description"]
+  },
+  {
+    "block_id": "model-description",
+    "parent_id": "model-description-cell",
+    "block_type": 2,
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "The model used to generate embeddings.",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "example-code",
+    "parent_id": "doc",
+    "block_type": 14,
+    "code": {
+      "style": {
+        "language": 49
+      },
+      "elements": [
+        {
+          "text_run": {
+            "content": "ef = HuggingFaceEmbeddingFunction()",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "note-callout",
+    "parent_id": "doc",
+    "block_type": 19,
+    "callout": {
+      "emoji_id": "memo"
+    },
+    "children": [
+      {
+        "block_id": "callout-title",
+        "parent_id": "note-callout",
+        "block_type": 2,
+        "text": {
+          "elements": [
+            {
+              "text_run": {
+                "content": "Notes",
+                "text_element_style": {}
+              }
+            }
+          ]
+        }
+      },
+      {
+        "block_id": "callout-body",
+        "parent_id": "note-callout",
+        "block_type": 2,
+        "text": {
+          "elements": [
+            {
+              "text_run": {
+                "content": "Keep the token private.",
+                "text_element_style": {}
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "block_id": "architecture-board",
+    "parent_id": "doc",
+    "block_type": 43,
+    "board": {
+      "token": "whiteboard-stable-token"
+    }
+  },
+  {
+    "block_id": "synced-source",
+    "parent_id": "doc",
+    "block_type": 49,
+    "source_synced": {
+      "align": 1,
+      "elements": [
+        {
+          "text_run": {
+            "content": "Synced code examples",
+            "text_element_style": {}
+          }
+        }
+      ]
+    },
+    "children": ["synced-code"]
+  },
+  {
+    "block_id": "synced-code",
+    "parent_id": "synced-source",
+    "block_type": 14,
+    "code": {
+      "style": {
+        "language": 49
+      },
+      "elements": [
+        {
+          "text_run": {
+            "content": "print(embedding)",
+            "text_element_style": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "block_id": "synced-reference",
+    "parent_id": "doc",
+    "block_type": 50,
+    "reference_synced": {
+      "source_document_id": "english-source-document",
+      "source_block_id": "english-source-block"
+    }
+  },
+  {
+    "block_id": "unknown-block",
+    "parent_id": "doc",
+    "block_type": 48,
+    "link_preview": {
+      "url": "https://huggingface.co"
+    },
+    "custom": {
+      "revision": "semantic-v1"
+    }
+  }
+]

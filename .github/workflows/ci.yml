@@ -46,5 +46,8 @@ jobs:
       - name: Validate Agent Skill
         run: npm run test:skill
 
+      - name: Validate release workflow syntax and semantics
+        run: npm run test:release-workflow
+
       - name: Build docs
         run: npm run docs:build

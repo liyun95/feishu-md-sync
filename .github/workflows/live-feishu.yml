@@ -25,6 +25,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run build
       - run: npx @larksuite/cli@latest install
       - name: Configure lark-cli bot credentials
         env:

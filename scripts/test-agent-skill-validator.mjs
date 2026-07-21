@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,25 +9,25 @@ const validator = join(root, 'scripts', 'validate-agent-skill.mjs');
 const tempDir = mkdtempSync(join(tmpdir(), 'feishu-md-sync-skill-validator-'));
 
 try {
-  expectResult(createFakeCli('0.4.0', fullHelp()), [], false, 'outside the Skill range');
-  expectResult(createFakeCli('0.4.0', fullHelp()), ['--allow-development-version'], true);
-  expectResult(createFakeCli('0.5.0', fullHelp()), [], true);
-  expectResult(createFakeCli('0.5.0-rc.1', fullHelp()), [], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.5.0', fullHelp()), [], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.5.0', fullHelp()), ['--allow-development-version'], true);
+  expectResult(createFakeCli('0.6.0', fullHelp()), [], true);
+  expectResult(createFakeCli('0.6.0-rc.1', fullHelp()), [], false, 'outside the Skill range');
 
   const missingStatusFormat = fullHelp();
   missingStatusFormat.status = missingStatusFormat.status.replace('  --format <format>\n', '');
-  expectResult(createFakeCli('0.2.0', missingStatusFormat), ['--allow-development-version'], false, 'status help is missing --format');
+  expectResult(createFakeCli('0.5.0', missingStatusFormat), ['--allow-development-version'], false, 'status help is missing --format');
 
   const missingPullOutput = fullHelp();
   missingPullOutput.pull = missingPullOutput.pull.replace('  --output <file>\n', '');
-  expectResult(createFakeCli('0.2.0', missingPullOutput), ['--allow-development-version'], false, 'pull help is missing --output');
+  expectResult(createFakeCli('0.5.0', missingPullOutput), ['--allow-development-version'], false, 'pull help is missing --output');
 
-  expectResult(createFakeCli('0.6.0', fullHelp()), ['--allow-development-version'], false, 'outside the Skill range');
+  expectResult(createFakeCli('0.7.0', fullHelp()), ['--allow-development-version'], false, 'outside the Skill range');
 
   const missingPublishDialect = fullHelp();
   missingPublishDialect.publish = missingPublishDialect.publish.replace('  --dialect <dialect>\n', '');
   expectResult(
-    createFakeCli('0.5.0', missingPublishDialect),
+    createFakeCli('0.6.0', missingPublishDialect),
     [],
     false,
     'publish help is missing --dialect'
@@ -37,10 +37,26 @@ try {
   missingBaselineConfirmation['baseline adopt'] = missingBaselineConfirmation['baseline adopt']
     .replace('  --confirm-baseline-adoption <fingerprint>\n', '');
   expectResult(
-    createFakeCli('0.5.0', missingBaselineConfirmation),
+    createFakeCli('0.6.0', missingBaselineConfirmation),
     [],
     false,
     'baseline adopt help is missing --confirm-baseline-adoption'
+  );
+
+  const externalSkill = join(tempDir, 'external-skill');
+  cpSync(join(root, 'skills', 'feishu-md-sync'), externalSkill, { recursive: true });
+  const externalSkillMarkdown = join(externalSkill, 'SKILL.md');
+  writeFileSync(
+    externalSkillMarkdown,
+    readFileSync(externalSkillMarkdown, 'utf8').replace('>=0.6.0 <0.7.0', '>=9.0.0 <10.0.0'),
+    'utf8'
+  );
+  expectResult(
+    createFakeCli('0.6.0', fullHelp()),
+    [],
+    false,
+    'Skill must declare the v0.6 compatibility range',
+    { FEISHU_MD_SYNC_SKILL_DIR: externalSkill }
   );
   process.stdout.write('Agent Skill validator regression checks passed.\n');
 } finally {
@@ -93,11 +109,11 @@ function fullHelp() {
   };
 }
 
-function expectResult(cliPath, args, succeeds, expectedMessage) {
+function expectResult(cliPath, args, succeeds, expectedMessage, extraEnv = {}) {
   const result = spawnSync(process.execPath, [validator, ...args], {
     cwd: root,
     encoding: 'utf8',
-    env: { ...process.env, FEISHU_MD_SYNC_BIN: cliPath }
+    env: { ...process.env, FEISHU_MD_SYNC_BIN: cliPath, ...extraEnv }
   });
   if ((result.status === 0) !== succeeds) {
     throw new Error(`unexpected validator result: ${result.stdout}${result.stderr}`);

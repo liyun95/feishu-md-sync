@@ -1,6 +1,13 @@
 import { confirmationRequired, validationFailure } from '../core/cli-failure.js';
-import type { FeishuAdapter, RemoteMarkdown, RemoteWhiteboard } from '../adapters/feishu-adapter.js';
-import { renderCodeBlockXml } from '../code-blocks/code-xml.js';
+import {
+  createFeishuDocxEngine,
+  EngineExecutionError,
+  PartialMutationError,
+  type DocumentSnapshot,
+  type MutationIntent,
+  type MutationJournal,
+} from 'feishu-docx-engine';
+import type { FeishuAdapter, RemoteMarkdown } from '../adapters/feishu-adapter.js';
 import {
   DEFAULT_CODE_BLOCK_CONFIG,
   type CodeBlockConfig
@@ -65,6 +72,16 @@ import {
   resolvedChildBlocks
 } from './block-state.js';
 import { PartialWriteError, type PublishWriteOperationSummary } from './partial-write-error.js';
+import {
+  bridgeEngineCause,
+  docxTransportForAdapter,
+  enginePartialWriteError,
+  lastDocxEngineProviderRevision,
+  operationIdForScopedOperation,
+  scopedOperationToMutationIntents,
+  whiteboardOperationToMutationIntent,
+} from './docx-engine-operations.js';
+import { createDocxEngineJournal } from './docx-engine-journal.js';
 import type { CalloutOperation } from './callout-plan.js';
 import { buildPublishPlan, type PublishPlan, type PublishStrategy } from './publish-plan.js';
 import { buildPublishContext, type PublishContext } from './publish-context.js';
@@ -90,7 +107,6 @@ export type RunPublishResult = {
 
 const TABLE_READBACK_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 const CHECKPOINT_READ_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
-const WHITEBOARD_APPLYING_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000];
 
 export type PublishAnalysis = {
   plan: PublishPlan;
@@ -731,7 +747,7 @@ async function analyzeWhiteboards(input: {
   intent: 'sync' | 'protect';
   confirmedRemoteWhiteboardOverwrites: string[];
 }): Promise<{ plan: WhiteboardPlan; assets: LocalWhiteboardAsset[] }> {
-  if (input.intent === 'sync' &&
+  if (input.intent === 'sync' && !input.adapter.docxTransport &&
     (!input.adapter.queryWhiteboard || !input.adapter.updateWhiteboard || !input.adapter.replaceImageWithWhiteboard)) {
     return {
       plan: blockedWhiteboardPlan(
@@ -1189,7 +1205,7 @@ export function partitionScopedOperations(operations: ScopedPatchOperation[]): {
   return result;
 }
 
-async function applyScopedOperations(input: {
+export async function applyScopedOperations(input: {
   adapter: FeishuAdapter;
   doc: string;
   operations: ScopedPatchOperation[];
@@ -1203,222 +1219,87 @@ async function applyScopedOperations(input: {
   recoveryCheckpoint?: { written: boolean; revision?: string };
   verifiedOperations?: ScopedPatchOperation[];
 }): Promise<PublishWriteOperationSummary[]> {
-  if (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks || !input.adapter.fetchDocBlocks) {
+  if (!input.adapter.fetchDocBlocks || (!input.adapter.docxTransport &&
+    (!input.adapter.replaceBlock || !input.adapter.insertBlocksAfter || !input.adapter.deleteBlocks))) {
     throw new Error('Configured Feishu adapter does not support scoped block-patch writes');
   }
   const completed = [...(input.completedOperations ?? [])];
   const verifiedOperations = input.verifiedOperations ?? [];
+  const replacementCodeBlockIds = new Map<string, string>();
   for (let index = 0; index < input.operations.length; index += 1) {
     const operation = input.operations[index]!;
     const summary = summarizeScopedOperation(operation);
-    let appliedOperation: ScopedPatchOperation = operation;
-    let mutationCompleted = false;
-    let mutationRevision: string | undefined;
-    let textUpdateReadback: TextUpdateReadbackExpectation | undefined;
     try {
-      if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
-        operation.kind === 'code-move' || operation.kind === 'code-delete' ||
-        operation.kind === 'code-section-reconcile') {
-        await applyCodeOperation({
-          adapter: input.adapter,
-          doc: input.doc,
-          operation: operation as CodeBlockOperation
-        });
-      } else if (operation.kind === 'update') {
+      if (operation.kind === 'update') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyTextOperationParent(operation, before.blocks);
-        textUpdateReadback = textUpdateReadbackExpectation(operation, before.blocks);
         if (operation.recoveryExpectedRemoteMarkdown) {
           verifyRecoveryUpdatePreflight(operation, before.blocks, input.doc, input.callouts);
         }
-        const result = await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-        mutationRevision = result?.revision;
-      } else if (operation.kind === 'create') {
-        const insertAfterBlockId = await resolveCurrentInsertionAnchor({
-          adapter: input.adapter,
-          doc: input.doc,
-          originalBlockId: operation.insertAfterBlockId,
-          afterLocator: operation.afterLocator,
-          callouts: input.callouts
-        });
-        appliedOperation = { ...operation, insertAfterBlockId };
-        const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyTextOperationParent(appliedOperation, before.blocks);
-        const desiredTrees = markdownToFeishuBlocks(operation.desiredMarkdown);
-        const structured = desiredTrees.some((block) => childBlockObjects(block).length > 0);
-        if (structured) {
-          await createStructuredTextTrees({
-            adapter: input.adapter,
-            doc: input.doc,
-            operation: appliedOperation,
-            desiredTrees,
-            beforeBlocks: before.blocks
-          });
-        } else {
-          const result = await input.adapter.insertBlocksAfter({
-            doc: input.doc,
-            blockId: insertAfterBlockId,
-            content: operation.desiredMarkdown,
-            format: 'markdown'
-          });
-          mutationRevision = result?.revision;
-        }
       } else if (operation.kind === 'delete') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
-        verifyTextOperationParent(operation, before.blocks);
         if (operation.recovery) {
           verifyRecoveryDeletePreflight(operation, before.blocks, input.doc, input.callouts);
         }
-        await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
-      } else if (operation.kind === 'table-replace') {
-        const result = await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: renderTableXml(operation.desiredTable),
-          format: 'xml'
-        });
-        mutationRevision = result?.revision;
       } else if (operation.kind === 'table-create') {
         const before = await input.adapter.fetchDocBlocks({ doc: input.doc });
         verifyTableCreateAnchors(operation, before.blocks, input.doc);
-        await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          content: renderTableXml(operation.desiredTable),
-          format: 'xml'
-        });
-      } else if (operation.kind === 'callout-create') {
-        const insertAfterBlockId = await resolveCurrentInsertionAnchor({
-          adapter: input.adapter,
-          doc: input.doc,
-          originalBlockId: operation.insertAfterBlockId,
-          afterLocator: operation.afterLocator,
-          callouts: input.callouts
-        });
-        appliedOperation = { ...operation, insertAfterBlockId };
-        const result = await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: insertAfterBlockId,
-          content: renderCalloutXml({ callout: operation.desiredCallout, config: input.callouts }),
-          format: 'xml'
-        });
-        mutationRevision = result?.revision;
-      } else if (operation.kind === 'callout-child-update') {
-        await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-      } else if (operation.kind === 'callout-title-update') {
-        await input.adapter.replaceBlock({
-          doc: input.doc,
-          blockId: operation.remoteBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-      } else if (operation.kind === 'callout-child-create') {
-        await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          content: operation.desiredMarkdown,
-          format: 'markdown'
-        });
-      } else if (operation.kind === 'callout-child-delete' || operation.kind === 'callout-delete') {
-        await input.adapter.deleteBlocks({ doc: input.doc, blockIds: operation.blockIds });
-      } else if (operation.kind === 'authoring-token-create') {
-        await input.adapter.insertBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          content: renderAuthoringTokenXml(operation.token),
-          format: 'xml'
-        });
-      } else if (operation.kind === 'authoring-token-move') {
-        if (!input.adapter.moveBlocksAfter) {
-          throw new Error('Configured Feishu adapter does not support Procedures token movement.');
-        }
-        await input.adapter.moveBlocksAfter({
-          doc: input.doc,
-          blockId: operation.insertAfterBlockId,
-          sourceBlockIds: [operation.remoteBlockId]
-        });
-      } else if (operation.kind === 'authoring-token-delete') {
-        await input.adapter.deleteBlocks({
-          doc: input.doc,
-          blockIds: [operation.remoteBlockId]
-        });
-      } else {
-        const unsupported: never = operation;
-        throw new Error(`Unsupported scoped operation: ${String(unsupported)}`);
       }
-      mutationCompleted = true;
-      if (operation.kind === 'code-update' || operation.kind === 'code-create' ||
-        operation.kind === 'code-move' || operation.kind === 'code-delete' ||
-        operation.kind === 'code-section-reconcile') {
-        verifyCodeOperation(operation, await fetchRemoteSemantic(input.adapter, input.doc, input.callouts));
-      } else {
-        await verifyScopedOperationReadback({
+
+      if (operation.kind === 'code-section-reconcile') {
+        await applyCodeSectionReconcileThroughEngine({
           adapter: input.adapter,
           doc: input.doc,
-          operation: appliedOperation,
+          operation,
           callouts: input.callouts,
-          mutationRevision,
-          textUpdateReadback
+          completedOperations: completed,
+          verifiedOperations,
+          recordCheckpoint: input.recordCheckpoint,
+          recoveryCheckpoint: input.recoveryCheckpoint,
+          pendingAfter: [
+            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+            ...(input.pendingAfter ?? [])
+          ]
         });
-      }
-      completed.push(summary);
-      verifiedOperations.push(appliedOperation);
-      if (input.recordCheckpoint) {
-        try {
-          await input.recordCheckpoint(completed, verifiedOperations);
-        } catch (error) {
-          throw new PartialWriteError({
-            completedOperations: completed,
-            failedOperation: { kind: 'receipt-write' },
-            pendingOperations: [
-              ...input.operations.slice(index + 1).map(summarizeScopedOperation),
-              ...(input.pendingAfter ?? [])
-            ],
-            recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
-            recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
-            cause: error
-          });
+        verifyCodeOperation(operation, await fetchRemoteSemantic(input.adapter, input.doc, input.callouts));
+        completed.push(summary);
+        verifiedOperations.push(operation);
+        if (input.recordCheckpoint) {
+          try {
+            await input.recordCheckpoint(completed, verifiedOperations);
+          } catch (error) {
+            throw new PartialWriteError({
+              completedOperations: completed,
+              failedOperation: { kind: 'receipt-write' },
+              pendingOperations: [
+                ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+                ...(input.pendingAfter ?? [])
+              ],
+              recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+              recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
+              cause: error
+            });
+          }
         }
+      } else {
+        await applyScopedOperationThroughEngine({
+          adapter: input.adapter,
+          doc: input.doc,
+          operation,
+          callouts: input.callouts,
+          completedOperations: completed,
+          verifiedOperations,
+          recordCheckpoint: input.recordCheckpoint,
+          recoveryCheckpoint: input.recoveryCheckpoint,
+          replacementCodeBlockIds,
+          pendingAfter: [
+            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
+            ...(input.pendingAfter ?? [])
+          ]
+        });
       }
     } catch (error) {
       if (error instanceof PartialWriteError) {
-        if (error.failedOperation.kind === 'receipt-write') throw error;
-        throw new PartialWriteError({
-          completedOperations: [...completed, ...error.completedOperations],
-          failedOperation: error.failedOperation,
-          pendingOperations: [
-            ...error.pendingOperations,
-            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
-            ...(input.pendingAfter ?? [])
-          ],
-          document: error.document,
-          recoveryCheckpointWritten: error.recoveryCheckpointWritten || input.recoveryCheckpoint?.written,
-          recoveryCheckpointRevision: error.recoveryCheckpointRevision ?? input.recoveryCheckpoint?.revision,
-          cause: error
-        });
-      }
-      if (mutationCompleted) {
-        throw new PartialWriteError({
-          completedOperations: [...completed, summary],
-          failedOperation: readbackFailureSummary(operation),
-          pendingOperations: [
-            ...input.operations.slice(index + 1).map(summarizeScopedOperation),
-            ...(input.pendingAfter ?? [])
-          ],
-          recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
-          recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
-          cause: error
-        });
+        throw error;
       }
       if (completed.length === 0) throw error;
       throw new PartialWriteError({
@@ -1435,6 +1316,236 @@ async function applyScopedOperations(input: {
     }
   }
   return completed;
+}
+
+async function applyScopedOperationThroughEngine(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>;
+  callouts: CalloutConfig;
+  completedOperations: PublishWriteOperationSummary[];
+  verifiedOperations: ScopedPatchOperation[];
+  recordCheckpoint?: (
+    completedOperations: PublishWriteOperationSummary[],
+    verifiedOperations: ScopedPatchOperation[]
+  ) => Promise<void>;
+  recoveryCheckpoint?: { written: boolean; revision?: string };
+  replacementCodeBlockIds: Map<string, string>;
+  pendingAfter: PublishWriteOperationSummary[];
+}): Promise<void> {
+  const engine = createFeishuDocxEngine({ transport: docxTransportForAdapter(input.adapter) });
+  const remappedOperation = remapReplacementCodeBlockId(input.operation, input.replacementCodeBlockIds);
+  const resolution = await resolveScopedEngineOperation({ ...input, operation: remappedOperation });
+  const effectiveOperation = withResolvedCodeBlockId(remappedOperation, resolution.resolvedRemoteBlockId);
+  const snapshot = await engine.snapshot({ kind: 'docx', token: input.doc });
+  const intents = scopedOperationToMutationIntents({
+    operation: effectiveOperation,
+    snapshot,
+    callouts: input.callouts,
+    ...resolution
+  });
+  const operationsById = new Map(intents.map((intent) => [intent.operationId, effectiveOperation] as const));
+  const originalCodeBlockId = input.operation.kind === 'code-update'
+    ? input.operation.remoteBlockId
+    : undefined;
+  const durableJournal = createDocxEngineJournal({
+    operationsById,
+    completedOperations: input.completedOperations,
+    verifiedOperations: input.verifiedOperations,
+    recordCheckpoint: input.recordCheckpoint,
+    summarize: summarizeScopedOperation,
+    onVerified: (operation, evidence) => {
+      if (operation.kind !== 'code-update' || !originalCodeBlockId || evidence.createdBlockIds.length !== 1) return;
+      const replacementBlockId = evidence.createdBlockIds[0]!;
+      input.replacementCodeBlockIds.set(originalCodeBlockId, replacementBlockId);
+      operation.remoteBlockId = replacementBlockId;
+    }
+  });
+  const tableOperation = effectiveOperation.kind === 'table-replace' || effectiveOperation.kind === 'table-create';
+  let bufferedEvidence: import('feishu-docx-engine').VerifiedOperationEvidence | undefined;
+  const journal: MutationJournal = tableOperation
+    ? { recordVerified: async (evidence) => { bufferedEvidence = evidence; } }
+    : durableJournal;
+  const batch = engine.prepare({
+    snapshot,
+    operations: intents,
+    idempotencyNamespace: `feishu-md-sync:${input.doc}`
+  });
+  try {
+    await engine.apply({ batch, journal });
+    if (tableOperation) {
+      if (!bufferedEvidence) throw new Error('Docx engine did not journal verified table evidence.');
+      try {
+        await verifyScopedOperationReadback({
+          adapter: input.adapter,
+          doc: input.doc,
+          operation: input.operation,
+          callouts: input.callouts,
+          mutationRevision: lastDocxEngineProviderRevision(input.adapter) ??
+            (input.adapter.docxTransport ? bufferedEvidence.revision : undefined)
+        });
+      } catch (cause) {
+        throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: false });
+      }
+      try {
+        await durableJournal.recordVerified(bufferedEvidence);
+      } catch (cause) {
+        throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: true });
+      }
+    }
+  } catch (error) {
+    if (error instanceof PartialMutationError) {
+      if ((input.operation.kind === 'table-replace' || input.operation.kind === 'table-create') &&
+        error.evidence.failedOperation.kind === 'verification') {
+        try {
+          await verifyScopedOperationReadback({
+            adapter: input.adapter,
+            doc: input.doc,
+            operation: input.operation,
+            callouts: input.callouts,
+            mutationRevision: lastDocxEngineProviderRevision(input.adapter) ??
+              (input.adapter.docxTransport ? error.evidence.lastObservedRevision : undefined)
+          });
+        } catch (cause) {
+          throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: false });
+        }
+        const recovered = await engine.snapshot({ kind: 'docx', token: input.doc });
+        try {
+          await durableJournal.recordVerified({
+            operationId: intents[0]!.operationId,
+            createdBlockIds: [...error.evidence.createdBlockIds],
+            revision: recovered.revision,
+            afterSnapshotHash: recovered.canonicalHash,
+            verified: true
+          });
+        } catch (cause) {
+          throw tablePostApplyPartialWriteError({ ...input, cause, checkpointFailure: true });
+        }
+        return;
+      }
+      throw enginePartialWriteError({
+        error,
+        operationsById,
+        completedOperations: input.completedOperations,
+        pendingAfter: input.pendingAfter,
+        recoveryCheckpoint: input.recoveryCheckpoint,
+        summarize: summarizeScopedOperation,
+        readbackSummary: readbackFailureSummary(input.operation),
+        unplannedAsCheckpointFailure: input.recordCheckpoint !== undefined
+      });
+    }
+    throw bridgeEngineCause(error);
+  }
+}
+
+function remapReplacementCodeBlockId<T extends Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>>(
+  operation: T,
+  replacements: ReadonlyMap<string, string>
+): T {
+  if ((operation.kind !== 'code-update' && operation.kind !== 'code-move' && operation.kind !== 'code-delete') ||
+    !operation.remoteBlockId) return operation;
+  const replacementBlockId = replacements.get(operation.remoteBlockId);
+  return replacementBlockId ? { ...operation, remoteBlockId: replacementBlockId } : operation;
+}
+
+function withResolvedCodeBlockId<T extends Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>>(
+  operation: T,
+  resolvedRemoteBlockId: string | undefined
+): T {
+  if (!resolvedRemoteBlockId ||
+    (operation.kind !== 'code-update' && operation.kind !== 'code-move' && operation.kind !== 'code-delete')) {
+    return operation;
+  }
+  return { ...operation, remoteBlockId: resolvedRemoteBlockId };
+}
+
+function tablePostApplyPartialWriteError(input: {
+  operation: Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>;
+  completedOperations: PublishWriteOperationSummary[];
+  pendingAfter: PublishWriteOperationSummary[];
+  recoveryCheckpoint?: { written: boolean; revision?: string };
+  checkpointFailure: boolean;
+  cause: unknown;
+}): PartialWriteError {
+  return new PartialWriteError({
+    completedOperations: [
+      ...input.completedOperations,
+      summarizeScopedOperation(input.operation)
+    ],
+    failedOperation: input.checkpointFailure
+      ? { kind: 'receipt-write' }
+      : readbackFailureSummary(input.operation),
+    pendingOperations: input.pendingAfter,
+    recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+    recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
+    cause: input.cause
+  });
+}
+
+async function resolveScopedEngineOperation(input: {
+  adapter: FeishuAdapter;
+  doc: string;
+  operation: Exclude<ScopedPatchOperation, { kind: 'code-section-reconcile' }>;
+  callouts: CalloutConfig;
+}): Promise<{
+  resolvedParentBlockId?: string;
+  resolvedInsertAfterBlockId?: string;
+  resolvedRemoteBlockId?: string;
+}> {
+  const operation = input.operation;
+  if (operation.kind === 'create' || operation.kind === 'callout-create') {
+    return {
+      resolvedInsertAfterBlockId: await resolveCurrentInsertionAnchor({
+        adapter: input.adapter,
+        doc: input.doc,
+        originalBlockId: operation.insertAfterBlockId,
+        afterLocator: operation.afterLocator,
+        callouts: input.callouts
+      })
+    };
+  }
+  if (operation.kind !== 'code-create' && operation.kind !== 'code-update' &&
+    operation.kind !== 'code-move' && operation.kind !== 'code-delete') return {};
+
+  const remote = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
+  if (operation.kind === 'code-create') {
+    const anchor = resolveAnchorBlockId(
+      remote,
+      operation.afterLocator,
+      input.doc,
+      operation.afterCodeFingerprint
+    );
+    return {
+      resolvedParentBlockId: parentBlockIdForAnchor(
+        await createFeishuDocxEngine({ transport: docxTransportForAdapter(input.adapter) })
+          .snapshot({ kind: 'docx', token: input.doc }),
+        anchor
+      ),
+      resolvedInsertAfterBlockId: anchor
+    };
+  }
+  const matched = resolveRemoteCode(remote, operation);
+  if (!matched.remoteBlockId) throw new Error('Code block write cannot resolve a current remote block ID.');
+  if (operation.kind === 'code-move') {
+    return {
+      resolvedRemoteBlockId: matched.remoteBlockId,
+      resolvedInsertAfterBlockId: resolveAnchorBlockId(
+        remote,
+        operation.afterLocator,
+        input.doc,
+        operation.afterCodeFingerprint,
+        matched.remoteBlockId
+      )
+    };
+  }
+  return { resolvedRemoteBlockId: matched.remoteBlockId };
+}
+
+function parentBlockIdForAnchor(snapshot: DocumentSnapshot, anchorBlockId: string): string {
+  if (anchorBlockId === snapshot.rootBlockId) return snapshot.rootBlockId;
+  const anchor = snapshot.nodes.find((node) => node.blockId === anchorBlockId);
+  if (!anchor?.parentBlockId) throw new Error(`Code insertion anchor ${anchorBlockId} has no parent.`);
+  return anchor.parentBlockId;
 }
 
 async function verifyScopedOperationReadback(input: {
@@ -1477,6 +1588,7 @@ async function verifyScopedOperationReadback(input: {
 }
 
 function isTransientTableReadbackError(error: unknown): boolean {
+  if (isCheckpointReadTransientError(error)) return true;
   if (error && typeof error === 'object') {
     const details = (error as { details?: { retryable?: unknown } }).details;
     if (details?.retryable === true) return true;
@@ -1685,94 +1797,86 @@ function readbackFailureSummary(operation: ScopedPatchOperation): PublishWriteOp
   return { kind: 'scoped-readback', locator: operation.locator };
 }
 
-async function applyCodeOperation(input: {
-  adapter: FeishuAdapter;
-  doc: string;
-  operation: CodeBlockOperation;
-}): Promise<void> {
-  const operation = input.operation;
-  const replaceBlock = input.adapter.replaceBlock?.bind(input.adapter);
-  const insertBlocksAfter = input.adapter.insertBlocksAfter?.bind(input.adapter);
-  const deleteBlocks = input.adapter.deleteBlocks?.bind(input.adapter);
-  const moveBlocksAfter = input.adapter.moveBlocksAfter?.bind(input.adapter);
-  if (!replaceBlock || !insertBlocksAfter || !deleteBlocks || !input.adapter.fetchDocBlocks) {
-    throw new Error('Configured Feishu adapter does not support Code block writes.');
-  }
-  if ((operation.kind === 'code-move' || operation.kind === 'code-section-reconcile') && !moveBlocksAfter) {
-    throw new Error('Configured Feishu adapter does not support Code block movement.');
-  }
-
-  if (operation.kind === 'code-section-reconcile') {
-    await applyCodeSectionReconcile({
-      adapter: input.adapter,
-      doc: input.doc,
-      operation,
-      replaceBlock,
-      insertBlocksAfter,
-      deleteBlocks,
-      moveBlocksAfter: moveBlocksAfter!
-    });
-    return;
-  }
-
-  const before = await fetchRemoteSemantic(input.adapter, input.doc);
-  if (operation.kind === 'code-create') {
-    const anchor = resolveAnchorBlockId(
-      before,
-      operation.afterLocator,
-      input.doc,
-      operation.afterCodeFingerprint
-    );
-    await withRateLimitRetry(() => insertBlocksAfter({
-      doc: input.doc,
-      blockId: anchor,
-      content: renderCodeBlockXml(operation.desiredCode),
-      format: 'xml'
-    }));
-    return;
-  }
-
-  const remote = resolveRemoteCode(before, operation);
-  if (!remote.remoteBlockId) throw new Error('Code block write cannot resolve a current remote block ID.');
-  if (operation.kind === 'code-update') {
-    await withRateLimitRetry(() => replaceBlock({
-      doc: input.doc,
-      blockId: remote.remoteBlockId!,
-      content: renderCodeBlockXml({ ...operation.desiredCode, caption: remote.caption }),
-      format: 'xml'
-    }));
-    return;
-  }
-  if (operation.kind === 'code-move') {
-    const anchor = resolveAnchorBlockId(
-      before,
-      operation.afterLocator,
-      input.doc,
-      operation.afterCodeFingerprint,
-      remote.remoteBlockId
-    );
-    await withRateLimitRetry(() => moveBlocksAfter!({
-      doc: input.doc,
-      blockId: anchor,
-      sourceBlockIds: [remote.remoteBlockId!]
-    }));
-    return;
-  }
-  await withRateLimitRetry(() => deleteBlocks({ doc: input.doc, blockIds: [remote.remoteBlockId!] }));
-}
-
-async function applyCodeSectionReconcile(input: {
+async function applyCodeSectionReconcileThroughEngine(input: {
   adapter: FeishuAdapter;
   doc: string;
   operation: CodeSectionReconcileOperation;
-  replaceBlock: NonNullable<FeishuAdapter['replaceBlock']>;
-  insertBlocksAfter: NonNullable<FeishuAdapter['insertBlocksAfter']>;
-  deleteBlocks: NonNullable<FeishuAdapter['deleteBlocks']>;
-  moveBlocksAfter: NonNullable<FeishuAdapter['moveBlocksAfter']>;
+  callouts: CalloutConfig;
+  completedOperations: PublishWriteOperationSummary[];
+  verifiedOperations: ScopedPatchOperation[];
+  recordCheckpoint?: (
+    completedOperations: PublishWriteOperationSummary[],
+    verifiedOperations: ScopedPatchOperation[]
+  ) => Promise<void>;
+  recoveryCheckpoint?: { written: boolean; revision?: string };
+  pendingAfter: PublishWriteOperationSummary[];
 }): Promise<void> {
-  const completed: PublishWriteOperationSummary[] = [];
+  let physicalOrdinal = 0;
+  let failureSummary: PublishWriteOperationSummary = summarizeScopedOperation(input.operation);
+  const execute = async (physical: {
+    operation: ScopedPatchOperation;
+    summary: PublishWriteOperationSummary;
+    build: (snapshot: DocumentSnapshot, operationId: string) => MutationIntent;
+  }): Promise<void> => {
+    failureSummary = physical.summary;
+    const engine = createFeishuDocxEngine({ transport: docxTransportForAdapter(input.adapter) });
+    const snapshot = await engine.snapshot({ kind: 'docx', token: input.doc });
+    const operationId = `${operationIdForScopedOperation(input.operation)}:${physicalOrdinal}`;
+    physicalOrdinal += 1;
+    const intent = physical.build(snapshot, operationId);
+    const batch = engine.prepare({
+      snapshot,
+      operations: [intent],
+      idempotencyNamespace: `feishu-md-sync:${input.doc}:code-reconcile`
+    });
+    const operationsById = new Map([[operationId, physical.operation]]);
+    const journal = createDocxEngineJournal({
+      operationsById,
+      completedOperations: input.completedOperations,
+      verifiedOperations: input.verifiedOperations,
+      recordCheckpoint: input.recordCheckpoint,
+      summarize: () => physical.summary,
+      onVerified: (operation, evidence) => {
+        if ((operation.kind === 'code-create' || operation.kind === 'code-update') &&
+          evidence.createdBlockIds.length === 1) {
+          const replacementBlockId = evidence.createdBlockIds[0]!;
+          if (operation.kind === 'code-update') operation.remoteBlockId = replacementBlockId;
+          operation.desiredCode = {
+            ...operation.desiredCode,
+            remoteBlockId: replacementBlockId
+          };
+        }
+      }
+    });
+    try {
+      await engine.apply({ batch, journal });
+    } catch (error) {
+      if (error instanceof PartialMutationError) {
+        throw enginePartialWriteError({
+          error,
+          operationsById,
+          completedOperations: input.completedOperations,
+          pendingAfter: input.pendingAfter,
+          recoveryCheckpoint: input.recoveryCheckpoint,
+          summarize: () => physical.summary,
+          readbackSummary: { kind: 'code-readback', locator: physical.summary.locator },
+          unplannedAsCheckpointFailure: input.recordCheckpoint !== undefined,
+          ...(physical.operation.kind === 'code-create'
+            ? {
+                createdSummary: (_operation: ScopedPatchOperation, blockIds: string[]) => ({
+                  ...physical.summary,
+                  blockIds
+                })
+              }
+            : {})
+        });
+      }
+      throw bridgeEngineCause(error);
+    }
+  };
+
   try {
-    const beforePhase = await fetchRemoteSemantic(input.adapter, input.doc);
+    const beforePhase = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
     const unrelatedBefore = codeScopeHashOutsideSections(beforePhase, input.operation.sectionPaths);
 
     if (input.operation.phase === 'delete') {
@@ -1782,10 +1886,23 @@ async function applyCodeSectionReconcile(input: {
         input.operation.sectionPaths
       );
       if (obsoleteIds.length > 0) {
-        await withRateLimitRetry(() => input.deleteBlocks({ doc: input.doc, blockIds: obsoleteIds }));
-        completed.push({ kind: 'code-reconcile-delete', locator: input.operation.locator });
+        await execute({
+          operation: input.operation,
+          summary: { kind: 'code-reconcile-delete', locator: input.operation.locator },
+          build: (snapshot, operationId) => {
+            const parentBlockId = commonSnapshotParent(snapshot, obsoleteIds, 'Code reconcile delete');
+            return {
+              operationId,
+              kind: 'delete',
+              parentBlockId,
+              blockIds: obsoleteIds,
+              expectedHashes: obsoleteIds.map((blockId) => snapshotNodeHash(snapshot, blockId))
+            };
+          }
+        });
       }
-      const afterDeletion = await fetchRemoteSemantic(input.adapter, input.doc);
+      failureSummary = { kind: 'code-readback', locator: input.operation.locator };
+      const afterDeletion = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
       assertUnrelatedCodeScopesUnchanged(unrelatedBefore, afterDeletion, input.operation.sectionPaths);
       return;
     }
@@ -1798,7 +1915,7 @@ async function applyCodeSectionReconcile(input: {
     const reservedExactIds = new Set(exactMatches.values());
     const consumedRemoteBlockIds = new Set<string>();
     for (const [desiredIndex, desired] of input.operation.desiredCodes.entries()) {
-      let current = await fetchRemoteSemantic(input.adapter, input.doc);
+      let current = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
       const exactMatchId = exactMatches.get(desiredIndex);
       const unavailableIds = new Set([...consumedRemoteBlockIds, ...reservedExactIds]);
       if (exactMatchId) unavailableIds.delete(exactMatchId);
@@ -1817,14 +1934,33 @@ async function applyCodeSectionReconcile(input: {
           input.doc,
           desired.afterCodeFingerprint
         );
-        await withRateLimitRetry(() => input.insertBlocksAfter({
-          doc: input.doc,
-          blockId: anchor,
-          content: renderCodeBlockXml(desired.code),
-          format: 'xml'
-        }));
-        completed.push({ kind: 'code-reconcile-create', locator: desired.code.locator });
-        current = await fetchRemoteSemantic(input.adapter, input.doc);
+        const synthetic: Extract<ScopedPatchOperation, { kind: 'code-create' }> = {
+          kind: 'code-create',
+          locator: desired.code.locator,
+          ...(desired.afterLocator ? { afterLocator: desired.afterLocator } : {}),
+          ...(desired.afterCodeFingerprint
+            ? { afterCodeFingerprint: desired.afterCodeFingerprint }
+            : {}),
+          desiredCode: { ...desired.code }
+        };
+        await execute({
+          operation: synthetic,
+          summary: { kind: 'code-reconcile-create', locator: desired.code.locator },
+          build: (snapshot, operationId) => ({
+            operationId,
+            kind: 'insert',
+            parentBlockId: parentBlockIdForAnchor(snapshot, anchor),
+            insertAfterBlockId: anchor,
+            desired: [{
+              kind: 'code',
+              language: desired.code.resolvedLanguage,
+              text: desired.code.content,
+              ...(desired.code.caption !== undefined ? { caption: desired.code.caption } : {})
+            }]
+          })
+        });
+        failureSummary = { kind: 'code-readback', locator: desired.code.locator };
+        current = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
         remote = findCodeReconcileCandidate(
           current,
           desired.code,
@@ -1834,14 +1970,36 @@ async function applyCodeSectionReconcile(input: {
         if (!remote) throw new Error('Code section reconcile could not resolve the created block.');
       } else if (!codeManagedEqual(remote, desired.code)) {
         if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot replace a block without an ID.');
-        await withRateLimitRetry(() => input.replaceBlock({
-          doc: input.doc,
-          blockId: remote!.remoteBlockId!,
-          content: renderCodeBlockXml({ ...desired.code, caption: remote!.caption }),
-          format: 'xml'
-        }));
-        completed.push({ kind: 'code-reconcile-update', locator: desired.code.locator });
-        current = await fetchRemoteSemantic(input.adapter, input.doc);
+        const blockId = remote.remoteBlockId;
+        const caption = remote.caption;
+        const synthetic: Extract<ScopedPatchOperation, { kind: 'code-update' }> = {
+          kind: 'code-update',
+          locator: desired.code.locator,
+          sourceLocator: remote.locator,
+          remoteBlockId: blockId,
+          desiredCode: {
+            ...desired.code,
+            ...(caption !== undefined ? { caption } : {})
+          }
+        };
+        await execute({
+          operation: synthetic,
+          summary: { kind: 'code-reconcile-update', locator: desired.code.locator },
+          build: (snapshot, operationId) => ({
+            operationId,
+            kind: 'replace',
+            targetBlockId: blockId,
+            expectedHash: snapshotNodeHash(snapshot, blockId),
+            desired: {
+              kind: 'code',
+              language: desired.code.resolvedLanguage,
+              text: desired.code.content,
+              ...(caption !== undefined ? { caption } : {})
+            }
+          })
+        });
+        failureSummary = { kind: 'code-readback', locator: desired.code.locator };
+        current = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
         remote = findCodeReconcileCandidate(
           current,
           desired.code,
@@ -1852,9 +2010,7 @@ async function applyCodeSectionReconcile(input: {
       }
 
       if (!remote.remoteBlockId) throw new Error('Code section reconcile cannot move a block without an ID.');
-      if (remote.caption !== undefined) {
-        desired.code = { ...desired.code, caption: remote.caption };
-      }
+      if (remote.caption !== undefined) desired.code = { ...desired.code, caption: remote.caption };
       consumedRemoteBlockIds.add(remote.remoteBlockId);
       if (reconcileCandidateNeedsMove(
         current,
@@ -1869,24 +2025,67 @@ async function applyCodeSectionReconcile(input: {
           desired.afterCodeFingerprint,
           remote.remoteBlockId
         );
-        await withRateLimitRetry(() => input.moveBlocksAfter({
-          doc: input.doc,
-          blockId: anchor,
-          sourceBlockIds: [remote!.remoteBlockId!]
-        }));
-        completed.push({ kind: 'code-reconcile-move', locator: desired.code.locator });
+        const blockId = remote.remoteBlockId;
+        const synthetic: Extract<ScopedPatchOperation, { kind: 'code-move' }> = {
+          kind: 'code-move',
+          locator: desired.code.locator,
+          sourceLocator: remote.locator,
+          ...(desired.afterLocator ? { afterLocator: desired.afterLocator } : {}),
+          ...(desired.afterCodeFingerprint
+            ? { afterCodeFingerprint: desired.afterCodeFingerprint }
+            : {}),
+          remoteBlockId: blockId,
+          desiredCode: { ...desired.code }
+        };
+        await execute({
+          operation: synthetic,
+          summary: { kind: 'code-reconcile-move', locator: desired.code.locator },
+          build: (snapshot, operationId) => ({
+            operationId,
+            kind: 'move',
+            parentBlockId: commonSnapshotParent(snapshot, [blockId], 'Code reconcile move'),
+            blockIds: [blockId],
+            insertAfterBlockId: anchor
+          })
+        });
       }
     }
-    const afterPlacement = await fetchRemoteSemantic(input.adapter, input.doc);
+    failureSummary = { kind: 'code-readback', locator: input.operation.locator };
+    const afterPlacement = await fetchRemoteSemantic(input.adapter, input.doc, input.callouts);
     assertUnrelatedCodeScopesUnchanged(unrelatedBefore, afterPlacement, input.operation.sectionPaths);
   } catch (error) {
-    if (error instanceof PartialWriteError || completed.length === 0) throw error;
+    if (error instanceof PartialWriteError) throw error;
+    const cause = bridgeEngineCause(error);
+    if (input.completedOperations.length === 0) throw cause;
     throw new PartialWriteError({
-      completedOperations: completed,
-      failedOperation: { kind: 'code-section-reconcile', locator: input.operation.locator },
-      cause: error
+      completedOperations: [...input.completedOperations],
+      failedOperation: failureSummary,
+      pendingOperations: input.pendingAfter,
+      recoveryCheckpointWritten: input.recoveryCheckpoint?.written,
+      recoveryCheckpointRevision: input.recoveryCheckpoint?.revision,
+      cause
     });
   }
+}
+
+function snapshotNodeHash(snapshot: DocumentSnapshot, blockId: string): string {
+  const node = snapshot.nodes.find((candidate) => candidate.blockId === blockId);
+  if (!node) throw new Error(`Docx engine snapshot does not contain block ${blockId}.`);
+  return node.canonicalHash;
+}
+
+function commonSnapshotParent(
+  snapshot: DocumentSnapshot,
+  blockIds: string[],
+  label: string
+): string {
+  const parents = new Set(blockIds.map((blockId) => {
+    const node = snapshot.nodes.find((candidate) => candidate.blockId === blockId);
+    if (!node?.parentBlockId) throw new Error(`${label} block ${blockId} has no parent.`);
+    return node.parentBlockId;
+  }));
+  if (parents.size !== 1) throw new Error(`${label} blocks do not share one parent.`);
+  return [...parents][0]!;
 }
 
 export function findObsoleteCodeIdsForReconcile(
@@ -1976,6 +2175,10 @@ function isRateLimitError(error: unknown): boolean {
 
 function resolveRemoteCode(document: SemanticDocument, operation: Exclude<CodeBlockOperation, { kind: 'code-create' | 'code-section-reconcile' }>): SemanticCodeBlock {
   const byId = codeNodes(document).find((code) => code.remoteBlockId && code.remoteBlockId === operation.remoteBlockId);
+  if (operation.kind === 'code-move') {
+    if (!byId) throw new Error('Code move identity is no longer resolvable by its exact remote block ID.');
+    return byId;
+  }
   const byLocator = findCodeByLocator(document, operation.sourceLocator);
   const matched = byId ?? byLocator;
   if (!matched) throw new Error(`Code block correspondence is no longer resolvable at ${locatorKey(operation.sourceLocator)}.`);
@@ -2118,11 +2321,9 @@ async function applyWhiteboardPlan(input: {
   completedOperations: PublishWriteOperationSummary[];
   pendingAfter?: PublishWriteOperationSummary[];
 }): Promise<{ entries: WhiteboardReceiptEntry[]; completedOperations: PublishWriteOperationSummary[] }> {
-  const replaceImageWithWhiteboard = input.adapter.replaceImageWithWhiteboard?.bind(input.adapter);
-  const queryWhiteboard = input.adapter.queryWhiteboard?.bind(input.adapter);
-  const updateWhiteboard = input.adapter.updateWhiteboard?.bind(input.adapter);
-  const fetchDocBlocks = input.adapter.fetchDocBlocks?.bind(input.adapter);
-  if (!replaceImageWithWhiteboard || !queryWhiteboard || !updateWhiteboard || !fetchDocBlocks) {
+  if (!input.adapter.docxTransport &&
+    (!input.adapter.replaceBlock || !input.adapter.queryWhiteboard || !input.adapter.updateWhiteboard ||
+      !input.adapter.fetchDocBlocks)) {
     throw new Error('Configured Feishu adapter does not support verified Whiteboard writes.');
   }
 
@@ -2135,38 +2336,72 @@ async function applyWhiteboardPlan(input: {
     try {
       const asset = localByKey.get(operation.assetKey);
       if (!asset) throw new Error(`local Whiteboard asset unavailable during write: ${operation.assetKey}`);
-
-      let blockId: string;
-      let whiteboardToken: string;
-      if (operation.kind === 'whiteboard-create') {
-        const created = await replaceImageWithWhiteboard({
-          doc: input.doc,
-          blockId: operation.remoteImageBlockId,
-          svg: asset.svgSource
-        });
-        blockId = created.blockId;
-        whiteboardToken = created.whiteboardToken;
-      } else {
-        blockId = operation.blockId;
-        whiteboardToken = operation.whiteboardToken;
-        await updateWhiteboardWithApplyingRetry({
-          updateWhiteboard,
-          request: {
-            whiteboardToken,
-            svg: asset.svgSource,
-            idempotencyToken: `fms-${semanticHash({
-              whiteboardToken,
-              svgHash: asset.svgHash,
-              remoteStateHash: operation.remoteStateHash
-            }).slice(0, 32)}`
-          }
-        });
+      const whiteboardIdempotencyToken = operation.kind === 'whiteboard-create'
+        ? undefined
+        : `fms-${semanticHash({
+          whiteboardToken: operation.whiteboardToken,
+          svgHash: asset.svgHash,
+          remoteStateHash: operation.remoteStateHash
+        }).slice(0, 32)}`;
+      input.adapter.setDocxEngineWhiteboardIdempotencyToken?.(whiteboardIdempotencyToken);
+      const engine = createFeishuDocxEngine({
+        transport: docxTransportForAdapter(input.adapter, { whiteboardIdempotencyToken })
+      });
+      const snapshot = await engine.snapshot({ kind: 'docx', token: input.doc });
+      const intent = whiteboardOperationToMutationIntent({
+        operation,
+        snapshot,
+        svg: asset.svgSource
+      });
+      let verifiedEvidence: import('feishu-docx-engine').VerifiedOperationEvidence | undefined;
+      const operationsById = new Map([[intent.operationId, operation]] as const);
+      const journal = createDocxEngineJournal({
+        operationsById,
+        completedOperations: completed,
+        verifiedOperations: [] as WhiteboardOperation[],
+        summarize: summarizeWhiteboardOperation,
+        onVerified: (_verifiedOperation, evidence) => {
+          verifiedEvidence = evidence;
+        }
+      });
+      const batch = engine.prepare({
+        snapshot,
+        operations: [intent],
+        idempotencyNamespace: `feishu-md-sync:${input.doc}:whiteboard`
+      });
+      try {
+        await engine.apply({ batch, journal });
+      } catch (error) {
+        if (error instanceof PartialMutationError) {
+          throw enginePartialWriteError({
+            error,
+            operationsById,
+            completedOperations: completed,
+            pendingAfter: [
+              ...input.plan.operations.slice(index + 1).map(summarizeWhiteboardOperation),
+              ...(input.pendingAfter ?? [])
+            ],
+            summarize: summarizeWhiteboardOperation,
+            cause: whiteboardEvidenceFailure(error, asset.expectedTexts)
+          });
+        }
+        throw bridgeEngineCause(error);
       }
 
-      const remote = await queryWhiteboardReadback({ queryWhiteboard, whiteboardToken });
-      verifyWhiteboardReadback({ raw: remote.raw, expectedTexts: asset.expectedTexts });
-      const blocks = await fetchDocBlocks({ doc: input.doc });
-      verifyWhiteboardIdentity(blocks.blocks, input.doc, blockId, whiteboardToken);
+      const evidence = verifiedEvidence;
+      if (!evidence) throw new Error('Docx engine did not journal verified Whiteboard evidence.');
+      const blockId = operation.kind === 'whiteboard-create'
+        ? evidence.createdBlockIds[0]
+        : operation.blockId;
+      const whiteboardToken = operation.kind === 'whiteboard-create'
+        ? evidence.resourceTokens?.[0]
+        : operation.whiteboardToken;
+      const raw = evidence.verifiedResourceEvidence?.find((item) => {
+        return item.resourceKind === 'whiteboard' && item.token === whiteboardToken;
+      })?.raw;
+      if (!blockId || !whiteboardToken || raw === undefined) {
+        throw new Error('Docx engine Whiteboard evidence is missing block, token, or raw readback state.');
+      }
       entries.set(operation.assetKey, {
         assetKey: operation.assetKey,
         pngPath: operation.assetKey,
@@ -2174,11 +2409,11 @@ async function applyWhiteboardPlan(input: {
         svgHash: asset.svgHash,
         whiteboardToken,
         blockId,
-        remoteStateHash: whiteboardRemoteStateHash(remote.raw),
+        remoteStateHash: whiteboardRemoteStateHash(raw),
         placementFingerprint: operation.placementFingerprint
       });
-      completed.push(summary);
     } catch (error) {
+      if (error instanceof PartialWriteError) throw error;
       throw new PartialWriteError({
         completedOperations: completed,
         failedOperation: summary,
@@ -2196,72 +2431,14 @@ async function applyWhiteboardPlan(input: {
   };
 }
 
-async function updateWhiteboardWithApplyingRetry(input: {
-  updateWhiteboard: (input: {
-    whiteboardToken: string;
-    svg: string;
-    idempotencyToken: string;
-  }) => Promise<void>;
-  request: {
-    whiteboardToken: string;
-    svg: string;
-    idempotencyToken: string;
-  };
-}): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await input.updateWhiteboard(input.request);
-      return;
-    } catch (error) {
-      const delayMs = WHITEBOARD_APPLYING_RETRY_DELAYS_MS[attempt];
-      if (delayMs === undefined || !isWhiteboardApplyingError(error)) throw error;
-      await delay(delayMs);
-    }
-  }
-}
-
-async function queryWhiteboardReadback(input: {
-  queryWhiteboard: (input: { whiteboardToken: string }) => Promise<RemoteWhiteboard>;
-  whiteboardToken: string;
-}): Promise<RemoteWhiteboard> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await input.queryWhiteboard({ whiteboardToken: input.whiteboardToken });
-    } catch (error) {
-      const delayMs = WHITEBOARD_APPLYING_RETRY_DELAYS_MS[attempt];
-      if (delayMs === undefined || !isWhiteboardReadbackTransientError(error)) throw error;
-      await delay(delayMs);
-    }
-  }
-}
-
-function isWhiteboardReadbackTransientError(error: unknown): boolean {
-  return isWhiteboardApplyingError(error) || isWhiteboardRawNotReadyError(error);
-}
-
-function isWhiteboardRawNotReadyError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const record = error as {
-    details?: { subtype?: unknown };
-    cause?: unknown;
-  };
-  if (record.details?.subtype === 'whiteboard_raw_not_ready') return true;
-  return record.cause !== undefined && isWhiteboardRawNotReadyError(record.cause);
-}
-
-function isWhiteboardApplyingError(error: unknown): boolean {
-  if (error && typeof error === 'object') {
-    const record = error as {
-      code?: unknown;
-      details?: { providerCode?: unknown };
-      cause?: unknown;
-    };
-    if (record.code === 4003101 || record.details?.providerCode === 4003101) return true;
-    if (record.cause !== undefined && isWhiteboardApplyingError(record.cause)) return true;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return /(?:"code"\s*:\s*4003101\b|\b4003101\b)/.test(message) &&
-    /(?:doc is applying|doc data is not ready|resource error|whiteboard)/i.test(message);
+function whiteboardEvidenceFailure(
+  error: PartialMutationError,
+  expectedTexts: string[]
+): Error | undefined {
+  const message = error.evidence.failedOperation.message;
+  if (!/does not contain the prepared SVG evidence/i.test(message)) return undefined;
+  const expected = expectedTexts[0];
+  return expected ? new Error(`Whiteboard readback is missing expected text: ${expected}`) : undefined;
 }
 
 function delay(ms: number): Promise<void> {
@@ -2278,24 +2455,6 @@ function summarizeWhiteboardOperation(operation: WhiteboardOperation): PublishWr
 
 function summarizeScopedOperation(operation: ScopedPatchOperation): PublishWriteOperationSummary {
   return { kind: operation.kind, locator: operation.locator };
-}
-
-function verifyWhiteboardIdentity(
-  blocks: import('../feishu/types.js').FeishuBlock[],
-  documentId: string,
-  blockId: string,
-  whiteboardToken: string
-): void {
-  const remote = remoteSemanticDocument(blocks, documentId);
-  const matched = remote.nodes.some((node) => {
-    return node.kind === 'asset' &&
-      node.representation === 'whiteboard' &&
-      node.remoteBlockId === blockId &&
-      node.remoteToken === whiteboardToken;
-  });
-  if (!matched) {
-    throw new Error('Whiteboard readback identity does not match the created or tracked block.');
-  }
 }
 
 function verifyOperation(
@@ -2614,189 +2773,6 @@ function verifyTextCreateOperation(
   }
 }
 
-async function createStructuredTextTrees(input: {
-  adapter: FeishuAdapter;
-  doc: string;
-  operation: Extract<ScopedPatchOperation, { kind: 'create' }>;
-  desiredTrees: FeishuBlock[];
-  beforeBlocks: FeishuBlock[];
-}): Promise<void> {
-  const createChildBlocks = input.adapter.createChildBlocks?.bind(input.adapter);
-  if (!createChildBlocks || !input.adapter.fetchDocBlocks) {
-    throw new Error('Configured Feishu adapter does not support explicit nested text tree creation.');
-  }
-  const siblings = resolvedChildBlocks(input.beforeBlocks, input.operation.parentBlockId);
-  const anchorIsParent = input.operation.insertAfterBlockId === input.operation.parentBlockId;
-  const anchorIndex = anchorIsParent
-    ? -1
-    : siblings.findIndex((block) => block.block_id === input.operation.insertAfterBlockId);
-  if (!anchorIsParent && anchorIndex < 0) {
-    throw new Error('nested text tree create preflight failed: create anchor is missing');
-  }
-  const createdIds: string[] = [];
-  try {
-    const rootResult = await withRateLimitRetry(() => createChildBlocks({
-      doc: input.doc,
-      parentBlockId: input.operation.parentBlockId,
-      index: anchorIndex + 1,
-      blocks: input.desiredTrees.map(blockCreateShell),
-      clientToken: textTreeClientToken(input, 'roots')
-    }));
-    const roots = validateCreatedBlockBatch(rootResult.blocks, input.desiredTrees, input.operation.parentBlockId);
-    createdIds.push(...roots.map((block) => block.block_id!));
-    const expectedRootSiblingIds = siblings.map((block) => block.block_id);
-    if (expectedRootSiblingIds.some((blockId) => typeof blockId !== 'string')) {
-      throw new Error('nested text tree create preflight failed: sibling identity is missing');
-    }
-    expectedRootSiblingIds.splice(anchorIndex + 1, 0, ...roots.map((block) => block.block_id!));
-    verifyCreatedBlockBatch(
-      (await input.adapter.fetchDocBlocks({ doc: input.doc })).blocks,
-      input.operation.parentBlockId,
-      anchorIndex + 1,
-      roots,
-      input.desiredTrees,
-      expectedRootSiblingIds as string[]
-    );
-    for (const [index, desired] of input.desiredTrees.entries()) {
-      await createStructuredTextChildren({
-        ...input,
-        parentBlockId: roots[index]!.block_id!,
-        desiredParent: desired,
-        path: [index],
-        createdIds
-      });
-    }
-  } catch (error) {
-    if (error instanceof PartialWriteError) throw error;
-    if (createdIds.length === 0) throw error;
-    throw new PartialWriteError({
-      completedOperations: [{
-        kind: 'create',
-        locator: input.operation.locator,
-        parentBlockId: input.operation.parentBlockId,
-        blockIds: createdIds
-      }],
-      failedOperation: { kind: 'scoped-readback', locator: input.operation.locator },
-      cause: error
-    });
-  }
-}
-
-async function createStructuredTextChildren(input: {
-  adapter: FeishuAdapter;
-  doc: string;
-  operation: Extract<ScopedPatchOperation, { kind: 'create' }>;
-  desiredTrees: FeishuBlock[];
-  beforeBlocks: FeishuBlock[];
-  parentBlockId: string;
-  desiredParent: FeishuBlock;
-  path: number[];
-  createdIds: string[];
-}): Promise<void> {
-  const desiredChildren = childBlockObjects(input.desiredParent);
-  if (desiredChildren.length === 0) return;
-  const createChildBlocks = input.adapter.createChildBlocks!.bind(input.adapter);
-  const result = await withRateLimitRetry(() => createChildBlocks({
-    doc: input.doc,
-    parentBlockId: input.parentBlockId,
-    index: 0,
-    blocks: desiredChildren.map(blockCreateShell),
-    clientToken: textTreeClientToken(input, input.path.join('.'))
-  }));
-  const created = validateCreatedBlockBatch(result.blocks, desiredChildren, input.parentBlockId);
-  input.createdIds.push(...created.map((block) => block.block_id!));
-  verifyCreatedBlockBatch(
-    (await input.adapter.fetchDocBlocks!({ doc: input.doc })).blocks,
-    input.parentBlockId,
-    0,
-    created,
-    desiredChildren,
-    created.map((block) => block.block_id!)
-  );
-  for (const [index, desired] of desiredChildren.entries()) {
-    await createStructuredTextChildren({
-      ...input,
-      parentBlockId: created[index]!.block_id!,
-      desiredParent: desired,
-      path: [...input.path, index]
-    });
-  }
-}
-
-function blockCreateShell(block: FeishuBlock): FeishuBlock {
-  const { block_id: _blockId, parent_id: _parentId, children: _children, ...shell } = block;
-  return shell as FeishuBlock;
-}
-
-function childBlockObjects(block: FeishuBlock): FeishuBlock[] {
-  return Array.isArray(block.children)
-    ? block.children.filter((child): child is FeishuBlock => {
-      return Boolean(child && typeof child === 'object' && !Array.isArray(child) && 'block_type' in child);
-    })
-    : [];
-}
-
-function validateCreatedBlockBatch(
-  created: FeishuBlock[],
-  desired: FeishuBlock[],
-  parentBlockId: string
-): FeishuBlock[] {
-  const ids = created.flatMap((block) => typeof block.block_id === 'string' ? [block.block_id] : []);
-  if (created.length !== desired.length || ids.length !== created.length || new Set(ids).size !== ids.length ||
-    created.some((block, index) => {
-      const expected = desired[index];
-      return !expected || block.block_type !== expected.block_type ||
-        (typeof block.parent_id === 'string' && block.parent_id !== parentBlockId) ||
-        canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(block)]).trim()) !==
-          canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(expected)]).trim());
-    })) {
-    throw new Error('nested text tree create did not return the expected block identities and content');
-  }
-  return created;
-}
-
-function verifyCreatedBlockBatch(
-  blocks: FeishuBlock[],
-  parentBlockId: string,
-  index: number,
-  created: FeishuBlock[],
-  desired: FeishuBlock[],
-  expectedSiblingIds: string[]
-): void {
-  const siblings = resolvedChildBlocks(blocks, parentBlockId);
-  const siblingIds = siblings.map((block) => block.block_id);
-  const actual = siblings.slice(index, index + desired.length);
-  if (siblingIds.length !== expectedSiblingIds.length ||
-    siblingIds.some((blockId, siblingIndex) => blockId !== expectedSiblingIds[siblingIndex]) ||
-    actual.length !== desired.length || actual.some((block, childIndex) => {
-    const expectedId = created[childIndex]?.block_id;
-    const expected = desired[childIndex];
-    return !expectedId || !expected || block.block_id !== expectedId || block.block_type !== expected.block_type ||
-      canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(block)]).trim()) !==
-        canonicalMarkdown(feishuBlocksToMarkdown([blockCreateShell(expected)]).trim());
-  })) {
-    throw new Error('nested text tree create readback differs from the requested parent graph');
-  }
-}
-
-function textTreeClientToken(
-  input: Pick<Parameters<typeof createStructuredTextTrees>[0], 'doc' | 'operation' | 'desiredTrees'>,
-  phase: string
-): string {
-  const digest = hashText(JSON.stringify({
-    doc: input.doc,
-    locator: input.operation.locator,
-    parentBlockId: input.operation.parentBlockId,
-    insertAfterBlockId: input.operation.insertAfterBlockId,
-    desiredTrees: input.desiredTrees,
-    phase
-  })).slice(0, 32).split('');
-  digest[12] = '4';
-  digest[16] = '8';
-  const value = digest.join('');
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
-}
-
 export function textCreatePlacementMatches(
   blocks: import('../feishu/types.js').FeishuBlock[],
   documentId: string,
@@ -2854,16 +2830,25 @@ function verifyCodeOperation(operation: CodeBlockOperation, remote: SemanticDocu
   }
   const desired = operation.desiredCode;
   const expectedLocator = operation.kind === 'code-update' ? operation.sourceLocator : operation.locator;
-  const matched = findCodeByLocator(remote, expectedLocator);
+  const expectedBlockId = operation.kind === 'code-create'
+    ? desired.remoteBlockId
+    : operation.remoteBlockId;
+  const matched = expectedBlockId
+    ? codeNodes(remote).find((code) => code.remoteBlockId === expectedBlockId)
+    : findCodeByLocator(remote, expectedLocator);
   if (!matched || !codeManagedEqual(matched, desired)) {
     throw new Error('Code block readback differs from the desired content or language.');
   }
-  if (desired.caption !== undefined && matched.caption !== desired.caption) {
+  if (!codeReadbackMatches(matched, desired)) {
     throw new Error('Code block readback did not preserve the remote caption.');
   }
   if (operation.kind === 'code-create' || operation.kind === 'code-move') {
     verifyCodePlacement(remote, matched, operation.afterLocator, operation.afterCodeFingerprint);
   }
+}
+
+export function codeReadbackMatches(actual: SemanticCodeBlock, desired: SemanticCodeBlock): boolean {
+  return codeManagedEqual(actual, desired) && actual.caption === desired.caption;
 }
 
 function verifyCodePlacement(
@@ -3027,7 +3012,18 @@ async function fetchRemoteCodeMetadata(
   documentId: string,
   blocks: import('../feishu/types.js').FeishuBlock[]
 ): Promise<import('../adapters/feishu-adapter.js').RemoteCodeMetadata[]> {
-  if (!blocks.some((block) => block.block_type === 14) || !adapter.fetchDocCodeMetadata) return [];
+  const codeBlocks = blocks.filter((block) => block.block_type === 14);
+  if (codeBlocks.length === 0 || !adapter.fetchDocCodeMetadata) return [];
+  const allRevisionPinned = codeBlocks.every((block) => {
+    const code = block.code && typeof block.code === 'object' && !Array.isArray(block.code)
+      ? block.code as Record<string, unknown>
+      : undefined;
+    const style = code?.style && typeof code.style === 'object' && !Array.isArray(code.style)
+      ? code.style as Record<string, unknown>
+      : undefined;
+    return typeof style?.language === 'string' && style.language.trim().length > 0;
+  });
+  if (allRevisionPinned) return [];
   return withRateLimitRetry(() => adapter.fetchDocCodeMetadata!({ doc: documentId }));
 }
 

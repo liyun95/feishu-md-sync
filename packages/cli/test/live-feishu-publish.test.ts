@@ -3,6 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
+import {
+  createFeishuDocxEngine,
+  type DesiredNode,
+  type MutationJournal,
+  type SnapshotNode,
+} from 'feishu-docx-engine';
 import { LarkCliAdapter } from '../src/adapters/lark-cli-adapter.js';
 import { parseFeishuTarget } from '../src/core/doc-id.js';
 import type { FeishuBlock } from '../src/feishu/types.js';
@@ -11,10 +17,19 @@ import {
   readPublishReceipt,
   type PublishReceiptV4
 } from '../src/receipts/publish-receipt.js';
+import {
+  disposableCleanupRequest,
+  larkCliArgsWithIdentity,
+  resolveDisposableLiveIdentities,
+  type ExplicitLiveIdentity,
+} from './support/live-feishu-cleanup.js';
 
 const runLive = process.env.FEISHU_MD_SYNC_LIVE === '1';
+const runDisposableEngineWrite = runLive &&
+  process.env.FEISHU_MD_SYNC_ENGINE_LIVE_WRITE === '1' &&
+  Boolean(process.env.FEISHU_MD_SYNC_ENGINE_TEST_PARENT);
 const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
-const LIVE_COMMAND_TIMEOUT_MS = 60_000;
+const LIVE_COMMAND_TIMEOUT_MS = 120_000;
 
 describe.skipIf(!runLive)('live Feishu publish', () => {
   it('publishes a Zilliz draft to an existing test doc with guarded document replace', async () => {
@@ -105,7 +120,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     const status = await runCli(['status', file, '--target', target, '--profile', 'none', '--format', 'json']);
     assertCliSuccess(status, 'status after mixed scoped publish');
     expect(status.stdout).toContain('"state": "clean"');
-  }, 60_000);
+  }, 180_000);
 
   it('round-trips tracked Callout bodies while preserving presentation and container identity', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
@@ -421,7 +436,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 600_000);
 
   it('creates and tracks an SVG Whiteboard from an existing image block', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
@@ -540,6 +555,91 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     expect(write.stdout).toContain('"mode": "write"');
     expect(write.stdout).toContain('"documentId"');
   }, 30_000);
+
+  it.runIf(runDisposableEngineWrite)(
+    'creates a nested list and native table in an isolated disposable document and deletes it',
+    async () => {
+      const parentToken = requiredEnv('FEISHU_MD_SYNC_ENGINE_TEST_PARENT');
+      const title = `fms-engine-live-disposable-${Date.now()}`;
+      const { writeIdentity, cleanupIdentity } = resolveDisposableLiveIdentities(process.env);
+      const adapter = new LarkCliAdapter({ identity: writeIdentity });
+      let createdDocumentId: string | undefined;
+
+      try {
+        const created = await adapter.docxTransport.createDocument({
+          title,
+          markdown: 'Disposable engine live-test baseline.\n',
+          parentToken,
+        });
+        createdDocumentId = created.documentId;
+        const engine = createFeishuDocxEngine({ transport: adapter.docxTransport });
+        const before = await engine.snapshot({ kind: 'docx', token: created.documentId });
+        const root = before.nodes.find(({ blockId }) => blockId === before.rootBlockId)!;
+        const originalRootChildren = [...root.childBlockIds];
+        const insertAfterBlockId = root.childBlockIds.at(-1) ?? root.blockId;
+        const batch = engine.prepare({
+          snapshot: before,
+          idempotencyNamespace: `live-disposable:${created.documentId}`,
+          operations: [{
+            operationId: 'insert-nested-list-and-native-table',
+            kind: 'insert',
+            parentBlockId: root.blockId,
+            insertAfterBlockId,
+            desired: [liveNestedList(), liveNativeTable()],
+          }],
+        });
+        const result = await engine.apply({ batch, journal: memoryJournal() });
+
+        expect(result.operations).toEqual([
+          expect.objectContaining({
+            operationId: 'insert-nested-list-and-native-table',
+            verified: true,
+          }),
+        ]);
+        const byId = new Map(result.finalSnapshot.nodes.map((node) => [node.blockId, node]));
+        const finalRoot = byId.get(result.finalSnapshot.rootBlockId)!;
+        const insertedRootIds = finalRoot.childBlockIds.slice(originalRootChildren.length);
+        expect(insertedRootIds).toHaveLength(2);
+
+        const parentList = requiredSnapshotNode(byId, insertedRootIds[0]!);
+        assertExactListNode(parentList, {
+          parentBlockId: finalRoot.blockId,
+          blockType: 12,
+          payloadKey: 'bullet',
+          text: 'Engine live parent',
+        });
+        expect(parentList.childBlockIds).toHaveLength(1);
+        const nestedList = requiredSnapshotNode(byId, parentList.childBlockIds[0]!);
+        assertExactListNode(nestedList, {
+          parentBlockId: parentList.blockId,
+          blockType: 13,
+          payloadKey: 'ordered',
+          text: 'Engine live nested child',
+        });
+        expect(nestedList.childBlockIds).toEqual([]);
+
+        const table = requiredSnapshotNode(byId, insertedRootIds[1]!);
+        expect(finalRoot.childBlockIds).toEqual([
+          ...originalRootChildren,
+          parentList.blockId,
+          table.blockId,
+        ]);
+        assertExactNativeTable(table, byId, [
+          ['Name', 'Safety'],
+          ['Docx engine', 'Verified'],
+        ]);
+        expect(result.operations[0]!.createdBlockIds).toEqual(expect.arrayContaining([
+          parentList.blockId,
+          nestedList.blockId,
+          table.blockId,
+          ...table.childBlockIds,
+        ]));
+      } finally {
+        if (createdDocumentId) await deleteDisposableDocument(createdDocumentId, cleanupIdentity);
+      }
+    },
+    180_000,
+  );
 });
 
 function assertCliSuccess(result: { stdout: string; stderr: string; status: number | null }, label: string): void {
@@ -598,10 +698,15 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function runLarkCli(args: string[], options: { cwd?: string } = {}): Promise<void> {
+function runLarkCli(
+  args: string[],
+  options: { cwd?: string; identity?: ExplicitLiveIdentity } = {},
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const identity = process.env.FEISHU_MD_SYNC_LARK_AS;
-    const fullArgs = identity === 'bot' || identity === 'user' ? [...args, '--as', identity] : args;
+    const identity = options.identity ?? process.env.FEISHU_MD_SYNC_LARK_AS;
+    const fullArgs = identity === 'bot' || identity === 'user'
+      ? larkCliArgsWithIdentity(args, identity)
+      : args;
     execFile('lark-cli', fullArgs, {
       cwd: options.cwd,
       env: process.env,
@@ -614,6 +719,180 @@ function runLarkCli(args: string[], options: { cwd?: string } = {}): Promise<voi
       resolve();
     });
   });
+}
+
+async function deleteDisposableDocument(
+  documentId: string,
+  cleanupIdentity: ExplicitLiveIdentity,
+): Promise<void> {
+  const request = disposableCleanupRequest(documentId, cleanupIdentity);
+  try {
+    await runLarkCli(request.args, { identity: request.identity });
+  } catch (cause) {
+    throw new Error(`cleanup failed for disposable live-test document ${documentId}`, { cause });
+  }
+}
+
+function memoryJournal(): MutationJournal {
+  return { async recordVerified() {} };
+}
+
+function liveNestedList(): DesiredNode {
+  return {
+    kind: 'list',
+    ordered: false,
+    items: [{
+      content: [{ kind: 'text', text: 'Engine live parent' }],
+      children: [{
+        kind: 'list',
+        ordered: true,
+        items: [{
+          content: [{ kind: 'text', text: 'Engine live nested child' }],
+          children: [],
+        }],
+      }],
+    }],
+  };
+}
+
+function liveNativeTable(): DesiredNode {
+  const paragraph = (text: string): DesiredNode => ({
+    kind: 'paragraph',
+    content: [{ kind: 'text', text }],
+  });
+  return {
+    kind: 'table',
+    rows: [
+      { cells: [{ content: [paragraph('Name')] }, { content: [paragraph('Safety')] }] },
+      { cells: [{ content: [paragraph('Docx engine')] }, { content: [paragraph('Verified')] }] },
+    ],
+  };
+}
+
+function requiredSnapshotNode(nodes: Map<string, SnapshotNode>, blockId: string): SnapshotNode {
+  const node = nodes.get(blockId);
+  if (!node) throw new Error(`live readback is missing block ${blockId}`);
+  return node;
+}
+
+function assertExactListNode(node: SnapshotNode, expected: {
+  parentBlockId: string;
+  blockType: 12 | 13;
+  payloadKey: 'bullet' | 'ordered';
+  text: string;
+}): void {
+  expect(node).toMatchObject({
+    parentBlockId: expected.parentBlockId,
+    blockType: expected.blockType,
+    kind: 'list',
+  });
+  expect(node.raw.parent_id).toBe(expected.parentBlockId);
+  expect(node.raw.block_type).toBe(expected.blockType);
+  expect(node.raw[expected.payloadKey === 'bullet' ? 'ordered' : 'bullet']).toBeUndefined();
+  const payload = requiredRecord(node.raw[expected.payloadKey], `${expected.payloadKey} payload`);
+  const elements = requiredArray(payload.elements, `${expected.payloadKey}.elements`);
+  expect(elements).toHaveLength(1);
+  const textRun = requiredRecord(
+    requiredRecord(elements[0], `${expected.payloadKey}.elements[0]`).text_run,
+    `${expected.payloadKey}.elements[0].text_run`,
+  );
+  expect(textRun.content).toBe(expected.text);
+  assertDefaultTextElementStyle(textRun.text_element_style);
+  assertDefaultBlockStyle(payload.style, expected.payloadKey === 'ordered' ? { sequence: '1' } : {});
+}
+
+function assertExactNativeTable(
+  table: SnapshotNode,
+  nodes: Map<string, SnapshotNode>,
+  expectedRows: string[][],
+): void {
+  expect(table).toMatchObject({ blockType: 31, kind: 'table' });
+  const rawTable = requiredRecord(table.raw.table, 'table payload');
+  const property = requiredRecord(rawTable.property, 'table.property');
+  expect(property.row_size).toBe(expectedRows.length);
+  expect(property.column_size).toBe(expectedRows[0]!.length);
+  const expectedCellCount = expectedRows.length * expectedRows[0]!.length;
+  expect(table.childBlockIds).toHaveLength(expectedCellCount);
+  expect(rawTable.cells).toEqual(table.childBlockIds);
+  assertExactUnmergedCells(property.merge_info, expectedCellCount);
+
+  const expectedTexts = expectedRows.flat();
+  table.childBlockIds.forEach((cellId, cellIndex) => {
+    const cell = requiredSnapshotNode(nodes, cellId);
+    expect(cell).toMatchObject({
+      parentBlockId: table.blockId,
+      blockType: 32,
+      kind: 'opaque',
+    });
+    expect(cell.raw.parent_id).toBe(table.blockId);
+    expect(cell.childBlockIds).toHaveLength(1);
+    const paragraph = requiredSnapshotNode(nodes, cell.childBlockIds[0]!);
+    expect(paragraph).toMatchObject({
+      parentBlockId: cell.blockId,
+      blockType: 2,
+      kind: 'paragraph',
+    });
+    assertExactPlainText(paragraph.raw, expectedTexts[cellIndex]!);
+  });
+}
+
+function assertExactPlainText(raw: Record<string, unknown>, expectedText: string): void {
+  const payload = requiredRecord(raw.text, 'paragraph.text');
+  const elements = requiredArray(payload.elements, 'paragraph.text.elements');
+  expect(elements).toHaveLength(1);
+  const run = requiredRecord(
+    requiredRecord(elements[0], 'paragraph.text.elements[0]').text_run,
+    'paragraph.text.elements[0].text_run',
+  );
+  expect(run.content).toBe(expectedText);
+  assertDefaultTextElementStyle(run.text_element_style);
+  assertDefaultBlockStyle(payload.style);
+}
+
+function assertDefaultTextElementStyle(value: unknown): void {
+  const style = value === undefined ? {} : requiredRecord(value, 'text_element_style');
+  const defaults: Record<string, unknown> = {
+    bold: false,
+    italic: false,
+    strikethrough: false,
+    underline: false,
+    inline_code: false,
+  };
+  for (const [key, actual] of Object.entries(style)) {
+    expect(defaults).toHaveProperty(key);
+    expect(actual).toBe(defaults[key]);
+  }
+}
+
+function assertDefaultBlockStyle(value: unknown, additionalDefaults: Record<string, unknown> = {}): void {
+  const style = value === undefined ? {} : requiredRecord(value, 'block style');
+  const defaults: Record<string, unknown> = { align: 1, folded: false, ...additionalDefaults };
+  for (const [key, actual] of Object.entries(style)) {
+    expect(defaults).toHaveProperty(key);
+    expect(actual).toBe(defaults[key]);
+  }
+}
+
+function assertExactUnmergedCells(value: unknown, cellCount: number): void {
+  if (value === undefined) return;
+  const mergeInfo = requiredArray(value, 'table.property.merge_info');
+  expect(mergeInfo).toHaveLength(cellCount);
+  for (const entry of mergeInfo) {
+    if (entry === null || entry === undefined) continue;
+    expect(requiredRecord(entry, 'table merge entry')).toEqual({ row_span: 1, col_span: 1 });
+  }
+}
+
+function requiredRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requiredArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value;
 }
 
 function htmlTable(includeNewRow: boolean): string {

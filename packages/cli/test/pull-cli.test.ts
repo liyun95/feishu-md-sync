@@ -83,6 +83,13 @@ async function createFakeLarkCli(path: string): Promise<void> {
   await writeFile(path, [
     '#!/usr/bin/env node',
     'const args = process.argv.slice(2);',
+    'if (args[0] === "api" && args[2] === "/open-apis/docx/v1/documents/doccn123456789012345678901234") {',
+    '  console.log(JSON.stringify({',
+    '    ok: true,',
+    '    data: { document: { revision_id: 7 } }',
+    '  }));',
+    '  process.exit(0);',
+    '}',
     'if (args[0] === "api") {',
     '  console.log(JSON.stringify({',
     '    ok: true,',

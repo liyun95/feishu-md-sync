@@ -322,6 +322,29 @@ describe('remote semantic document', () => {
     });
   });
 
+  it('prefers revision-pinned string Code metadata over stale external metadata', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+      {
+        block_id: 'code1',
+        block_type: 14,
+        code: {
+          elements: [{ text_run: { content: 'print(1)', text_element_style: {} } }],
+          style: { language: 'go', caption: '' }
+        }
+      }
+    ], 'doc_token', undefined, [{ blockId: 'code1', language: 'python', caption: 'Stale caption' }]);
+
+    expect(document.nodes[0]).toMatchObject({
+      kind: 'code',
+      content: 'print(1)',
+      sourceLanguage: 'go',
+      resolvedLanguage: 'go',
+      issues: []
+    });
+    expect(document.nodes[0]).toHaveProperty('caption', undefined);
+  });
+
   it('normalizes the Feishu Plain Text label from full-XML Code metadata', () => {
     const document = remoteSemanticDocument([
       { block_id: 'doc_token', block_type: 1, children: ['code1'] },

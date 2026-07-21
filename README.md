@@ -4,6 +4,14 @@ Feishu Markdown Sync is a dry-run-first sync bridge between local Markdown and F
 
 The primary product surface is the `feishu-md-sync` CLI: `publish`, `pull`, `status`, `diff`, `merge`, and local-only `baseline adopt`.
 
+## Shared Docx Engine
+
+The repository also builds `feishu-docx-engine`, a separately versioned package used by the CLI for physical Feishu Docx work. The engine owns revision-pinned block snapshots, typed encoding, deterministic mutation batches, nested-tree and native-table creation, Whiteboard mutation, readback verification, and partial-write recovery evidence.
+
+`feishu-md-sync` remains the product layer. It owns Markdown dialects and profiles, semantic correspondence and planning, confirmation gates, Base-backed link resolution, receipts, recovery checkpoints, and user-facing CLI/JSON behavior. The engine does not interpret Markdown, approve a write, or advance a product baseline.
+
+`feishu-md-sync` 0.6 uses `feishu-docx-engine >=0.1.0 <0.2.0`; its npm artifact pins `feishu-docx-engine` to exactly `0.1.0` so an installed CLI has one reproducible physical execution contract. The packages remain independent release artifacts even though they are developed in this monorepo.
+
 Docs site: <https://liyun95.github.io/feishu-md-sync/>
 
 ## Quickstart
@@ -32,8 +40,8 @@ The selected `lark-cli` identity must have access to the target document, Drive 
 Install the Skill from the same release tag as the CLI:
 
 ```bash
-npm install --global feishu-md-sync@0.5.0
-npx skills add 'liyun95/feishu-md-sync#v0.5.0' --skill feishu-md-sync --global --yes
+npm install --global feishu-md-sync@0.6.0
+npx skills add 'liyun95/feishu-md-sync#v0.6.0' --skill feishu-md-sync --global --yes
 ```
 
 Then ask an Agent:
@@ -176,7 +184,7 @@ For a `zdoc-authoring` archive that already has a receipt-tracked native Whitebo
 
 ## Develop
 
-Root scripts delegate to the CLI and docs workspaces:
+Root scripts delegate to the engine, CLI, and docs workspaces:
 
 ```bash
 npm install
@@ -184,6 +192,7 @@ npm run dev -- <args>
 npm run typecheck
 npm test
 npm run build
+npm run test:package
 npm run test:skill
 npm run docs:dev
 npm run docs:build

@@ -1,4 +1,4 @@
-name: Publish npm package
+name: Publish npm packages
 
 on:
   push:
@@ -39,7 +39,6 @@ jobs:
 
       - name: Verify release tag and source
         run: |
-          node --input-type=module -e "import manifest from './packages/cli/package.json' with { type: 'json' }; if (process.env.GITHUB_REF_NAME !== 'v' + manifest.version) { throw new Error('release tag ' + process.env.GITHUB_REF_NAME + ' does not match package version v' + manifest.version); }"
           if test "$(git rev-parse HEAD)" != "$GITHUB_SHA"; then
             echo "Release checkout does not match the tag commit $GITHUB_SHA." >&2
             exit 1
@@ -49,6 +48,65 @@ jobs:
             echo "Release commit $GITHUB_SHA is not merged into origin/main." >&2
             exit 1
           fi
+
+      - name: Load and validate release manifest
+        id: release_manifest
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import cliManifest from './packages/cli/package.json' with { type: 'json' };
+          import engineManifest from './packages/docx-engine/package.json' with { type: 'json' };
+
+          const manifestPath = `.github/releases/${process.env.GITHUB_REF_NAME}.json`;
+          const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+          const fail = (message) => { throw new Error(`Invalid release manifest ${manifestPath}: ${message}`); };
+          if (manifest.schemaVersion !== 1) fail('schemaVersion must be 1');
+          if (manifest.tag !== process.env.GITHUB_REF_NAME) fail('tag must match GITHUB_REF_NAME');
+          if (manifest.tag !== `v${cliManifest.version}`) fail('tag must match the CLI package version');
+          if (typeof manifest.publishEngine !== 'boolean') fail('publishEngine must be boolean');
+          if (manifest.cli?.name !== cliManifest.name || manifest.cli?.version !== cliManifest.version) {
+            fail('CLI identity must match packages/cli/package.json');
+          }
+          if (manifest.engine?.name !== engineManifest.name || manifest.engine?.version !== engineManifest.version) {
+            fail('engine identity must match packages/docx-engine/package.json');
+          }
+          if (cliManifest.dependencies['feishu-docx-engine'] !== engineManifest.version ||
+              cliManifest.dependencies['feishu-docx-engine'] !== manifest.engine.version) {
+            fail('CLI must pin the exact manifest engine version');
+          }
+          for (const [label, item] of [['cli', manifest.cli], ['engine', manifest.engine]]) {
+            if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(item.integrity)) fail(`${label} integrity must be sha512`);
+            if (!/^[0-9a-f]{64}$/.test(item.sha256)) fail(`${label} sha256 must be lowercase hex`);
+          }
+          const provenance = manifest.engine.provenance;
+          if (!provenance || provenance.ref !== `refs/tags/${provenance.tag}`) {
+            fail('engine provenance ref must match its tag');
+          }
+          if (manifest.publishEngine) {
+            if (provenance.tag !== manifest.tag || provenance.commit !== 'self') {
+              fail('a newly published engine must bind provenance to the current tag and commit');
+            }
+          } else if (!/^[0-9a-f]{40}$/.test(provenance.commit)) {
+            fail('a reused engine must record its immutable provenance commit');
+          }
+          const engineProvenanceSha = provenance.commit === 'self'
+            ? process.env.GITHUB_SHA
+            : provenance.commit;
+          appendFileSync(process.env.GITHUB_OUTPUT, [
+            `manifest_path=${manifestPath}`,
+            `publish_engine=${String(manifest.publishEngine)}`,
+            `cli_name=${manifest.cli.name}`,
+            `cli_version=${manifest.cli.version}`,
+            `cli_integrity=${manifest.cli.integrity}`,
+            `cli_sha256=${manifest.cli.sha256}`,
+            `engine_name=${manifest.engine.name}`,
+            `engine_version=${manifest.engine.version}`,
+            `engine_integrity=${manifest.engine.integrity}`,
+            `engine_sha256=${manifest.engine.sha256}`,
+            `engine_provenance_ref=${provenance.ref}`,
+            `engine_provenance_sha=${engineProvenanceSha}`
+          ].join('\n') + '\n');
+          NODE
 
       - name: Typecheck
         run: npm run typecheck
@@ -68,44 +126,172 @@ jobs:
       - name: Validate release Agent Skill
         run: npm run test:skill:release
 
-      - name: Pack release artifact
+      - name: Validate dependency-ordered release workflow
+        run: npm run test:release-workflow
+
+      - name: Pack engine and CLI release artifacts
         id: pack
         run: |
           mkdir -p release-artifacts
-          npm pack --workspace=feishu-md-sync --json --pack-destination release-artifacts > release-artifacts/pack.json
+          npm pack --workspace=feishu-docx-engine --json --pack-destination release-artifacts > release-artifacts/engine-pack.json
+          npm pack --workspace=feishu-md-sync --json --pack-destination release-artifacts > release-artifacts/cli-pack.json
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from 'node:fs';
-          const [pack] = JSON.parse(readFileSync('release-artifacts/pack.json', 'utf8'));
+          const [engine] = JSON.parse(readFileSync('release-artifacts/engine-pack.json', 'utf8'));
+          const [cli] = JSON.parse(readFileSync('release-artifacts/cli-pack.json', 'utf8'));
           appendFileSync(process.env.GITHUB_OUTPUT, [
-            `name=${pack.name}`,
-            `version=${pack.version}`,
-            `integrity=${pack.integrity}`,
-            `tarball=./release-artifacts/${pack.filename}`
+            `engine_name=${engine.name}`,
+            `engine_version=${engine.version}`,
+            `engine_integrity=${engine.integrity}`,
+            `engine_tarball=./release-artifacts/${engine.filename}`,
+            `cli_name=${cli.name}`,
+            `cli_version=${cli.version}`,
+            `cli_integrity=${cli.integrity}`,
+            `cli_tarball=./release-artifacts/${cli.filename}`
           ].join('\n') + '\n');
           NODE
 
-      - name: Publish with provenance
+      - name: Verify packed artifacts against release manifest
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync } from 'node:fs';
+          const manifest = JSON.parse(readFileSync(
+            `.github/releases/${process.env.GITHUB_REF_NAME}.json`, 'utf8'
+          ));
+          const [engine] = JSON.parse(readFileSync('release-artifacts/engine-pack.json', 'utf8'));
+          const [cli] = JSON.parse(readFileSync('release-artifacts/cli-pack.json', 'utf8'));
+          const sha256 = (filename) => createHash('sha256')
+            .update(readFileSync(`release-artifacts/${filename}`)).digest('hex');
+          const engineSha256 = sha256(engine.filename);
+          const cliSha256 = sha256(cli.filename);
+          if (engine.name !== manifest.engine.name || engine.version !== manifest.engine.version ||
+              engine.integrity !== manifest.engine.integrity || engineSha256 !== manifest.engine.sha256) {
+            throw new Error('packed engine bytes do not match the committed release manifest');
+          }
+          if (cli.name !== manifest.cli.name || cli.version !== manifest.cli.version ||
+              cli.integrity !== manifest.cli.integrity || cliSha256 !== manifest.cli.sha256) {
+            throw new Error('packed CLI bytes do not match the committed release manifest');
+          }
+          console.log(JSON.stringify({
+            engine: { name: engine.name, version: engine.version, integrity: engine.integrity, sha256: engineSha256 },
+            cli: { name: cli.name, version: cli.version, integrity: cli.integrity, sha256: cliSha256 }
+          }));
+          NODE
+
+      - name: Publish engine with provenance
+        if: steps.release_manifest.outputs.publish_engine == 'true'
         env:
-          PACKAGE_NAME: ${{ steps.pack.outputs.name }}
-          PACKAGE_VERSION: ${{ steps.pack.outputs.version }}
-          PACKAGE_INTEGRITY: ${{ steps.pack.outputs.integrity }}
-          PACKAGE_TARBALL: ${{ steps.pack.outputs.tarball }}
+          PACKAGE_NAME: ${{ steps.release_manifest.outputs.engine_name }}
+          PACKAGE_VERSION: ${{ steps.release_manifest.outputs.engine_version }}
+          PACKAGE_INTEGRITY: ${{ steps.release_manifest.outputs.engine_integrity }}
+          ENGINE_TARBALL: ${{ steps.pack.outputs.engine_tarball }}
         run: |
           if existing_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity 2>/dev/null)"; then
             if test "$existing_integrity" != "$PACKAGE_INTEGRITY"; then
-              echo "npm already contains $PACKAGE_NAME@$PACKAGE_VERSION with different package bytes." >&2
+              echo "npm registry contains $PACKAGE_NAME@$PACKAGE_VERSION with different package bytes." >&2
+              exit 1
+            fi
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published; verifying its recorded provenance."
+          else
+            npm publish "$ENGINE_TARBALL" --access public --provenance --tag latest
+          fi
+
+      - name: Verify engine registry availability
+        env:
+          PACKAGE_NAME: ${{ steps.release_manifest.outputs.engine_name }}
+          PACKAGE_VERSION: ${{ steps.release_manifest.outputs.engine_version }}
+          PACKAGE_INTEGRITY: ${{ steps.release_manifest.outputs.engine_integrity }}
+        run: |
+          for attempt in {1..24}; do
+            if existing_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity 2>/dev/null)"; then
+              if test "$existing_integrity" != "$PACKAGE_INTEGRITY"; then
+                echo "npm registry contains $PACKAGE_NAME@$PACKAGE_VERSION with different package bytes." >&2
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "npm registry does not expose required engine $PACKAGE_NAME@$PACKAGE_VERSION." >&2
+          exit 1
+
+      - name: Verify engine provenance before CLI publication
+        env:
+          PACKAGE_NAME: ${{ steps.release_manifest.outputs.engine_name }}
+          PACKAGE_VERSION: ${{ steps.release_manifest.outputs.engine_version }}
+          PACKAGE_INTEGRITY: ${{ steps.release_manifest.outputs.engine_integrity }}
+          ENGINE_PROVENANCE_REF: ${{ steps.release_manifest.outputs.engine_provenance_ref }}
+          ENGINE_PROVENANCE_SHA: ${{ steps.release_manifest.outputs.engine_provenance_sha }}
+          EXPECTED_REPOSITORY: https://github.com/${{ github.repository }}
+          EXPECTED_WORKFLOW: .github/workflows/release.yml
+          EXPECTED_BUILD_TYPE: https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1
+          EXPECTED_BUILDER: https://github.com/actions/runner/github-hosted
+          EXPECTED_EVENT: push
+          SIGSTORE_BUNDLE_PATH: release-artifacts/npm-provenance-engine.sigstore
+        run: |
+          export EXPECTED_REF="$ENGINE_PROVENANCE_REF"
+          export EXPECTED_SHA="$ENGINE_PROVENANCE_SHA"
+          export EXPECTED_CERTIFICATE_IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${ENGINE_PROVENANCE_REF}"
+          certificate_identity_pattern="$(node -e 'process.stdout.write("^" + process.env.EXPECTED_CERTIFICATE_IDENTITY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$")')"
+          for attempt in {1..12}; do
+            if node .github/scripts/download-npm-provenance.mjs \
+              && sigstore verify "$SIGSTORE_BUNDLE_PATH" \
+                --certificate-identity-uri "$certificate_identity_pattern" \
+                --certificate-issuer 'https://token.actions.githubusercontent.com' \
+              && node .github/scripts/verify-npm-provenance.mjs; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "engine provenance did not match $ENGINE_PROVENANCE_REF at $ENGINE_PROVENANCE_SHA." >&2
+          exit 1
+
+      - name: Smoke CLI candidate with registry-resolved engine
+        env:
+          CLI_TARBALL: ${{ steps.pack.outputs.cli_tarball }}
+          CLI_VERSION: ${{ steps.release_manifest.outputs.cli_version }}
+          ENGINE_VERSION: ${{ steps.release_manifest.outputs.engine_version }}
+        run: |
+          CLI_TARBALL_ABSOLUTE="$GITHUB_WORKSPACE/${CLI_TARBALL#./}"
+          consumer="$(mktemp -d)"
+          cd "$consumer"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$CLI_TARBALL_ABSOLUTE"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { ENGINE_VERSION } from 'feishu-docx-engine';
+          const manifest = JSON.parse(readFileSync('node_modules/feishu-docx-engine/package.json', 'utf8'));
+          if (manifest.version !== process.env.ENGINE_VERSION || ENGINE_VERSION !== process.env.ENGINE_VERSION) {
+            throw new Error(`registry-resolved engine mismatch: ${manifest.version}/${ENGINE_VERSION}`);
+          }
+          NODE
+          bin="./node_modules/.bin/feishu-md-sync"
+          test "$("$bin" --version)" = "$CLI_VERSION"
+          "$bin" publish --help | grep -F 'Usage: feishu-md-sync publish'
+
+      - name: Publish CLI with provenance
+        env:
+          PACKAGE_NAME: ${{ steps.release_manifest.outputs.cli_name }}
+          PACKAGE_VERSION: ${{ steps.release_manifest.outputs.cli_version }}
+          PACKAGE_INTEGRITY: ${{ steps.release_manifest.outputs.cli_integrity }}
+          CLI_TARBALL: ${{ steps.pack.outputs.cli_tarball }}
+        run: |
+          if existing_integrity="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" dist.integrity 2>/dev/null)"; then
+            if test "$existing_integrity" != "$PACKAGE_INTEGRITY"; then
+              echo "npm registry contains $PACKAGE_NAME@$PACKAGE_VERSION with different package bytes." >&2
               exit 1
             fi
             echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published; verifying signed provenance before recovery."
           else
-            npm publish "$PACKAGE_TARBALL" --access public --provenance
+            npm publish "$CLI_TARBALL" --access public --provenance --tag latest
           fi
 
-      - name: Verify npm registry and provenance
+      - name: Verify CLI registry and provenance
         env:
-          PACKAGE_NAME: ${{ steps.pack.outputs.name }}
-          PACKAGE_VERSION: ${{ steps.pack.outputs.version }}
-          PACKAGE_INTEGRITY: ${{ steps.pack.outputs.integrity }}
+          PACKAGE_NAME: ${{ steps.release_manifest.outputs.cli_name }}
+          PACKAGE_VERSION: ${{ steps.release_manifest.outputs.cli_version }}
+          PACKAGE_INTEGRITY: ${{ steps.release_manifest.outputs.cli_integrity }}
           EXPECTED_REPOSITORY: https://github.com/${{ github.repository }}
           EXPECTED_SHA: ${{ github.sha }}
           EXPECTED_REF: ${{ github.ref }}
@@ -114,7 +300,7 @@ jobs:
           EXPECTED_BUILDER: https://github.com/actions/runner/github-hosted
           EXPECTED_EVENT: push
           EXPECTED_CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
-          SIGSTORE_BUNDLE_PATH: release-artifacts/npm-provenance.sigstore
+          SIGSTORE_BUNDLE_PATH: release-artifacts/npm-provenance-cli.sigstore
         run: |
           certificate_identity_pattern="$(node -e 'process.stdout.write("^" + process.env.EXPECTED_CERTIFICATE_IDENTITY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$")')"
           for attempt in {1..12}; do
@@ -127,8 +313,27 @@ jobs:
             fi
             sleep 5
           done
-          echo "npm registry provenance did not match $GITHUB_REF at $GITHUB_SHA." >&2
+          echo "CLI provenance did not match $GITHUB_REF at $GITHUB_SHA." >&2
           exit 1
+
+      - name: Verify installed tagged Skill with released CLI
+        env:
+          CLI_VERSION: ${{ steps.release_manifest.outputs.cli_version }}
+        run: |
+          temp_home="$(mktemp -d)"
+          cli_home="$(mktemp -d)"
+          HOME="$temp_home" XDG_STATE_HOME="$temp_home/.local/state" \
+            npx --yes skills@1.5.17 add "liyun95/feishu-md-sync#$GITHUB_REF_NAME" \
+              --skill feishu-md-sync --agent codex --global --copy --yes
+          npm install --prefix "$cli_home" --ignore-scripts --no-audit --no-fund \
+            "feishu-md-sync@$CLI_VERSION"
+          installed_skill="$temp_home/.agents/skills/feishu-md-sync"
+          checkout_hash="$(node scripts/hash-skill-tree.mjs skills/feishu-md-sync)"
+          installed_hash="$(node scripts/hash-skill-tree.mjs "$installed_skill")"
+          test "$checkout_hash" = "$installed_hash"
+          FEISHU_MD_SYNC_SKILL_DIR="$installed_skill" \
+          FEISHU_MD_SYNC_BIN="$cli_home/node_modules/.bin/feishu-md-sync" \
+            node scripts/validate-agent-skill.mjs
 
   release:
     needs: publish

@@ -134,10 +134,13 @@ function remoteCodeBlock(
   const content = elements.map((element) => element.text_run?.content ?? '').join('');
   const issues: SemanticCodeBlock['issues'] = [];
   let resolvedLanguage = 'plaintext';
-  let sourceLanguage = metadata?.language ?? '';
+  const pinnedLanguage = typeof style?.language === 'string' && style.language.trim()
+    ? style.language
+    : undefined;
+  let sourceLanguage = pinnedLanguage ?? metadata?.language ?? '';
   try {
-    if (metadata?.language) {
-      resolvedLanguage = resolveCodeLanguage(metadata.language).resolvedLanguage;
+    if (sourceLanguage) {
+      resolvedLanguage = resolveCodeLanguage(sourceLanguage).resolvedLanguage;
     } else {
       resolvedLanguage = codeLanguageForId(numberValue(style?.language) || 1);
       sourceLanguage = resolvedLanguage;
@@ -148,11 +151,13 @@ function remoteCodeBlock(
       message: error instanceof Error ? error.message : String(error)
     });
   }
-  const caption = metadata?.caption ?? (typeof style?.caption === 'string'
+  const embeddedCaption = typeof style?.caption === 'string'
     ? style.caption
     : typeof code?.caption === 'string'
       ? code.caption
-      : undefined);
+      : undefined;
+  const captionValue = pinnedLanguage ? embeddedCaption : metadata?.caption ?? embeddedCaption;
+  const caption = captionValue === '' ? undefined : captionValue;
   return {
     kind: 'code',
     locator,

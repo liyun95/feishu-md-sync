@@ -1,12 +1,10 @@
 import { execFile } from 'node:child_process';
+import { LarkCliProviderError, LarkCliTransport, type DocxTransport } from 'feishu-docx-engine';
 import { CliFailure, type CliFailureType } from '../core/cli-failure.js';
-import type { FeishuBlock } from '../feishu/types.js';
-import { normalizeMarkdownLinkUrl } from '../markdown/links.js';
 import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
 import type {
   CreatedDocument,
   CreatedChildBlocks,
-  CreatedWhiteboard,
   FeishuAdapter,
   RemoteBaseRecord,
   RemoteBaseTable,
@@ -32,10 +30,39 @@ export type LarkCliIdentity = 'auto' | 'bot' | 'user';
 export class LarkCliAdapter implements FeishuAdapter {
   private readonly exec: LarkCliExecutor;
   private readonly identity: LarkCliIdentity;
+  readonly docxTransport: DocxTransport;
+  private nextWhiteboardIdempotencyToken?: string;
 
   constructor(input: { exec?: LarkCliExecutor; identity?: LarkCliIdentity } = {}) {
     this.exec = input.exec ?? runLarkCli;
     this.identity = input.identity ?? larkCliIdentityFromEnv();
+    const transport = new LarkCliTransport({
+      exec: (args, execInput) => this.exec(args, execInput),
+      identity: this.identity
+    });
+    this.docxTransport = {
+      resolveDocument: (selector) => transport.resolveDocument(selector),
+      fetchBlocks: (documentId) => transport.fetchBlocks(documentId),
+      replaceBlock: (request) => transport.replaceBlock(request),
+      insertAfter: (request) => transport.insertAfter(request),
+      createChildren: (request) => transport.createChildren(request),
+      moveAfter: (request) => transport.moveAfter(request),
+      deleteBlocks: (request) => transport.deleteBlocks(request),
+      createDocument: (request) => transport.createDocument(request),
+      queryWhiteboard: (token) => transport.queryWhiteboard(token),
+      overwriteWhiteboard: (request) => transport.overwriteWhiteboard({
+        ...request,
+        idempotencyToken: this.effectiveWhiteboardIdempotencyToken(request.idempotencyToken)
+      })
+    };
+  }
+
+  setDocxEngineWhiteboardIdempotencyToken(token?: string): void {
+    this.nextWhiteboardIdempotencyToken = token;
+  }
+
+  private effectiveWhiteboardIdempotencyToken(fallback: string): string {
+    return this.nextWhiteboardIdempotencyToken ?? fallback;
   }
 
   async resolveBaseUrl(input: { url: string }): Promise<{ baseToken: string }> {
@@ -105,25 +132,15 @@ export class LarkCliAdapter implements FeishuAdapter {
   }
 
   async resolveDocumentId(input: { target: PublishReceiptTarget }): Promise<string> {
-    if (input.target.kind === 'docx') return input.target.token;
     if (input.target.kind === 'folder') {
       throw new Error('Folder targets do not resolve to an existing document.');
     }
-    const result = await this.exec(withIdentity([
-      'api',
-      'GET',
-      '/open-apis/wiki/v2/spaces/get_node',
-      '--params',
-      JSON.stringify({ token: input.target.token }),
-      '--format',
-      'json'
-    ], this.identity));
-    const parsed = parseLarkCliJson(result);
-    const node = wikiNodeFromData(parsed.data);
-    if (node?.obj_type !== 'docx' || typeof node.obj_token !== 'string') {
-      throw new Error(`Wiki node ${input.target.token} does not resolve to a Docx document.`);
-    }
-    return node.obj_token;
+    return withDocxTransportFailure(async () => {
+      const selector = input.target.kind === 'docx'
+        ? { kind: 'docx' as const, token: input.target.token }
+        : { kind: 'wiki' as const, token: input.target.token };
+      return (await this.docxTransport.resolveDocument(selector)).documentId;
+    });
   }
 
   async fetchDocMarkdown(input: { doc: string }): Promise<RemoteMarkdown> {
@@ -147,32 +164,10 @@ export class LarkCliAdapter implements FeishuAdapter {
   }
 
   async fetchDocBlocks(input: { doc: string }): Promise<RemoteBlocks> {
-    const blocks: FeishuBlock[] = [];
-    let pageToken: string | undefined;
-
-    do {
-      const params: Record<string, string | number> = {
-        page_size: 500,
-        document_revision_id: -1
-      };
-      if (pageToken) params.page_token = pageToken;
-
-      const result = await this.exec(withIdentity([
-        'api',
-        'GET',
-        `/open-apis/docx/v1/documents/${input.doc}/blocks`,
-        '--params',
-        JSON.stringify(params),
-        '--format',
-        'json'
-      ], this.identity));
-      const parsed = parseLarkCliJson(result);
-      const page = blockPageFromData(parsed.data);
-      blocks.push(...page.items);
-      pageToken = page.hasMore ? page.pageToken : undefined;
-    } while (pageToken);
-
-    return { blocks };
+    return withDocxTransportFailure(async () => {
+      const snapshot = await this.docxTransport.fetchBlocks(input.doc);
+      return { blocks: snapshot.blocks };
+    });
   }
 
   async fetchDocCodeMetadata(input: { doc: string }): Promise<RemoteCodeMetadata[]> {
@@ -213,223 +208,103 @@ export class LarkCliAdapter implements FeishuAdapter {
     ], this.identity)));
   }
 
-  async replaceBlock(input: {
+  replaceBlock(input: {
     doc: string;
     blockId: string;
     content: string;
     format: 'markdown' | 'xml';
   }): Promise<RemoteMutationResult> {
-    return this.updateBlock({
-      doc: input.doc,
-      command: 'block_replace',
+    return withDocxTransportFailure(() => this.docxTransport.replaceBlock({
+      documentId: input.doc,
       blockId: input.blockId,
-      content: input.format === 'xml' ? '-' : input.content,
-      format: input.format,
-      stdin: input.format === 'xml' ? input.content : undefined
+      content: input.content,
+      format: input.format
+    }));
+  }
+
+  insertBlocksAfter(input: {
+    doc: string;
+    blockId: string;
+    content: string;
+    format: 'markdown' | 'xml';
+  }): Promise<RemoteMutationResult> {
+    return withDocxTransportFailure(() => this.docxTransport.insertAfter({
+      documentId: input.doc,
+      blockId: input.blockId,
+      content: input.content,
+      format: input.format
+    }));
+  }
+
+  createChildBlocks(input: {
+    doc: string;
+    parentBlockId: string;
+    index?: number;
+    blocks: import('../feishu/types.js').FeishuBlock[];
+    clientToken: string;
+  }): Promise<CreatedChildBlocks> {
+    return withDocxTransportFailure(async () => {
+      const result = await this.docxTransport.createChildren({
+        documentId: input.doc,
+        parentBlockId: input.parentBlockId,
+        index: input.index ?? -1,
+        blocks: input.blocks,
+        clientToken: input.clientToken
+      });
+      return { ...result, blocks: result.blocks };
     });
   }
 
-  async moveBlocksAfter(input: {
+  moveBlocksAfter(input: {
     doc: string;
     blockId: string;
     sourceBlockIds: string[];
   }): Promise<void> {
-    parseLarkCliJson(await this.exec(withIdentity([
-      'docs',
-      '+update',
-      '--doc',
-      input.doc,
-      '--command',
-      'block_move_after',
-      '--block-id',
-      input.blockId,
-      '--src-block-ids',
-      input.sourceBlockIds.join(','),
-      '--format',
-      'json'
-    ], this.identity)));
-  }
-
-  async insertBlocksAfter(input: {
-    doc: string;
-    blockId: string;
-    content: string;
-    format: 'markdown' | 'xml';
-  }): Promise<RemoteMutationResult> {
-    return this.updateBlock({
-      doc: input.doc,
-      command: 'block_insert_after',
-      blockId: input.blockId,
-      content: input.format === 'xml' ? '-' : input.content,
-      format: input.format,
-      stdin: input.format === 'xml' ? input.content : undefined
-    });
-  }
-
-  async createChildBlocks(input: {
-    doc: string;
-    parentBlockId: string;
-    index?: number;
-    blocks: FeishuBlock[];
-    clientToken: string;
-  }): Promise<CreatedChildBlocks> {
-    const parsed = parseLarkCliJson(await this.exec(withIdentity([
-      'api',
-      'POST',
-      `/open-apis/docx/v1/documents/${input.doc}/blocks/${input.parentBlockId}/children`,
-      '--params',
-      JSON.stringify({ document_revision_id: -1, client_token: input.clientToken }),
-      '--data',
-      JSON.stringify({ index: input.index ?? -1, children: encodeProviderLinkUrls(input.blocks) }),
-      '--format',
-      'json'
-    ], this.identity)));
-    return createdChildBlocksFromData(parsed.data);
-  }
-
-  async deleteBlocks(input: { doc: string; blockIds: string[] }): Promise<void> {
-    parseLarkCliJson(await this.exec(withIdentity([
-      'docs',
-      '+update',
-      '--doc',
-      input.doc,
-      '--command',
-      'block_delete',
-      '--block-id',
-      input.blockIds.join(','),
-      '--format',
-      'json'
-    ], this.identity)));
-  }
-
-  async replaceImageWithWhiteboard(input: {
-    doc: string;
-    blockId: string;
-    svg: string;
-  }): Promise<CreatedWhiteboard> {
-    const parsed = parseLarkCliJson(await this.exec(withIdentity([
-      'docs',
-      '+update',
-      '--doc',
-      input.doc,
-      '--command',
-      'block_replace',
-      '--block-id',
-      input.blockId,
-      '--doc-format',
-      'xml',
-      '--content',
-      '-',
-      '--format',
-      'json'
-    ], this.identity), {
-      stdin: `<whiteboard type="svg">${input.svg}</whiteboard>`
+    return withDocxTransportFailure(() => this.docxTransport.moveAfter({
+      documentId: input.doc,
+      anchorBlockId: input.blockId,
+      blockIds: input.sourceBlockIds
     }));
-    return createdWhiteboardFromData(parsed.data);
+  }
+
+  deleteBlocks(input: { doc: string; blockIds: string[] }): Promise<void> {
+    return withDocxTransportFailure(() => this.docxTransport.deleteBlocks({
+      documentId: input.doc,
+      blockIds: input.blockIds
+    }));
   }
 
   async queryWhiteboard(input: { whiteboardToken: string }): Promise<RemoteWhiteboard> {
-    const parsed = parseLarkCliJson(await this.exec(withIdentity([
-      'whiteboard',
-      '+query',
-      '--whiteboard-token',
-      input.whiteboardToken,
-      '--output_as',
-      'raw',
-      '--format',
-      'json'
-    ], this.identity)));
-    return { raw: whiteboardRawFromData(parsed.data) };
+    return withDocxTransportFailure(async () => ({
+      raw: await this.docxTransport.queryWhiteboard(input.whiteboardToken)
+    }));
   }
 
-  async updateWhiteboard(input: {
+  updateWhiteboard(input: {
     whiteboardToken: string;
     svg: string;
     idempotencyToken: string;
   }): Promise<void> {
-    parseLarkCliJson(await this.exec(withIdentity([
-      'whiteboard',
-      '+update',
-      '--whiteboard-token',
-      input.whiteboardToken,
-      '--input_format',
-      'svg',
-      '--source',
-      '-',
-      '--overwrite',
-      '--idempotent-token',
-      input.idempotencyToken,
-      '--format',
-      'json'
-    ], this.identity), { stdin: input.svg }));
+    return withDocxTransportFailure(() => this.docxTransport.overwriteWhiteboard({
+      token: input.whiteboardToken,
+      format: 'svg',
+      value: input.svg,
+      idempotencyToken: input.idempotencyToken
+    }));
   }
 
   async createDocument(input: { title: string; markdown: string; parentToken: string }): Promise<CreatedDocument> {
-    const data = parseLarkCliJson(await this.exec(withIdentity([
-      'docs',
-      '+create',
-      '--title',
-      input.title,
-      '--doc-format',
-      'markdown',
-      '--content',
-      input.markdown,
-      '--parent-token',
-      input.parentToken,
-      '--format',
-      'json'
-    ], this.identity)));
-    const document = documentFromData(data.data);
-    if (!document) {
-      throw new Error('lark-cli docs +create did not return data.document.');
-    }
-    const documentId = typeof document.document_id === 'string' ? document.document_id : undefined;
-    if (!documentId) {
-      throw new Error('lark-cli docs +create did not return document.document_id.');
-    }
-    return {
-      documentId,
-      url: typeof document.url === 'string' ? document.url : undefined,
-      revision: typeof document.revision_id === 'string' || typeof document.revision_id === 'number'
-        ? String(document.revision_id)
-        : undefined
-    };
-  }
-
-  private async updateBlock(input: {
-    doc: string;
-    command: 'block_replace' | 'block_insert_after';
-    blockId: string;
-    content: string;
-    format: 'markdown' | 'xml';
-    stdin?: string;
-  }): Promise<RemoteMutationResult> {
-    const parsed = parseLarkCliJson(await this.exec(withIdentity([
-      'docs',
-      '+update',
-      '--doc',
-      input.doc,
-      '--command',
-      input.command,
-      '--block-id',
-      input.blockId,
-      '--doc-format',
-      input.format,
-      '--content',
-      input.content,
-      '--format',
-      'json'
-    ], this.identity), input.stdin === undefined ? undefined : { stdin: input.stdin }));
-    return { revision: revisionFromData(parsed.data) };
+    return withDocxTransportFailure(() => this.docxTransport.createDocument(input));
   }
 }
 
-function wikiNodeFromData(data: unknown): Record<string, unknown> | undefined {
-  if (!data || typeof data !== 'object' || !('node' in data)) return undefined;
-  const node = (data as { node?: unknown }).node;
-  return node && typeof node === 'object' && !Array.isArray(node)
-    ? node as Record<string, unknown>
-    : undefined;
+async function withDocxTransportFailure<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof LarkCliProviderError) throw larkCliFailure(error.envelope);
+    throw error;
+  }
 }
 
 function baseTokenFromData(data: unknown): string | undefined {
@@ -595,6 +470,7 @@ function mapLarkCliFailureType(type: string | undefined): CliFailureType {
   if (type === 'network') return 'network';
   if (type === 'confirmation' || type === 'confirmation_required') return 'confirmation_required';
   if (type === 'validation') return 'validation';
+  if (type === 'verification') return 'verification';
   if (type === 'policy') return 'authorization';
   return 'internal';
 }
@@ -658,137 +534,4 @@ function revisionFromData(data: unknown): string | undefined {
     return typeof revision === 'string' || typeof revision === 'number' ? String(revision) : undefined;
   }
   return undefined;
-}
-
-function documentFromData(data: unknown): Record<string, unknown> | undefined {
-  if (!data || typeof data !== 'object' || !('document' in data)) return undefined;
-  const document = (data as { document?: unknown }).document;
-  return document && typeof document === 'object' ? document as Record<string, unknown> : undefined;
-}
-
-function createdWhiteboardFromData(data: unknown): CreatedWhiteboard {
-  const document = data && typeof data === 'object' && !Array.isArray(data)
-    ? (data as { document?: unknown }).document
-    : undefined;
-  const newBlocks = document && typeof document === 'object' && !Array.isArray(document)
-    ? (document as { new_blocks?: unknown }).new_blocks
-    : undefined;
-  const whiteboards = Array.isArray(newBlocks) ? newBlocks.filter(isCreatedWhiteboard) : [];
-  if (whiteboards.length !== 1) {
-    throw new Error(`lark-cli docs +update returned ${whiteboards.length} Whiteboard blocks; expected exactly one`);
-  }
-  const whiteboard = whiteboards[0];
-  return {
-    blockId: whiteboard.block_id,
-    whiteboardToken: whiteboard.block_token
-  };
-}
-
-function isCreatedWhiteboard(value: unknown): value is { block_id: string; block_token: string } {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const block = value as { block_id?: unknown; block_type?: unknown; block_token?: unknown };
-  return (block.block_type === 'whiteboard' || block.block_type === 43 || block.block_type === '43') &&
-    typeof block.block_id === 'string' &&
-    typeof block.block_token === 'string';
-}
-
-function whiteboardRawFromData(data: unknown): unknown {
-  let raw: unknown;
-  if (Array.isArray(data)) {
-    raw = data;
-  } else if (typeof data === 'string') {
-    raw = parseEmbeddedJson(data);
-  } else if (!data || typeof data !== 'object') {
-    throw whiteboardRawNotReadyFailure();
-  } else {
-    const record = data as Record<string, unknown>;
-    if ('raw' in record) {
-      if (record.raw === undefined || record.raw === null) throw whiteboardRawNotReadyFailure();
-      raw = record.raw;
-    }
-    else if (typeof record.content === 'string') raw = parseEmbeddedJson(record.content);
-    else if ('nodes' in record || Object.keys(record).length > 0) raw = data;
-    else throw whiteboardRawNotReadyFailure();
-  }
-  if (Array.isArray(raw)) {
-    if (raw.length === 0) throw whiteboardRawNotReadyFailure();
-    return raw;
-  }
-  if (!raw || typeof raw !== 'object' || !('nodes' in raw)) {
-    throw new Error('lark-cli whiteboard +query did not return raw node state.');
-  }
-  const nodes = (raw as { nodes?: unknown }).nodes;
-  if (!Array.isArray(nodes)) {
-    throw new Error('lark-cli whiteboard +query did not return raw node state.');
-  }
-  if (nodes.length === 0) throw whiteboardRawNotReadyFailure();
-  return raw;
-}
-
-function whiteboardRawNotReadyFailure(): CliFailure {
-  return new CliFailure({
-    type: 'verification',
-    subtype: 'whiteboard_raw_not_ready',
-    message: 'lark-cli whiteboard +query succeeded before raw node state was ready.',
-    retryable: false
-  });
-}
-
-function parseEmbeddedJson(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    throw new Error('lark-cli whiteboard +query returned invalid raw JSON.');
-  }
-}
-
-function blockPageFromData(data: unknown): { items: FeishuBlock[]; hasMore: boolean; pageToken?: string } {
-  if (!data || typeof data !== 'object') {
-    return { items: [], hasMore: false };
-  }
-  const record = data as Record<string, unknown>;
-  const items = Array.isArray(record.items) ? record.items.filter(isFeishuBlock) : [];
-  const hasMore = record.has_more === true;
-  const pageToken = typeof record.page_token === 'string' ? record.page_token : undefined;
-  return { items, hasMore, pageToken };
-}
-
-function createdChildBlocksFromData(data: unknown): CreatedChildBlocks {
-  if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    throw new Error('lark-cli Docx children create did not return structured data.');
-  }
-  const record = data as Record<string, unknown>;
-  const blocks = Array.isArray(record.children) ? record.children.filter(isFeishuBlock) : [];
-  if (blocks.length === 0 || blocks.length !== (record.children as unknown[] | undefined)?.length ||
-    blocks.some((block) => typeof block.block_id !== 'string')) {
-    throw new Error('lark-cli Docx children create did not return created block identities.');
-  }
-  const revision = typeof record.document_revision_id === 'string' || typeof record.document_revision_id === 'number'
-    ? String(record.document_revision_id)
-    : undefined;
-  const clientToken = typeof record.client_token === 'string' ? record.client_token : undefined;
-  return {
-    blocks,
-    ...(revision ? { revision } : {}),
-    ...(clientToken ? { clientToken } : {})
-  };
-}
-
-function encodeProviderLinkUrls(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(encodeProviderLinkUrls);
-  if (!value || typeof value !== 'object') return value;
-  const record = value as Record<string, unknown>;
-  return Object.fromEntries(Object.entries(record).map(([key, child]) => {
-    if (key === 'link' && child && typeof child === 'object' && !Array.isArray(child)) {
-      const link = child as Record<string, unknown>;
-      if (typeof link.url === 'string') {
-        return [key, { ...link, url: encodeURIComponent(normalizeMarkdownLinkUrl(link.url)) }];
-      }
-    }
-    return [key, encodeProviderLinkUrls(child)];
-  }));
-}
-
-function isFeishuBlock(value: unknown): value is FeishuBlock {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'block_type' in value);
 }

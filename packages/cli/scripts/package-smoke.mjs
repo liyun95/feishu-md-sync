@@ -5,6 +5,7 @@ import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url));
+const engineDir = fileURLToPath(new URL('../../docx-engine', import.meta.url));
 const sourceDir = join(packageDir, 'src');
 const tempDir = mkdtempSync(join(tmpdir(), 'feishu-md-sync-package-'));
 const packageManifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
@@ -58,9 +59,26 @@ try {
   const consumerDir = join(tempDir, 'consumer');
   mkdirSync(consumerDir);
   writeFileSync(join(consumerDir, 'package.json'), '{"private":true}', 'utf8');
+  const enginePackOutput = execFileSync(
+    'npm',
+    ['pack', '--ignore-scripts', '--json', '--pack-destination', tempDir],
+    { cwd: engineDir, encoding: 'utf8' }
+  );
+  const [packedEngine] = JSON.parse(enginePackOutput);
+  const engineManifest = JSON.parse(readFileSync(join(engineDir, 'package.json'), 'utf8'));
+  if (packageManifest.dependencies?.['feishu-docx-engine'] !== engineManifest.version) {
+    throw new Error(
+      `CLI must depend exactly on feishu-docx-engine ${engineManifest.version}; got ` +
+      String(packageManifest.dependencies?.['feishu-docx-engine'])
+    );
+  }
   execFileSync(
     'npm',
-    ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(tempDir, packed.filename)],
+    [
+      'install', '--ignore-scripts', '--no-audit', '--no-fund',
+      join(tempDir, packedEngine.filename),
+      join(tempDir, packed.filename)
+    ],
     { cwd: consumerDir, stdio: 'inherit' }
   );
 
@@ -81,6 +99,19 @@ try {
   const expectedCommands = ['baseline', 'diff', 'doctor', 'help', 'merge', 'publish', 'pull', 'status'];
   if (JSON.stringify(actualCommands) !== JSON.stringify(expectedCommands)) {
     throw new Error(`packaged CLI commands differ: expected ${expectedCommands.join(', ')}, got ${actualCommands.join(', ')}`);
+  }
+  const publishHelp = execFileSync(binPath, ['publish', '--help'], { cwd: consumerDir, encoding: 'utf8' });
+  if (!publishHelp.includes('Usage: feishu-md-sync publish')) {
+    throw new Error('packaged CLI publish --help is unavailable');
+  }
+  const installedEngineManifest = JSON.parse(readFileSync(
+    join(consumerDir, 'node_modules', 'feishu-docx-engine', 'package.json'),
+    'utf8'
+  ));
+  if (installedEngineManifest.version !== engineManifest.version) {
+    throw new Error(
+      `packaged CLI installed engine differs: expected ${engineManifest.version}, got ${installedEngineManifest.version}`
+    );
   }
 } finally {
   rmSync(tempDir, { recursive: true, force: true });

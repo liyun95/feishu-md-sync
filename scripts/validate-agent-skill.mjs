@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const skillDir = join(root, 'skills', 'feishu-md-sync');
+const skillDir = process.env.FEISHU_MD_SYNC_SKILL_DIR
+  ? resolve(process.env.FEISHU_MD_SYNC_SKILL_DIR)
+  : join(root, 'skills', 'feishu-md-sync');
 const skillPath = join(skillDir, 'SKILL.md');
 const metadataPath = join(skillDir, 'agents', 'openai.yaml');
 const agentUsagePath = join(root, 'apps', 'docs', 'guide', 'agent-usage.md');
@@ -21,7 +23,11 @@ assert(typeof frontmatter.description === 'string' && frontmatter.description.le
 assert(frontmatter.description.startsWith('Use when '), 'Skill description must start with "Use when"');
 assert(!skill.includes('TODO'), 'Skill contains a TODO placeholder');
 assert(!skill.includes('md2feishu'), 'Skill must not reference the retired md2feishu CLI');
-assert(skill.includes('>=0.5.0 <0.6.0'), 'Skill must declare the v0.5 compatibility range');
+assert(skill.includes('>=0.6.0 <0.7.0'), 'Skill must declare the v0.6 compatibility range');
+assert(skill.includes('shared `feishu-docx-engine`'), 'Skill must identify the shared Docx engine boundary');
+assert(skill.includes('engine-backed nested lists'), 'Skill must describe engine-backed nested-list safety');
+assert(skill.includes('native tables'), 'Skill must describe native-table safety');
+assert(skill.includes('Whiteboards'), 'Skill must preserve Whiteboard safety language');
 assert(skill.includes('dialectBlockers'), 'Skill must branch on dialect blockers');
 assert(skill.includes('dialectDiagnostics'), 'Skill must branch on dialect diagnostics');
 assert(skill.includes('linkResolution'), 'Skill must inspect link resolution');
@@ -103,12 +109,12 @@ assertHelpOptions('doctor auth', doctorAuthHelp, ['--format']);
 const major = Number(versionMatch[1]);
 const minor = Number(versionMatch[2]);
 const prerelease = versionMatch[4];
-const stableCompatible = major === 0 && minor === 5 && prerelease === undefined;
-const eligibleDevelopmentVersion = major === 0 && (minor < 5 || (minor === 5 && prerelease !== undefined));
+const stableCompatible = major === 0 && minor === 6 && prerelease === undefined;
+const eligibleDevelopmentVersion = major === 0 && (minor < 6 || (minor === 6 && prerelease !== undefined));
 if (!stableCompatible) {
   assert(
     allowDevelopmentVersion && eligibleDevelopmentVersion,
-    `CLI ${version} is outside the Skill range >=0.5.0 <0.6.0; update the Skill compatibility range before validating a later release line`
+    `CLI ${version} is outside the Skill range >=0.6.0 <0.7.0; update the Skill compatibility range before validating a later release line`
   );
   process.stdout.write(`Agent Skill valid for development CLI ${version}; required command contract is present.\n`);
 } else {

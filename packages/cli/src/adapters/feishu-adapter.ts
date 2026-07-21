@@ -1,5 +1,6 @@
 import type { FeishuBlock } from '../feishu/types.js';
 import type { PublishReceiptTarget } from '../receipts/publish-receipt.js';
+import type { DocxTransport } from 'feishu-docx-engine';
 
 export type RemoteMarkdown = {
   markdown: string;
@@ -52,6 +53,8 @@ export type RemoteBaseRecord = {
 };
 
 export type FeishuAdapter = {
+  readonly docxTransport?: DocxTransport;
+  setDocxEngineWhiteboardIdempotencyToken?(token?: string): void;
   resolveDocumentId?(input: { target: PublishReceiptTarget }): Promise<string>;
   resolveBaseUrl?(input: { url: string }): Promise<{ baseToken: string }>;
   fetchBaseTables?(input: { baseToken: string }): Promise<RemoteBaseTable[]>;

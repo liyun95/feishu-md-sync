@@ -28,6 +28,8 @@ Inspect `zdocRoundTrip` in status, diff, and publish dry-run output. Stop when `
 
 Also inspect receipt-recorded round-trip loss items. A repairable local-only table may plan an anchored native `table-create`, and a repairable remote-only duplicate paragraph may plan a delete. Review both operations and require collaboration-risk confirmation for the delete. After a partial write, an already-created native table may be preserved only when its locator, complete semantic content, and both baseline anchors still match exactly; this does not authorize another table creation. Any local drift, remote drift, ambiguous baseline divergence, or changed table anchor blocks the publish.
 
+Starting with CLI 0.6, physical Docx mutations and readback run through the shared `feishu-docx-engine`; the CLI still owns Markdown planning, approvals, receipts, and recovery checkpoints. Treat engine-backed nested lists, native tables, and Whiteboards as typed, separately verified mutation scopes. Review the exact nested parent/child tree and table anchors before writing, keep Whiteboard overwrite approval asset-specific, and stop on any engine preflight, readback, or partial-write evidence instead of retrying or falling back to document replacement.
+
 When a previous scoped create failed readback without writing a receipt, accept recovery only when the dry-run explicitly reports the exact completed-create prefix, an exact flattened desired-tree preorder plus the unchanged baseline suffix, an exact staged direct-create prefix, or one or more exact structured malformed-create groups plus that unchanged suffix. The malformed signature must include every created root and descendant block ID; it covers Markdown or composite XML insertion merging leading child paragraphs into list text, retaining nested list children, and omitting later paragraphs. Nested recovery writes must use explicit Docx child-block creation under returned parent IDs, with deterministic idempotency tokens and batch readback; do not review or authorize another composite Markdown/XML tree insertion. Review every partial/malformed/flat/suffix root scheduled for deletion. Confirm that resolved Feishu links are present in the desired child-block payload, and retain collaboration-risk and asset-specific Whiteboard confirmations. Any extra remote block, changed content/order/parent/child identity, local drift, or preflight anchor drift blocks recovery.
 
 ## Resolve The CLI
@@ -47,7 +49,7 @@ command -v lark-cli
 
 When the user supplies an external read-only sync config, set `FEISHU_MD_SYNC_CONFIG` to that exact file before every related status, diff, baseline, and publish command. Do not copy the config into the source repository or silently substitute another config.
 
-For PATH-based stable use, require `feishu-md-sync >=0.5.0 <0.6.0`. Stop and give the matching npm upgrade command when the version is outside this range or cannot be parsed.
+For PATH-based stable use, require `feishu-md-sync >=0.6.0 <0.7.0`. Stop and give the matching npm upgrade command when the version is outside this range or cannot be parsed.
 
 `FEISHU_MD_SYNC_BIN` explicitly selects an unreleased development build. If its package version is outside the stable range, continue only when all of these probes succeed:
 
