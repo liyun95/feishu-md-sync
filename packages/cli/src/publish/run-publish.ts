@@ -1553,6 +1553,7 @@ async function verifyScopedOperationReadback(input: {
 }
 
 function isTransientTableReadbackError(error: unknown): boolean {
+  if (isCheckpointReadTransientError(error)) return true;
   if (error && typeof error === 'object') {
     const details = (error as { details?: { retryable?: unknown } }).details;
     if (details?.retryable === true) return true;

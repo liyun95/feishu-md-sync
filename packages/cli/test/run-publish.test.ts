@@ -3146,6 +3146,69 @@ Next text.`, 'utf8');
     expect(staleReadbacks).toBe(0);
   });
 
+  it('retries a transient provider read failure after a successful table mutation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-table-provider-readback-retry-'));
+    const markdownPath = join(dir, 'doc.md');
+    const before = [['ef', 'Accuracy trade-off.']] as Array<[string, string]>;
+    const after = [
+      ['ef', 'Accuracy trade-off.'],
+      ['num_random_samplings', 'Initial random seed iterations.']
+    ] as Array<[string, string]>;
+    await writeFile(markdownPath, htmlParameterTable(after), 'utf8');
+    let mutated = false;
+    let transientReadFailures = 1;
+    let mutationCount = 0;
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => {
+        if (mutated && transientReadFailures > 0) {
+          transientReadFailures -= 1;
+          throw new CliFailure({
+            type: 'internal',
+            subtype: 'unknown',
+            message: 'An error occurred during processing. Check the input and retry',
+            retryable: false,
+            providerCode: 12330102
+          });
+        }
+        return {
+          markdown: markdownParameterTable(mutated ? after : before),
+          revision: mutated ? '2' : '1'
+        };
+      },
+      fetchDocBlocks: async () => ({
+        blocks: [
+          { block_id: 'doc_token', block_type: 1, children: ['table1'] },
+          ...feishuTableBlocks(mutated ? after : before, 'table1')
+        ]
+      }),
+      replaceDocument: async () => {},
+      replaceBlock: async () => {
+        mutationCount += 1;
+        mutated = true;
+        return { revision: '2' };
+      },
+      insertBlocksAfter: async () => {},
+      deleteBlocks: async () => {}
+    };
+
+    await expect(runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      confirmCollaborationRisk: true,
+      adapter
+    })).resolves.toMatchObject({ mode: 'write' });
+
+    expect(mutationCount).toBe(1);
+    expect(transientReadFailures).toBe(0);
+  });
+
   it('waits for a delayed table view, checkpoints its mutation revision, and continues with the next table', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fms-table-readback-stabilization-'));
     try {

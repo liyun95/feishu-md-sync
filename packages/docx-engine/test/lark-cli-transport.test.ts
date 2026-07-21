@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  createFeishuDocxEngine,
   LarkCliProviderError,
   LarkCliTransport,
   type DocxTransport,
@@ -16,6 +17,110 @@ type RecordedCall = {
 };
 
 describe('LarkCliTransport', () => {
+  it('verifies Code replacements when the blocks API omits language and caption metadata', async () => {
+    const calls: RecordedCall[] = [];
+    let revision = 1;
+    let content = 'print("old")';
+    let language = 'python';
+    let caption = 'Example';
+    const transport = createTransport(calls, async (args, input) => {
+      if (args[0] === 'docs' && args[1] === '+update') {
+        const xml = input?.stdin ?? '';
+        content = xml.match(/<code>([\s\S]*)<\/code>/)?.[1] ?? content;
+        language = xml.match(/lang="([^"]+)"/)?.[1] ?? language;
+        caption = xml.match(/caption="([^"]+)"/)?.[1] ?? caption;
+        revision += 1;
+        return json({ document: { revision_id: revision } });
+      }
+      if (args[0] === 'docs' && args[1] === '+fetch') {
+        return json({
+          document: {
+            revision_id: revision,
+            content: `<pre id="code1" lang="${language}" caption="${caption}"><code>${content}</code></pre>`,
+          },
+        });
+      }
+      if (args[2] === '/open-apis/docx/v1/documents/doc_token') {
+        return json({ document: { revision_id: revision } });
+      }
+      return json({
+        items: [
+          { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+          {
+            block_id: 'code1', parent_id: 'doc_token', block_type: 14,
+            code: {
+              elements: [{ text_run: { content, text_element_style: {} } }],
+              style: { wrap: false },
+            },
+          },
+        ],
+        has_more: false,
+      });
+    }, 'bot');
+    const engine = createFeishuDocxEngine({ transport });
+    const snapshot = await engine.snapshot({ kind: 'docx', token: 'doc_token' });
+    const code = snapshot.nodes.find((node) => node.blockId === 'code1')!;
+
+    await expect(engine.apply({
+      batch: engine.prepare({
+        snapshot,
+        operations: [{
+          operationId: 'replace-code',
+          kind: 'replace',
+          targetBlockId: 'code1',
+          expectedHash: code.canonicalHash,
+          desired: { kind: 'code', language: 'go', text: 'print("local")', caption: 'Example' },
+        }],
+        idempotencyNamespace: 'code-metadata-readback',
+      }),
+      journal: { recordVerified: async () => {} },
+    })).resolves.toMatchObject({
+      operations: [{ operationId: 'replace-code', verified: true }],
+    });
+    expect(calls.filter(({ args }) => args[0] === 'docs' && args[1] === '+fetch').map(({ args }) =>
+      args[args.indexOf('--revision-id') + 1]
+    )).toEqual(['1', '1', '1', '2']);
+  });
+
+  it('fails closed when full XML Code metadata is not from the pinned blocks revision', async () => {
+    const calls: RecordedCall[] = [];
+    const transport = createTransport(calls, async (args) => {
+      if (args[0] === 'docs' && args[1] === '+fetch') {
+        return json({
+          document: {
+            revision_id: 43,
+            content: '<pre id="code1" lang="python"><code>print(1)</code></pre>',
+          },
+        });
+      }
+      if (args[2] === '/open-apis/docx/v1/documents/doc_token') {
+        return json({ document: { revision_id: 42 } });
+      }
+      return json({
+        items: [
+          { block_id: 'doc_token', block_type: 1, children: ['code1'] },
+          {
+            block_id: 'code1', parent_id: 'doc_token', block_type: 14,
+            code: {
+              elements: [{ text_run: { content: 'print(1)', text_element_style: {} } }],
+              style: { wrap: false },
+            },
+          },
+        ],
+        has_more: false,
+      });
+    });
+
+    const failure = await transport.fetchBlocks('doc_token').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(LarkCliProviderError);
+    expect((failure as LarkCliProviderError).details).toMatchObject({
+      type: 'internal',
+      subtype: 'lark_cli_invalid_response',
+      message: 'lark-cli full XML readback returned revision 43; expected 42.',
+    });
+  });
+
   it('resolves direct docx selectors and docx URLs without invoking lark-cli', async () => {
     const calls: RecordedCall[] = [];
     const transport = createTransport(calls, async () => json({}));

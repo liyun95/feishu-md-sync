@@ -146,7 +146,10 @@ export class LarkCliTransport implements DocxTransport {
       pageToken = page.hasMore ? page.pageToken : undefined;
     } while (pageToken);
 
-    return { revision: documentRevision.revision, blocks };
+    const completeBlocks = blocks.some((block) => block.block_type === 14)
+      ? await this.enrichCodeMetadata(documentId, documentRevision, blocks)
+      : blocks;
+    return { revision: documentRevision.revision, blocks: completeBlocks };
   }
 
   replaceBlock(input: ProviderMutationInput): Promise<ProviderMutationResult> {
@@ -291,6 +294,54 @@ export class LarkCliTransport implements DocxTransport {
       'json',
     ], this.identity), input.format === 'xml' ? { stdin: input.content } : undefined));
     return { revision: revisionFromData(parsed.data) };
+  }
+
+  private async enrichCodeMetadata(
+    documentId: string,
+    documentRevision: { revision: string; parameter: string | number },
+    blocks: ProviderBlock[],
+  ): Promise<ProviderBlock[]> {
+    const parsed = parseLarkCliJson(await this.exec(withIdentity([
+      'docs',
+      '+fetch',
+      '--doc',
+      documentId,
+      '--doc-format',
+      'xml',
+      '--detail',
+      'full',
+      '--revision-id',
+      String(documentRevision.parameter),
+      '--format',
+      'json',
+    ], this.identity)));
+    const fetchedRevision = revisionFromData(parsed.data);
+    if (fetchedRevision !== documentRevision.revision) {
+      throw invalidResponseError(
+        `lark-cli full XML readback returned revision ${fetchedRevision ?? '<missing>'}; expected ${documentRevision.revision}.`,
+      );
+    }
+    const content = documentContentFromData(parsed.data);
+    if (content === undefined) {
+      throw invalidResponseError('lark-cli full XML readback did not return document.content.');
+    }
+    const metadata = codeMetadataFromXml(content);
+    return blocks.map((block) => {
+      if (block.block_type !== 14) return block;
+      const blockId = typeof block.block_id === 'string' ? block.block_id : undefined;
+      const codeMetadata = blockId ? metadata.get(blockId) : undefined;
+      if (!blockId || !codeMetadata) {
+        throw invalidResponseError(
+          `lark-cli full XML readback is missing Code metadata for ${blockId ?? '<missing block ID>'}.`,
+        );
+      }
+      const code = isRecord(block.code) ? block.code : {};
+      const style = isRecord(code.style) ? { ...code.style } : {};
+      style.language = codeMetadata.language;
+      if (codeMetadata.caption === undefined) delete style.caption;
+      else style.caption = codeMetadata.caption;
+      return { ...block, code: { ...code, style } };
+    });
   }
 }
 
@@ -467,6 +518,50 @@ function documentRevisionFromData(data: unknown): {
     revision: String(revision),
     parameter: revision,
   };
+}
+
+function documentContentFromData(data: unknown): string | undefined {
+  if (!isRecord(data)) return undefined;
+  if (typeof data.content === 'string') return data.content;
+  return isRecord(data.document) && typeof data.document.content === 'string'
+    ? data.document.content
+    : undefined;
+}
+
+function codeMetadataFromXml(xml: string): Map<string, { language: string; caption?: string }> {
+  const metadata = new Map<string, { language: string; caption?: string }>();
+  for (const match of xml.matchAll(/<pre\b([^>]*)>/gi)) {
+    const attributes = parseXmlAttributes(match[1] ?? '');
+    const blockId = attributes.id;
+    const language = attributes.lang;
+    if (!blockId || !language) continue;
+    if (metadata.has(blockId)) {
+      throw invalidResponseError(`lark-cli full XML readback repeated Code block ID ${blockId}.`);
+    }
+    metadata.set(blockId, {
+      language,
+      ...(attributes.caption !== undefined ? { caption: attributes.caption.replace(/\n+$/g, '') } : {}),
+    });
+  }
+  return metadata;
+}
+
+function parseXmlAttributes(source: string): Record<string, string> {
+  return Object.fromEntries([...source.matchAll(/([A-Za-z_:][\w:.-]*)="([^"]*)"/g)].map((match) => [
+    match[1]!,
+    decodeXmlEntities(match[2] ?? ''),
+  ]));
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/g, (_match, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 function invalidResponseError(message: string): LarkCliProviderError {
