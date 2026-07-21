@@ -1,4 +1,4 @@
-import type { DesiredNode, InlineContent } from './model.js';
+import type { DesiredNode, InlineContent, PreparedProviderBlock } from './model.js';
 import type { ProviderBlock } from './transport.js';
 
 type NonTableDesiredNode = Exclude<DesiredNode, { kind: 'table' }>;
@@ -232,6 +232,112 @@ export function tableToXml(table: TableNode): string {
     throw new Error('table must contain at least one row and one column');
   }
   return `<table>${headerXml}${bodyXml}</table>`;
+}
+
+export function providerBlocksToXml(blocks: PreparedProviderBlock[]): string {
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    throw new Error('Provider XML encoding requires at least one block');
+  }
+  const output: string[] = [];
+  for (let index = 0; index < blocks.length;) {
+    const block = blocks[index]!;
+    if (block.block_type === BLOCK_TYPE.bullet || block.block_type === BLOCK_TYPE.ordered) {
+      const listType = block.block_type;
+      const items: string[] = [];
+      while (index < blocks.length && blocks[index]!.block_type === listType) {
+        items.push(`<li>${providerInlineToXml(blocks[index]!, listType === BLOCK_TYPE.bullet ? 'bullet' : 'ordered')}</li>`);
+        index += 1;
+      }
+      output.push(`<${listType === BLOCK_TYPE.bullet ? 'ul' : 'ol'}>${items.join('')}</${listType === BLOCK_TYPE.bullet ? 'ul' : 'ol'}>`);
+      continue;
+    }
+    output.push(providerBlockToXml(block));
+    index += 1;
+  }
+  return output.join('');
+}
+
+function providerBlockToXml(block: PreparedProviderBlock): string {
+  const type = block.block_type;
+  if (type === BLOCK_TYPE.page) return `<p>${providerInlineToXml(block, 'page')}</p>`;
+  if (type === BLOCK_TYPE.text) return `<p>${providerInlineToXml(block, 'text')}</p>`;
+  if (type >= BLOCK_TYPE.heading1 && type <= BLOCK_TYPE.heading1 + 5) {
+    const level = type - BLOCK_TYPE.heading1 + 1;
+    return `<h${level}>${providerInlineToXml(block, `heading${level}`)}</h${level}>`;
+  }
+  if (type === BLOCK_TYPE.code) {
+    const code = asRecord(block.code);
+    const style = asRecord(code?.style);
+    const language = codeLanguageName(style?.language);
+    const caption = typeof style?.caption === 'string'
+      ? ` caption="${escapeXmlAttribute(style.caption)}"`
+      : '';
+    return `<pre lang="${escapeXmlAttribute(language)}"${caption}><code>${escapeXmlText(
+      providerInlineText(block, 'code'),
+    )}</code></pre>`;
+  }
+  if (type === BLOCK_TYPE.quote) {
+    return `<blockquote><p>${providerInlineToXml(block, 'quote')}</p></blockquote>`;
+  }
+  throw new Error(`Provider block type ${type} cannot be encoded as lossless Docx XML`);
+}
+
+function providerInlineToXml(block: PreparedProviderBlock, key: string): string {
+  const payload = asRecord(block[key]);
+  const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+  return elements.map((value, index) => {
+    const element = asRecord(value);
+    const run = asRecord(element?.text_run);
+    if (!run || typeof run.content !== 'string') {
+      throw new Error(`${key}.elements[${index}] is not a supported text run`);
+    }
+    const style = asRecord(run.text_element_style);
+    const link = asRecord(style?.link);
+    let content = escapeXmlText(run.content);
+    if (style?.inline_code === true) content = `<code>${content}</code>`;
+    if (style?.underline === true) content = `<u>${content}</u>`;
+    if (style?.strikethrough === true) content = `<del>${content}</del>`;
+    if (style?.italic === true) content = `<em>${content}</em>`;
+    if (style?.bold === true) content = `<b>${content}</b>`;
+    if (typeof link?.url === 'string') {
+      content = `<a href="${escapeXmlAttribute(absoluteLinkUrl(link.url))}">${content}</a>`;
+    }
+    return content;
+  }).join('');
+}
+
+function providerInlineText(block: PreparedProviderBlock, key: string): string {
+  const payload = asRecord(block[key]);
+  const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+  return elements.map((value, index) => {
+    const run = asRecord(asRecord(value)?.text_run);
+    if (!run || typeof run.content !== 'string') {
+      throw new Error(`${key}.elements[${index}] is not a supported text run`);
+    }
+    return run.content;
+  }).join('');
+}
+
+function codeLanguageName(value: unknown): string {
+  if (typeof value === 'string') return value;
+  const entry = Object.entries(CODE_LANGUAGE_IDS).find(([, id]) => id === value);
+  if (!entry && value === 50) return 'python';
+  if (!entry) throw new Error(`unsupported Feishu Code block language ID: ${String(value)}`);
+  return entry[0];
+}
+
+function escapeXmlText(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
+function escapeXmlAttribute(value: string): string {
+  return escapeXmlText(value).replaceAll('"', '&quot;').replaceAll("'", '&apos;');
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function textBlock(

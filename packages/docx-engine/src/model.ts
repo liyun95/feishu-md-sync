@@ -334,10 +334,10 @@ export interface FeishuDocxEngine {
 export class PartialMutationError extends Error {
   readonly evidence: PartialMutationEvidence;
 
-  constructor(evidence: PartialMutationEvidence) {
+  constructor(evidence: PartialMutationEvidence, options: { cause?: unknown } = {}) {
     super(
       `Mutation batch partially failed at ${evidence.failedOperation.kind}: ${evidence.failedOperation.message}`,
-      { cause: evidence.failedOperation.cause },
+      { cause: options.cause ?? evidence.failedOperation.cause },
     );
     this.name = 'PartialMutationError';
     this.evidence = evidence;

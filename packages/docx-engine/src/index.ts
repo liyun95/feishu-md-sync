@@ -6,7 +6,12 @@ export const ENGINE_CAPABILITIES = [
 ] as const;
 
 export { canonicalHash } from './hash.js';
-export { calloutToXml, tableToXml, toProviderBlock, toProviderTree } from './codec.js';
+export {
+  createFeishuDocxEngine,
+  EngineExecutionError,
+  type EngineExecutionErrorCode,
+} from './apply.js';
+export { calloutToXml, providerBlocksToXml, tableToXml, toProviderBlock, toProviderTree } from './codec.js';
 export {
   ENGINE_SCHEMA_VERSION,
   ENGINE_VERSION,
