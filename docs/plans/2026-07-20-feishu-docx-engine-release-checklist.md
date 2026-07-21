@@ -22,8 +22,8 @@ Local candidate tarballs were generated in a disposable `/tmp` directory. Repack
 
 | Package | npm shasum (SHA-1) | SHA-256 | npm integrity |
 | --- | --- | --- | --- |
-| `feishu-docx-engine@0.1.0` | `8b6d496bde915c49b2d1b62903cc9549f408a2a5` | `a9b87aaabcd1cec2fab18f720e3e3fa1d0694e0841cc12670a88847a49e64472` | `sha512-3PyKs16Pk0JZrwWmN+jtZmZCctpGJhqvq8S4fPUjjvop+NgC4mm4z2sFMW+GLz7Z5t+V82rWxWAu7hozAU0aRg==` |
-| `feishu-md-sync@0.6.0` | `9082b0aed49088faa02bd416784b1acd1409a8c4` | `a78a761721d35aa440707d97b5185e9aeb5ea9291d1e9fd4aeefa8e3ed70f187` | `sha512-QkI6TCHjKoNWrNggYz9rxPoBXxAGZL4Nqou6MGSoSMUrxtPrs/NdVl2SW+B/W7LDj5RSYvCv6b2rh286aVvzlQ==` |
+| `feishu-docx-engine@0.1.0` | `0b338a2135c5766912adbbae05bbd28dbe549e1d` | `70c4c2e7aeaa0360b25a79b84e46fed072f1890e383e02bc4e0ab2213d6b9943` | `sha512-a7yCxKX7mxEpjtzjvUHnl0CMA5FeLKd425iSiLd9tliakkeImjHq1WM6TocFsGKWlvAJyH3y/znw3rO56H8kbw==` |
+| `feishu-md-sync@0.6.0` | `77805ac0bbb0f1b59c8151f643dc437c39927565` | `8db286cfba746215038e76c7aca1644e3e83f9f72f41908265fe4dd7c03f5723` | `sha512-xL1Gpb64zt178eHo5l0RiYE/ZxVxZFLsz6apKF5P15s21ypR+lPXP7DSpI3Fyk3O+JjGbL9EWT8YikWYAxecrA==` |
 
 ## Hard pre-publish blockers discovered
 
@@ -90,8 +90,8 @@ The repository does not currently pin an `actionlint` binary or action. `scripts
 Observed local result on 2026-07-21:
 
 - `npm ci`, build, root typecheck, and `git diff --check`: passed.
-- Engine tests: 181 passed; coverage 88.48% statements, 78.01% branches, 98.38% functions, 88.48% lines.
-- CLI tests: 720 passed and 11 live tests skipped; coverage 87.65% statements, 82.31% branches, 95.47% functions, 87.65% lines.
+- Engine tests: 186 passed; coverage 88.60% statements, 77.85% branches, 98.40% functions, 88.60% lines.
+- CLI tests: 729 passed and 11 live tests skipped; coverage 87.70% statements, 82.38% branches, 95.47% functions, 87.70% lines.
 - Package smokes, release Skill validator/install smoke, Skill tree hash regression, docs build, structured workflow/manifest test, and workflow YAML parse: passed.
 - The strengthened live assertions compile and are discovered as nine skipped tests across the two targeted live files when their explicit environment gates are absent.
 - `npm audit`: six development-tool findings (2 moderate, 2 high, 2 critical) in Vitest/Vite/VitePress dependency paths; `npm audit --omit=dev` reports zero production vulnerabilities. Do not apply an automatic audit fix during release preparation; review upgrades separately.

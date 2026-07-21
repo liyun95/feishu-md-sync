@@ -5,14 +5,14 @@
   "cli": {
     "name": "feishu-md-sync",
     "version": "0.6.0",
-    "integrity": "sha512-QkI6TCHjKoNWrNggYz9rxPoBXxAGZL4Nqou6MGSoSMUrxtPrs/NdVl2SW+B/W7LDj5RSYvCv6b2rh286aVvzlQ==",
-    "sha256": "a78a761721d35aa440707d97b5185e9aeb5ea9291d1e9fd4aeefa8e3ed70f187"
+    "integrity": "sha512-xL1Gpb64zt178eHo5l0RiYE/ZxVxZFLsz6apKF5P15s21ypR+lPXP7DSpI3Fyk3O+JjGbL9EWT8YikWYAxecrA==",
+    "sha256": "8db286cfba746215038e76c7aca1644e3e83f9f72f41908265fe4dd7c03f5723"
   },
   "engine": {
     "name": "feishu-docx-engine",
     "version": "0.1.0",
-    "integrity": "sha512-3PyKs16Pk0JZrwWmN+jtZmZCctpGJhqvq8S4fPUjjvop+NgC4mm4z2sFMW+GLz7Z5t+V82rWxWAu7hozAU0aRg==",
-    "sha256": "a9b87aaabcd1cec2fab18f720e3e3fa1d0694e0841cc12670a88847a49e64472",
+    "integrity": "sha512-a7yCxKX7mxEpjtzjvUHnl0CMA5FeLKd425iSiLd9tliakkeImjHq1WM6TocFsGKWlvAJyH3y/znw3rO56H8kbw==",
+    "sha256": "70c4c2e7aeaa0360b25a79b84e46fed072f1890e383e02bc4e0ab2213d6b9943",
     "provenance": {
       "tag": "v0.6.0",
       "ref": "refs/tags/v0.6.0",
