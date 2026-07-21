@@ -306,7 +306,7 @@ describe.skipIf(!runLive)('live Feishu publish', () => {
     }
   }, 180_000);
 
-  it.only('round-trips Code content, language, captions, movement, conflicts, and deletion', async () => {
+  it('round-trips Code content, language, captions, movement, conflicts, and deletion', async () => {
     const target = requiredEnv('FEISHU_MD_SYNC_TEST_DOC');
     const targetIdentity = parseFeishuTarget(target);
     const cwd = new URL('..', import.meta.url).pathname;
