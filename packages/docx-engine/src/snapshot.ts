@@ -343,10 +343,8 @@ function requireBlockId(block: ProviderBlock, location: string): string {
 }
 
 function optionalBlockId(value: unknown, location: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !value) {
-    throw new Error(`${location} must be a non-empty string when present.`);
-  }
+  if (value === undefined || value === '') return undefined;
+  if (typeof value !== 'string') throw new Error(`${location} must be a string when present.`);
   return value;
 }
 

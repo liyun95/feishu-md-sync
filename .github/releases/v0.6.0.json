@@ -11,8 +11,8 @@
   "engine": {
     "name": "feishu-docx-engine",
     "version": "0.1.0",
-    "integrity": "sha512-mZQiuocd2JL8xV1xTGzqcvM+m7MNtG+VQSJTWFKGiuUxX136i0AuqGRVVk+WOnHWlMX7wiFB2qvZ3YQe+K8PTg==",
-    "sha256": "b2ed0af542da1412e71b7f31d9f65e70e4e9325b744126035e7e9d6b4458c1d5",
+    "integrity": "sha512-3PyKs16Pk0JZrwWmN+jtZmZCctpGJhqvq8S4fPUjjvop+NgC4mm4z2sFMW+GLz7Z5t+V82rWxWAu7hozAU0aRg==",
+    "sha256": "a9b87aaabcd1cec2fab18f720e3e3fa1d0694e0841cc12670a88847a49e64472",
     "provenance": {
       "tag": "v0.6.0",
       "ref": "refs/tags/v0.6.0",

@@ -11,6 +11,38 @@ const fixture = JSON.parse(readFileSync(
 )) as ProviderBlock[];
 
 describe('createDocumentSnapshot', () => {
+  it('treats a real provider page root parent_id empty string as no parent', () => {
+    const snapshot = snapshotFrom([
+      { block_id: 'doc', parent_id: '', block_type: 1, children: ['child'] },
+      { block_id: 'child', parent_id: 'doc', block_type: 2, text: { elements: [] } },
+    ]);
+
+    expect(snapshot.rootBlockId).toBe('doc');
+    expect(snapshot.nodes[0]).toMatchObject({ blockId: 'doc', childBlockIds: ['child'] });
+    expect(snapshot.nodes[0]).not.toHaveProperty('parentBlockId');
+  });
+
+  it('derives direct-child parents from root references when declarations are empty or missing', () => {
+    const snapshot = snapshotFrom([
+      { block_id: 'doc', parent_id: '', block_type: 1, children: ['empty-parent', 'missing-parent'] },
+      { block_id: 'empty-parent', parent_id: '', block_type: 2, text: { elements: [] } },
+      { block_id: 'missing-parent', block_type: 2, text: { elements: [] } },
+    ]);
+
+    expect(snapshot.nodes.map(({ blockId, parentBlockId }) => ({ blockId, parentBlockId }))).toEqual([
+      { blockId: 'doc', parentBlockId: undefined },
+      { blockId: 'empty-parent', parentBlockId: 'doc' },
+      { blockId: 'missing-parent', parentBlockId: 'doc' },
+    ]);
+  });
+
+  it('still rejects a conflicting non-empty declared parent', () => {
+    expect(() => snapshotFrom([
+      { block_id: 'doc', parent_id: '', block_type: 1, children: ['child'] },
+      { block_id: 'child', parent_id: 'different-parent', block_type: 2, text: { elements: [] } },
+    ])).toThrow('Block child declares parent different-parent but is referenced by doc.');
+  });
+
   it('normalizes referenced and embedded children into one ordered hierarchy', () => {
     const snapshot = snapshotFrom(fixture);
 

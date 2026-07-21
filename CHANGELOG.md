@@ -19,6 +19,10 @@ All notable changes to the published `feishu-md-sync` package are documented her
 - Install the tagged Agent Skill and released CLI in isolated locations after publication, compare the installed Skill tree hash with the tagged checkout, and validate their compatibility together.
 - Update the version-matched Agent Skill to require `feishu-md-sync >=0.6.0 <0.7.0` and document engine-backed nested-list, native-table, and Whiteboard safety boundaries.
 
+### Fixed
+
+- Accept the official provider's empty `parent_id` sentinel on page roots and directly referenced children while preserving fail-closed checks for every non-empty conflicting parent declaration.
+
 ## [0.5.0] - 2026-07-20
 
 ### Added

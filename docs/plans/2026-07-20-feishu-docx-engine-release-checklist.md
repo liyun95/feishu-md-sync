@@ -22,7 +22,7 @@ Local candidate tarballs were generated in a disposable `/tmp` directory. Repack
 
 | Package | npm shasum (SHA-1) | SHA-256 | npm integrity |
 | --- | --- | --- | --- |
-| `feishu-docx-engine@0.1.0` | `65affb2bdc25da60b2f8f0d242f989f9bec58389` | `b2ed0af542da1412e71b7f31d9f65e70e4e9325b744126035e7e9d6b4458c1d5` | `sha512-mZQiuocd2JL8xV1xTGzqcvM+m7MNtG+VQSJTWFKGiuUxX136i0AuqGRVVk+WOnHWlMX7wiFB2qvZ3YQe+K8PTg==` |
+| `feishu-docx-engine@0.1.0` | `8b6d496bde915c49b2d1b62903cc9549f408a2a5` | `a9b87aaabcd1cec2fab18f720e3e3fa1d0694e0841cc12670a88847a49e64472` | `sha512-3PyKs16Pk0JZrwWmN+jtZmZCctpGJhqvq8S4fPUjjvop+NgC4mm4z2sFMW+GLz7Z5t+V82rWxWAu7hozAU0aRg==` |
 | `feishu-md-sync@0.6.0` | `9082b0aed49088faa02bd416784b1acd1409a8c4` | `a78a761721d35aa440707d97b5185e9aeb5ea9291d1e9fd4aeefa8e3ed70f187` | `sha512-QkI6TCHjKoNWrNggYz9rxPoBXxAGZL4Nqou6MGSoSMUrxtPrs/NdVl2SW+B/W7LDj5RSYvCv6b2rh286aVvzlQ==` |
 
 ## Hard pre-publish blockers discovered
