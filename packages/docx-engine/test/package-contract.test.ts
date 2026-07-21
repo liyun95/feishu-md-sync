@@ -10,9 +10,21 @@ interface RootPackage {
   scripts: Record<string, string>;
 }
 
+interface EnginePackage {
+  scripts: Record<string, string>;
+  devDependencies: Record<string, string>;
+}
+
 const rootPackage = JSON.parse(
   readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
 ) as RootPackage;
+const enginePackage = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+) as EnginePackage;
+const engineVitestConfig = readFileSync(
+  new URL('../vitest.config.ts', import.meta.url),
+  'utf8',
+);
 
 describe('package contract', () => {
   it('exports stable engine identity', () => {
@@ -46,6 +58,26 @@ describe('package contract', () => {
     expect(rootPackage.scripts.test).toBe(
       'npm run test:engine && npm run test:cli',
     );
+
+    expect(enginePackage.scripts['test:coverage']).toBe(
+      'vitest run --coverage',
+    );
+    expect(enginePackage.devDependencies['@vitest/coverage-v8']).toBe('^3.2.4');
+    expect(rootPackage.scripts['test:coverage:engine']).toBe(
+      'npm run test:coverage --workspace=feishu-docx-engine',
+    );
+    expect(rootPackage.scripts['test:coverage:cli']).toBe(
+      'npm run test:coverage --workspace=feishu-md-sync',
+    );
+    expect(rootPackage.scripts['test:coverage']).toBe(
+      'npm run test:coverage:engine && npm run test:coverage:cli',
+    );
+    expect(engineVitestConfig).toContain("include: ['src/**/*.ts']");
+    expect(engineVitestConfig).toContain("exclude: ['src/transport.ts']");
+    expect(engineVitestConfig).toContain('lines: 80');
+    expect(engineVitestConfig).toContain('functions: 80');
+    expect(engineVitestConfig).toContain('branches: 75');
+    expect(engineVitestConfig).toContain('statements: 80');
 
     expect(rootPackage.scripts['typecheck:engine']).toBe(
       'npm run typecheck --workspace=feishu-docx-engine',

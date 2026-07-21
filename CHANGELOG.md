@@ -4,6 +4,15 @@ All notable changes to the published `feishu-md-sync` package are documented her
 
 ## Unreleased
 
+### Added
+
+- Add the separately versioned `feishu-docx-engine` package with typed snapshots, deterministic mutation batches, nested-list and native-table creation, Whiteboard mutation, verified readback, and partial-write recovery evidence.
+
+### Changed
+
+- Route scoped Docx writes through the shared engine while keeping Markdown planning, confirmations, Base resolution, receipts, and CLI JSON contracts in `feishu-md-sync`.
+- Pin the CLI package to `feishu-docx-engine` 0.1.0 and add consumer smoke tests that install both generated tarballs before exercising runtime exports, public types, `--version`, and `publish --help`.
+
 ## [0.5.0] - 2026-07-20
 
 ### Added

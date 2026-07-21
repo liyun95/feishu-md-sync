@@ -188,6 +188,12 @@ describe('LarkCliAdapter', () => {
       identity: 'bot',
       exec: async (args) => {
         calls.push(args);
+        if (args[2] === '/open-apis/docx/v1/documents/doc_token') {
+          return {
+            stdout: JSON.stringify({ ok: true, data: { document: { revision_id: 9 } } }),
+            stderr: ''
+          };
+        }
         const params = JSON.parse(args[args.indexOf('--params') + 1]) as { page_token?: string };
         if (!params.page_token) {
           return {
@@ -225,9 +231,7 @@ describe('LarkCliAdapter', () => {
       [
         'api',
         'GET',
-        '/open-apis/docx/v1/documents/doc_token/blocks',
-        '--params',
-        '{"page_size":500,"document_revision_id":-1}',
+        '/open-apis/docx/v1/documents/doc_token',
         '--format',
         'json',
         '--as',
@@ -238,7 +242,18 @@ describe('LarkCliAdapter', () => {
         'GET',
         '/open-apis/docx/v1/documents/doc_token/blocks',
         '--params',
-        '{"page_size":500,"document_revision_id":-1,"page_token":"next"}',
+        '{"page_size":500,"document_revision_id":9}',
+        '--format',
+        'json',
+        '--as',
+        'bot'
+      ],
+      [
+        'api',
+        'GET',
+        '/open-apis/docx/v1/documents/doc_token/blocks',
+        '--params',
+        '{"page_size":500,"document_revision_id":9,"page_token":"next"}',
         '--format',
         'json',
         '--as',
@@ -612,7 +627,7 @@ describe('LarkCliAdapter', () => {
     });
   });
 
-  it('replaces an image block with an inline SVG Whiteboard and returns its identity', async () => {
+  it('exposes Whiteboard replacement through the shared Docx transport', async () => {
     const calls: Array<{ args: string[]; stdin?: string }> = [];
     const adapter = new LarkCliAdapter({
       identity: 'user',
@@ -632,11 +647,12 @@ describe('LarkCliAdapter', () => {
       }
     });
 
-    await expect(adapter.replaceImageWithWhiteboard({
-      doc: 'doc_token',
+    await expect(adapter.docxTransport.replaceBlock({
+      documentId: 'doc_token',
       blockId: 'image_block',
-      svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
-    })).resolves.toEqual({ blockId: 'wb_block', whiteboardToken: 'wb_token' });
+      content: '<whiteboard type="svg"><svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg></whiteboard>',
+      format: 'xml'
+    })).resolves.toEqual({});
     expect(calls).toEqual([{
       args: [
         'docs', '+update', '--doc', 'doc_token', '--command', 'block_replace', '--block-id', 'image_block',
@@ -768,30 +784,6 @@ describe('LarkCliAdapter', () => {
     }]);
   });
 
-  it('rejects ambiguous Whiteboard identities returned by document update', async () => {
-    const adapter = new LarkCliAdapter({
-      exec: async () => ({
-        stdout: JSON.stringify({
-          ok: true,
-          data: {
-            document: {
-              new_blocks: [
-                { block_id: 'wb1', block_type: 'whiteboard', block_token: 'token1' },
-                { block_id: 'wb2', block_type: 43, block_token: 'token2' }
-              ]
-            }
-          }
-        }),
-        stderr: ''
-      })
-    });
-
-    await expect(adapter.replaceImageWithWhiteboard({
-      doc: 'doc_token',
-      blockId: 'image_block',
-      svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
-    })).rejects.toThrow('lark-cli docs +update returned 2 Whiteboard blocks; expected exactly one');
-  });
 });
 
 function paginatedBaseAdapter(): LarkCliAdapter {

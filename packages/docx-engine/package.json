@@ -2,6 +2,16 @@
   "name": "feishu-docx-engine",
   "version": "0.1.0",
   "description": "Verified Feishu Docx snapshots, mutations, and recovery through lark-cli.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liyun95/feishu-md-sync.git",
+    "directory": "packages/docx-engine"
+  },
+  "homepage": "https://github.com/liyun95/feishu-md-sync#readme",
+  "bugs": {
+    "url": "https://github.com/liyun95/feishu-md-sync/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -19,15 +29,22 @@
   "engines": {
     "node": ">=20"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
     "build": "npm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:package": "npm run build && node scripts/package-smoke.mjs",
     "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^3.2.4",
     "typescript": "^5.7.2",
     "vitest": "^3.2.4"
   }
