@@ -1,5 +1,3 @@
-export const ENGINE_VERSION = '0.1.0';
-export const ENGINE_SCHEMA_VERSION = 1;
 export const ENGINE_CAPABILITIES = [
   'nested-list-create-v1',
   'native-table-create-v1',
@@ -9,6 +7,16 @@ export const ENGINE_CAPABILITIES = [
 
 export { canonicalHash } from './hash.js';
 export { calloutToXml, tableToXml, toProviderBlock, toProviderTree } from './codec.js';
+export {
+  ENGINE_SCHEMA_VERSION,
+  ENGINE_VERSION,
+  assertPreparedMutationBatchIntegrity,
+  MutationPreflightError,
+  preparedMutationBatchFingerprint,
+  prepareMutationBatch,
+  type MutationPreflightErrorCode,
+  type MutationPreflightErrorOptions,
+} from './prepare.js';
 export {
   createDocumentSnapshot,
   type CreateDocumentSnapshotInput,
@@ -37,7 +45,13 @@ export {
   type MutationJournal,
   type MutationOutcome,
   type PartialMutationEvidence,
+  type PreparedInsertSegment,
+  type PreparedMutationAction,
+  type PreparedMutationAssertions,
   type PreparedMutationBatch,
+  type PreparedPreflightAssertion,
+  type PreparedProviderBlock,
+  type PreparedReadbackAssertion,
   type PreparedMutationStep,
   type PrepareMutationInput,
   type RecoveryAssessment,

@@ -115,11 +115,138 @@ export type MutationIntent =
         | { kind: 'svg'; value: string };
     };
 
+export interface PreparedProviderBlock {
+  block_type: number;
+  [key: string]: unknown;
+}
+
+export type PreparedInsertSegment =
+  | {
+      kind: 'provider-blocks';
+      desiredIndex: number;
+      blocks: PreparedProviderBlock[];
+    }
+  | {
+      kind: 'xml';
+      desiredIndex: number;
+      nodeKind: 'table' | 'callout';
+      xml: string;
+    };
+
+export type PreparedMutationAction =
+  | {
+      kind: 'replace-provider-block';
+      targetBlockId: string;
+      block: PreparedProviderBlock;
+    }
+  | {
+      kind: 'replace-provider-blocks';
+      targetBlockId: string;
+      blocks: PreparedProviderBlock[];
+    }
+  | {
+      kind: 'replace-xml';
+      targetBlockId: string;
+      nodeKind: 'table' | 'callout';
+      xml: string;
+    }
+  | {
+      kind: 'insert-segments';
+      parentBlockId: string;
+      insertAfterBlockId: string;
+      insertBeforeBlockId?: string;
+      segments: PreparedInsertSegment[];
+    }
+  | { kind: 'delete-blocks'; parentBlockId: string; blockIds: string[] }
+  | {
+      kind: 'move-blocks';
+      parentBlockId: string;
+      blockIds: string[];
+      insertAfterBlockId: string;
+    }
+  | { kind: 'assert-node'; blockId: string }
+  | {
+      kind: 'overwrite-whiteboard';
+      targetBlockId: string;
+      targetToken: string;
+      desired: Extract<MutationIntent, { kind: 'whiteboard-overwrite' }>['desired'];
+    }
+  | { kind: 'replace-image-with-svg'; targetBlockId: string; svg: string };
+
+export type PreparedPreflightAssertion =
+  | { kind: 'target-hash'; blockId: string; expectedHash: string }
+  | {
+      kind: 'target-type';
+      blockId: string;
+      expectedKind: SnapshotNode['kind'];
+      expectedBlockType: number;
+    }
+  | { kind: 'block-parent'; blockId: string; expectedParentBlockId: string }
+  | {
+      kind: 'parent-children';
+      parentBlockId: string;
+      expectedChildBlockIds: string[];
+    }
+  | {
+      kind: 'sibling-boundary';
+      parentBlockId: string;
+      precedingBlockId: string;
+      followingBlockId?: string;
+      blockIds: string[];
+    }
+  | {
+      kind: 'insertion-boundary';
+      parentBlockId: string;
+      precedingBlockId: string;
+      followingBlockId?: string;
+    }
+  | {
+      kind: 'resource-token';
+      blockId: string;
+      resourceKind: 'whiteboard';
+      expectedToken: string;
+    };
+
+export type PreparedReadbackAssertion =
+  | { kind: 'desired-node'; targetBlockId: string; desiredHash: string }
+  | {
+      kind: 'inserted-desired';
+      parentBlockId: string;
+      precedingBlockId: string;
+      followingBlockId?: string;
+      desiredHash: string;
+    }
+  | { kind: 'blocks-absent'; blockIds: string[] }
+  | {
+      kind: 'sibling-order';
+      parentBlockId: string;
+      expectedChildBlockIds: string[];
+    }
+  | { kind: 'node-hash'; blockId: string; expectedHash: string }
+  | {
+      kind: 'whiteboard-content';
+      targetBlockId: string;
+      targetToken: string;
+      desiredHash: string;
+    }
+  | {
+      kind: 'image-replaced-with-svg-whiteboard';
+      targetBlockId: string;
+      svgHash: string;
+    };
+
+export interface PreparedMutationAssertions {
+  preflight: PreparedPreflightAssertion[];
+  readback: PreparedReadbackAssertion[];
+}
+
 export interface PreparedMutationStep {
   operationId: string;
   kind: MutationIntent['kind'];
   idempotencyToken: string;
   intent: MutationIntent;
+  actions: PreparedMutationAction[];
+  assertions: PreparedMutationAssertions;
 }
 
 export interface PreparedMutationBatch {

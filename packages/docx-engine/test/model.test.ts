@@ -30,6 +30,8 @@ function preparedBatch(operations: MutationIntent[]): PreparedMutationBatch {
     kind: intent.kind,
     idempotencyToken: `namespace:${intent.operationId}`,
     intent,
+    actions: [{ kind: 'assert-node', blockId: intent.operationId }],
+    assertions: { preflight: [], readback: [] },
   }));
   const payload = {
     schemaVersion: 1 as const,
@@ -59,7 +61,7 @@ describe('typed mutation contract', () => {
     };
     const expected = createHash('sha256')
       .update(
-        '{"beforeSnapshotHash":"before-hash","documentId":"doc-1","engineVersion":"0.1.0","expectedRevision":"revision-1","schemaVersion":1,"steps":[{"idempotencyToken":"namespace:op-a","intent":{"desired":[{"content":[{"kind":"text","text":"op-a"}],"kind":"paragraph"}],"insertAfterBlockId":"anchor","kind":"insert","operationId":"op-a","parentBlockId":"root"},"kind":"insert","operationId":"op-a"},{"idempotencyToken":"namespace:op-b","intent":{"desired":[{"content":[{"kind":"text","text":"op-b"}],"kind":"paragraph"}],"insertAfterBlockId":"anchor","kind":"insert","operationId":"op-b","parentBlockId":"root"},"kind":"insert","operationId":"op-b"}]}',
+        '{"beforeSnapshotHash":"before-hash","documentId":"doc-1","engineVersion":"0.1.0","expectedRevision":"revision-1","schemaVersion":1,"steps":[{"actions":[{"blockId":"op-a","kind":"assert-node"}],"assertions":{"preflight":[],"readback":[]},"idempotencyToken":"namespace:op-a","intent":{"desired":[{"content":[{"kind":"text","text":"op-a"}],"kind":"paragraph"}],"insertAfterBlockId":"anchor","kind":"insert","operationId":"op-a","parentBlockId":"root"},"kind":"insert","operationId":"op-a"},{"actions":[{"blockId":"op-b","kind":"assert-node"}],"assertions":{"preflight":[],"readback":[]},"idempotencyToken":"namespace:op-b","intent":{"desired":[{"content":[{"kind":"text","text":"op-b"}],"kind":"paragraph"}],"insertAfterBlockId":"anchor","kind":"insert","operationId":"op-b","parentBlockId":"root"},"kind":"insert","operationId":"op-b"}]}',
       )
       .digest('hex');
 
