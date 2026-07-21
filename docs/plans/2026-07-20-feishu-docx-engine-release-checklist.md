@@ -229,8 +229,12 @@ feishu-md-sync@0.6.0      dist-tag latest=0.6.0
 Run from a clean checkout detached at the immutable `v0.6.0` tag after registry propagation. Keep the installed CLI and Skill in isolated temporary locations, and use `REPO_ROOT` for every tagged-checkout script path:
 
 ```bash
+set -euo pipefail
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+test -z "$(git status --porcelain)"
+test "$(git rev-parse --abbrev-ref HEAD)" = 'HEAD'
 test "$(git describe --tags --exact-match)" = 'v0.6.0'
-REPO_ROOT="$(pwd)"
 TEMP_HOME="$(mktemp -d)"
 CLI_PREFIX="$(mktemp -d)"
 npm view feishu-docx-engine@0.1.0 version dist.integrity dist.shasum dist-tags --json

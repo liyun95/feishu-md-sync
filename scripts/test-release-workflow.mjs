@@ -6,6 +6,11 @@ import { parse } from 'yaml';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const workflowPath = join(root, '.github', 'workflows', 'release.yml');
 const workflow = parse(readFileSync(workflowPath, 'utf8'));
+const readme = readFileSync(join(root, 'README.md'), 'utf8');
+const releaseChecklist = readFileSync(
+  join(root, 'docs', 'plans', '2026-07-20-feishu-docx-engine-release-checklist.md'),
+  'utf8',
+);
 const cli = readJson('packages/cli/package.json');
 const engine = readJson('packages/docx-engine/package.json');
 const manifest = readJson(`.github/releases/v${cli.version}.json`);
@@ -22,6 +27,36 @@ assert(publishJob.permissions?.['id-token'] === 'write', 'publish job must grant
 assert(Array.isArray(publishJob.steps), 'publish job steps must be an array');
 
 validateManifest(manifest, cli, engine);
+assert(
+  readme.includes('`feishu-md-sync` 0.6 uses `feishu-docx-engine'),
+  'README must describe the 0.6 engine dependency without release-candidate wording',
+);
+assert(
+  !/unreleased[^\n]*feishu-md-sync[^\n]*0\.6|feishu-md-sync[^\n]*0\.6[^\n]*unreleased/i.test(readme),
+  'README must not call feishu-md-sync 0.6 unreleased',
+);
+const taggedVerificationPreamble = `set -euo pipefail
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+test -z "$(git status --porcelain)"
+test "$(git rev-parse --abbrev-ref HEAD)" = 'HEAD'
+test "$(git describe --tags --exact-match)" = 'v0.6.0'`;
+assert(
+  releaseChecklist.includes(taggedVerificationPreamble),
+  'release checklist must fail fast from a clean checkout detached at the exact v0.6.0 tag',
+);
+for (const expected of [
+  'Run from a clean checkout detached at the immutable `v0.6.0` tag',
+  'TEMP_HOME="$(mktemp -d)"',
+  'CLI_PREFIX="$(mktemp -d)"',
+  'node "$REPO_ROOT/scripts/hash-skill-tree.mjs"',
+]) {
+  assert(releaseChecklist.includes(expected), `release checklist is missing tagged verification guard: ${expected}`);
+}
+assert(
+  !/Run in an empty directory after registry propagation/i.test(releaseChecklist),
+  'release checklist must not invoke checkout scripts from an empty directory',
+);
 const reusedEngineManifest = structuredClone(manifest);
 reusedEngineManifest.publishEngine = false;
 reusedEngineManifest.engine.provenance = {
