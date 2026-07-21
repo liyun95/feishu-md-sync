@@ -125,11 +125,20 @@ npm run dev -- diff packages/cli/test/fixtures/live/zdoc-engine-controlled.md \
 
 Save stdout, exit codes, target identity, document ID, revision, semantic hashes, operation summary, blockers, warnings, `zdocRoundTrip`, link resolution, and engine diagnostics. Confirm the controlled source remains blocker-free and the remote preserves its note Callout, nested continuation/list hierarchy, and native table semantics. These commands must not include `--write`, `--create`, or any `--confirm-*` flag.
 
-Current result: skipped because `CONTROLLED_DOC` is unset. Required input is one explicitly approved, non-production existing Feishu doc URL/token accessible to the configured identity.
+Observed controlled result on 2026-07-21:
+
+- `CONTROLLED_DOC=https://zilliverse.feishu.cn/docx/DiOjdMCpIocoayxEzQwcyppbn5M` is a dedicated non-production document in the approved Agent Drive folder.
+- Final document revision is `11`; the engine snapshot hash is `c7e56e0aa70099de5512e75af0909a0b6aaa756ced3606b2b0774e723eba82ee`.
+- The root child kinds are exactly `heading`, `paragraph`, `callout`, `heading`, `list`, `heading`, `table` in that order.
+- The note Callout contains the managed `Notes` title plus the expected body. The bullet item owns its continuation paragraph and ordered child. The native table is a verified unmerged 2-by-2 table with all four expected cell values.
+- The engine no-op live assertion passed without recording a mutation or changing the document revision/hash.
+- CLI `status` and `diff` exited `0` with no dialect, link, Callout, Code, table, Whiteboard, or scoped blockers. `zdocRoundTrip.safeToPublish` was `true` with only the expected `metadata-ignored` informational item.
+- CLI publish dry-run returned `strategy: no-op`, zero scoped operations, zero blockers, and zero warnings. It still reports untracked-remote and Callout-adoption confirmation requirements because this controlled document intentionally has no publish receipt; no confirmation flag or receipt adoption was applied for this read-only gate.
+- The textual diff remains nonempty because the official Markdown renderer flattens the nested-list continuation and renders the native table as GFM, while the source dialect retains the authoring HTML table. The block-tree and semantic planners agree that no remote mutation is needed.
 
 ## Exact live-write approval preview
 
-This command is not approved or executed by preparation. It creates a uniquely named document only inside a dedicated disposable Drive folder, writes one nested list plus one native table through `feishu-docx-engine`, verifies the exact block tree, then deletes that same returned docx token in `finally`.
+This command creates a uniquely named document only inside a dedicated disposable Drive folder, writes one nested list plus one native table through `feishu-docx-engine`, verifies the exact block tree, then deletes that same returned docx token in `finally`.
 
 Required isolated environment:
 
@@ -167,7 +176,7 @@ Isolation and cleanup policy:
 - If the process is interrupted before `finally`, locate only documents with the exact title prefix inside the dedicated test folder, review their returned IDs, and approve cleanup separately. Never broaden deletion to the parent folder.
 - A cleanup failure is a failed live gate. Record the disposable title and returned document ID; do not publish until the orphan is reviewed and removed.
 
-Current result: not executed. All three live-write gate variables are unset.
+Observed disposable live-write result on 2026-07-21: passed (`1` passed, `6` skipped). The nested list and native table matched the exact expected block tree and cell content, cleanup succeeded through the explicit bot identity, and no disposable document remained in the Agent folder.
 
 ## Registry and ownership preflight
 
