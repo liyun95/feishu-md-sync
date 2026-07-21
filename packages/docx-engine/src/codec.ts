@@ -300,7 +300,7 @@ function providerInlineToXml(block: PreparedProviderBlock, key: string): string 
     if (style?.italic === true) content = `<em>${content}</em>`;
     if (style?.bold === true) content = `<b>${content}</b>`;
     if (typeof link?.url === 'string') {
-      content = `<a href="${escapeXmlAttribute(absoluteLinkUrl(link.url))}">${content}</a>`;
+      content = `<a href="${escapeXmlAttribute(normalizeProviderLinkUrl(link.url))}">${content}</a>`;
     }
     return content;
   }).join('');
@@ -559,7 +559,7 @@ function inlineToXml(inline: InlineContent, location: string): string {
 
   if (inline.kind === 'code') return `<code>${escapeText(inline.text)}</code>`;
   if (inline.kind === 'link') {
-    const url = absoluteLinkUrl(inline.url);
+    const url = normalizeProviderLinkUrl(inline.url);
     return `<a href="${escapeAttribute(url)}">${escapeInlineText(inline.text)}</a>`;
   }
   if (inline.kind !== 'text') {
@@ -579,10 +579,10 @@ function inlineToXml(inline: InlineContent, location: string): string {
 }
 
 function providerLinkUrl(value: string): string {
-  return encodeURIComponent(absoluteLinkUrl(value));
+  return encodeURIComponent(normalizeProviderLinkUrl(value));
 }
 
-function absoluteLinkUrl(value: string): string {
+export function normalizeProviderLinkUrl(value: string): string {
   assertString(value, 'provider link URL');
   const direct = validHttpUrl(value);
   if (direct) return direct;

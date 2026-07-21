@@ -943,12 +943,8 @@ describe('verified mutation execution', () => {
     expect(entries.entries.map(({ operationId }) => operationId)).toEqual(['assert-a']);
   });
 
-  it('fails closed on nested lists, native tables, and Whiteboards before writing', async () => {
+  it('fails closed on native tables and Whiteboards before writing', async () => {
     const cases: MutationIntent[] = [
-      {
-        operationId: 'nested', kind: 'insert', parentBlockId: 'root', insertAfterBlockId: 'a',
-        desired: [{ kind: 'list', ordered: false, items: [{ content: [{ kind: 'text', text: 'root' }], children: [{ kind: 'list', ordered: false, items: [{ content: [{ kind: 'text', text: 'child' }], children: [] }] }] }] }],
-      },
       {
         operationId: 'table', kind: 'insert', parentBlockId: 'root', insertAfterBlockId: 'a',
         desired: [{ kind: 'table', rows: [{ cells: [{ content: [paragraph('cell')] }] }] }],

@@ -1,5 +1,5 @@
 import { canonicalHash } from './hash.js';
-import { providerBlocksToXml } from './codec.js';
+import { normalizeProviderLinkUrl, providerBlocksToXml } from './codec.js';
 import type {
   ApplyMutationInput,
   AssessRecoveryInput,
@@ -28,6 +28,10 @@ import {
   prepareMutationBatch,
 } from './prepare.js';
 import { createDocumentSnapshot } from './snapshot.js';
+import {
+  createVerifiedStructuredTree,
+  StructuredTreeProgressError,
+} from './structured-tree.js';
 import type { DocxTransport, ProviderBlock } from './transport.js';
 
 export type EngineExecutionErrorCode =
@@ -160,12 +164,14 @@ async function applyMutationBatch(
     let stepHasRemoteWrite = false;
     let latestProviderRevision: string | undefined;
     let reconciledReadback: DocumentSnapshot | undefined;
+    let stepHasVerifiedStructuredTree = false;
 
     try {
       for (const [actionIndex, action] of step.actions.entries()) {
         const result = await executeAction(
           transport,
           batch.documentId,
+          batch.fingerprint,
           step,
           action,
           actionIndex,
@@ -179,6 +185,7 @@ async function applyMutationBatch(
         appendUnique(stepCreatedBlockIds, result.createdBlockIds);
         appendUnique(resourceTokens, result.resourceTokens);
         if (result.snapshot) current = result.snapshot;
+        if (result.structuredTree) stepHasVerifiedStructuredTree = true;
       }
     } catch (cause) {
       const actionProgress = cause instanceof ActionProgressError ? cause : undefined;
@@ -208,6 +215,7 @@ async function applyMutationBatch(
             pendingSteps: batch.steps.slice(stepIndex + 1),
             createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
             latestProviderRevision,
+            recoveryDisposition: actionProgress.recoveryDisposition,
           });
         }
         if (sameSnapshot(before, observed)) {
@@ -221,6 +229,7 @@ async function applyMutationBatch(
               cause: actionProgress.cause ?? cause,
               pendingSteps: batch.steps.slice(stepIndex + 1),
               createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+              recoveryDisposition: actionProgress.recoveryDisposition,
             });
           }
           throw executionError(
@@ -247,6 +256,7 @@ async function applyMutationBatch(
             cause: verificationCause,
             pendingSteps: batch.steps.slice(stepIndex + 1),
             createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+            recoveryDisposition: actionProgress.recoveryDisposition,
           });
         }
       } else {
@@ -261,6 +271,7 @@ async function applyMutationBatch(
             pendingSteps: batch.steps.slice(stepIndex + 1),
             createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
             latestProviderRevision,
+            recoveryDisposition: actionProgress?.recoveryDisposition,
           });
         }
         throw executionError(
@@ -327,6 +338,9 @@ async function applyMutationBatch(
           cause,
           pendingSteps: batch.steps.slice(stepIndex + 1),
           createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+          recoveryDisposition: stepHasVerifiedStructuredTree
+            ? 'resume_possible'
+            : undefined,
         });
       }
       throw executionError(
@@ -575,8 +589,8 @@ function assertTaskSevenSupport(step: PreparedMutationStep): void {
   if (step.kind === 'whiteboard-overwrite') {
     unsupported('Whiteboard execution is reserved for the native-resource executor.');
   }
-  if (containsNestedList(step.intent)) {
-    unsupported('Recursive nested-list creation is not available in the ordinary mutation executor.');
+  if (containsNestedList(step.intent) && step.intent.kind !== 'insert') {
+    unsupported('Recursive nested-list replacement is not available in the ordinary mutation executor.');
   }
   for (const action of step.actions) {
     if (action.kind === 'replace-provider-blocks') {
@@ -593,13 +607,8 @@ function assertTaskSevenSupport(step: PreparedMutationStep): void {
     )) {
       unsupported('Native table execution is reserved for the native-resource executor.');
     }
-    if (
-      (action.kind === 'replace-provider-block' && hasProviderChildren(action.block)) ||
-      (action.kind === 'replace-provider-blocks' && action.blocks.some(hasProviderChildren)) ||
-      (action.kind === 'insert-segments' && action.segments.some(
-        (segment) => segment.kind === 'provider-blocks' && segment.blocks.some(hasProviderChildren),
-      ))
-    ) {
+    if ((action.kind === 'replace-provider-block' && hasProviderChildren(action.block)) ||
+      (action.kind === 'replace-provider-blocks' && action.blocks.some(hasProviderChildren))) {
       unsupported('Recursive provider-tree creation is not available in the ordinary mutation executor.');
     }
   }
@@ -611,6 +620,7 @@ type ActionResult = {
   resourceTokens: string[];
   providerRevision?: string;
   snapshot?: DocumentSnapshot;
+  structuredTree?: boolean;
 };
 
 class ActionProgressError extends Error {
@@ -620,6 +630,7 @@ class ActionProgressError extends Error {
   readonly phase: 'provider' | 'verification';
   readonly attempted: boolean;
   readonly providerRevision?: string;
+  readonly recoveryDisposition?: 'resume_possible' | 'manual_inspection_required';
 
   constructor(input: {
     cause: unknown;
@@ -629,6 +640,7 @@ class ActionProgressError extends Error {
     phase: 'provider' | 'verification';
     attempted: boolean;
     providerRevision?: string;
+    recoveryDisposition?: 'resume_possible' | 'manual_inspection_required';
   }) {
     super(input.cause instanceof Error ? input.cause.message : String(input.cause), { cause: input.cause });
     this.name = 'ActionProgressError';
@@ -638,6 +650,7 @@ class ActionProgressError extends Error {
     this.phase = input.phase;
     this.attempted = input.attempted;
     this.providerRevision = input.providerRevision;
+    this.recoveryDisposition = input.recoveryDisposition;
   }
 }
 
@@ -658,6 +671,7 @@ function attemptedProviderError(
 async function executeAction(
   transport: DocxTransport,
   documentId: string,
+  batchFingerprint: string,
   step: PreparedMutationStep,
   action: PreparedMutationAction,
   actionIndex: number,
@@ -726,7 +740,15 @@ async function executeAction(
       };
     }
     case 'insert-segments':
-      return executeInsertSegments(transport, documentId, step, action, actionIndex, current);
+      return executeInsertSegments(
+        transport,
+        documentId,
+        batchFingerprint,
+        step,
+        action,
+        actionIndex,
+        current,
+      );
     case 'delete-blocks':
       try {
         await transport.deleteBlocks({ documentId, blockIds: [...action.blockIds] });
@@ -758,6 +780,7 @@ async function executeAction(
 async function executeInsertSegments(
   transport: DocxTransport,
   documentId: string,
+  batchFingerprint: string,
   step: PreparedMutationStep,
   action: Extract<PreparedMutationAction, { kind: 'insert-segments' }>,
   actionIndex: number,
@@ -783,6 +806,52 @@ async function executeInsertSegments(
           throw new Error(`Insert anchor ${anchorBlockId} disappeared.`);
         }
         const index = rawAnchorIndex + 1;
+        if (segment.blocks.some(hasProviderChildren)) {
+          try {
+            const result = await createVerifiedStructuredTree({
+              transport,
+              documentId,
+              batchFingerprint,
+              operationId: step.operationId,
+              actionIndex,
+              segmentIndex,
+              parentBlockId: action.parentBlockId,
+              insertionIndex: index,
+              desiredTrees: structuredClone(segment.blocks) as ProviderBlock[],
+              operationBefore: segmentBefore,
+              currentSnapshot: snapshot,
+            });
+            wrote = true;
+            attempted = true;
+            snapshot = result.snapshot;
+            providerRevision = result.providerRevision ?? providerRevision;
+            appendUnique(createdBlockIds, result.createdBlockIds);
+            anchorBlockId = result.createdBlockIds.filter((blockId) =>
+              nodeIndex(snapshot).get(blockId)?.parentBlockId === action.parentBlockId
+            ).at(-1) ?? anchorBlockId;
+            phase = 'provider';
+            continue;
+          } catch (cause) {
+            if (cause instanceof StructuredTreeProgressError) {
+              throw new ActionProgressError({
+                cause: cause.cause ?? cause,
+                wrote: wrote || cause.wrote,
+                createdBlockIds: [
+                  ...createdBlockIds,
+                  ...cause.createdBlockIds.filter((blockId) => !createdBlockIds.includes(blockId)),
+                ],
+                lastSnapshot: cause.lastSnapshot,
+                phase: cause.phase,
+                attempted: cause.attempted,
+                ...(cause.providerRevision !== undefined
+                  ? { providerRevision: cause.providerRevision }
+                  : {}),
+                recoveryDisposition: cause.recoveryDisposition,
+              });
+            }
+            throw cause;
+          }
+        }
         attempted = true;
         const result = await transport.createChildren({
           documentId,
@@ -859,6 +928,7 @@ async function executeInsertSegments(
       phase = 'provider';
     }
   } catch (cause) {
+    if (cause instanceof ActionProgressError) throw cause;
     throw new ActionProgressError({
       cause,
       wrote,
@@ -874,6 +944,9 @@ async function executeInsertSegments(
     createdBlockIds,
     resourceTokens: [],
     snapshot,
+    structuredTree: action.segments.some(
+      (segment) => segment.kind === 'provider-blocks' && segment.blocks.some(hasProviderChildren),
+    ),
     ...(providerRevision !== undefined ? { providerRevision } : {}),
   };
 }
@@ -1427,7 +1500,9 @@ function decodeInline(rawBlock: Record<string, unknown>, key: string): InlineCon
     if (!run || typeof run.content !== 'string') return [];
     const style = asRecord(run.text_element_style);
     const link = asRecord(style?.link);
-    if (typeof link?.url === 'string') return [{ kind: 'link', text: run.content, url: link.url }];
+    if (typeof link?.url === 'string') {
+      return [{ kind: 'link', text: run.content, url: normalizeProviderLinkUrl(link.url) }];
+    }
     if (style?.inline_code === true) return [{ kind: 'code', text: run.content }];
     return [{
       kind: 'text',
@@ -1617,12 +1692,14 @@ function partialError(input: {
   pendingSteps: PreparedMutationStep[];
   createdBlockIds: string[];
   latestProviderRevision?: string;
+  recoveryDisposition?: 'resume_possible' | 'manual_inspection_required';
 }): PartialMutationError {
   const message = input.cause instanceof Error ? input.cause.message : String(input.cause);
   const evidence: PartialMutationEvidence = {
     batchFingerprint: input.batch.fingerprint,
     beforeSnapshotHash: input.batch.beforeSnapshotHash,
     lastObservedRevision: input.latestProviderRevision ?? input.current.revision,
+    lastObservedSnapshotHash: input.current.canonicalHash,
     completedOperations: structuredClone(input.completed),
     failedOperation: {
       operationId: input.failedStep.operationId,
@@ -1632,7 +1709,7 @@ function partialError(input: {
     },
     pendingOperationIds: input.pendingSteps.map(({ operationId }) => operationId),
     createdBlockIds: [...new Set(input.createdBlockIds)],
-    recoveryDisposition: 'manual_inspection_required',
+    recoveryDisposition: input.recoveryDisposition ?? 'manual_inspection_required',
   };
   return new PartialMutationError(deepFreeze(evidence), { cause: input.cause });
 }

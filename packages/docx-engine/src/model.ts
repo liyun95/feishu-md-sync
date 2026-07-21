@@ -281,6 +281,7 @@ export interface PartialMutationEvidence {
   batchFingerprint: string;
   beforeSnapshotHash: string;
   lastObservedRevision: string;
+  lastObservedSnapshotHash?: string;
   completedOperations: VerifiedOperationEvidence[];
   failedOperation: {
     operationId: string;
