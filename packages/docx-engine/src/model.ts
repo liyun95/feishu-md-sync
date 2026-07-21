@@ -263,9 +263,18 @@ export interface VerifiedOperationEvidence {
   operationId: string;
   createdBlockIds: string[];
   resourceTokens?: string[];
+  prewriteResourceEvidence?: ResourceStateEvidence[];
+  verifiedResourceEvidence?: ResourceStateEvidence[];
   revision: string;
   afterSnapshotHash: string;
   verified: true;
+}
+
+export interface ResourceStateEvidence {
+  resourceKind: 'whiteboard';
+  token: string;
+  rawHash: string;
+  raw: unknown;
 }
 
 export interface MutationJournal {
@@ -291,6 +300,9 @@ export interface PartialMutationEvidence {
   };
   pendingOperationIds: string[];
   createdBlockIds: string[];
+  resourceTokens?: string[];
+  prewriteResourceEvidence?: ResourceStateEvidence[];
+  verifiedResourceEvidence?: ResourceStateEvidence[];
   recoveryDisposition:
     | 'resume_possible'
     | 'reverse_possible'

@@ -456,7 +456,7 @@ describe('Whiteboard operation shapes', () => {
       kind: 'whiteboard-overwrite',
       targetToken: 'board-token',
       expectedTargetHash: 'hash-board',
-      desired: { kind: 'raw', value: { nodes: [] } },
+      desired: { kind: 'raw', value: { nodes: [{ id: 'raw-node' }] } },
     };
     const resolved = prepare([tokenOnly]);
 
@@ -464,7 +464,7 @@ describe('Whiteboard operation shapes', () => {
       kind: 'overwrite-whiteboard',
       targetBlockId: 'board',
       targetToken: 'board-token',
-      desired: { kind: 'raw', value: { nodes: [] } },
+      desired: { kind: 'raw', value: { nodes: [{ id: 'raw-node' }] } },
     }]);
 
     expectCode({ ...tokenOnly, targetToken: 'arbitrary-token' }, 'target_missing');
@@ -491,7 +491,7 @@ describe('Whiteboard operation shapes', () => {
       kind: 'whiteboard-overwrite',
       targetBlockId: 'board',
       expectedTargetHash: 'hash-board',
-      desired: { kind: 'raw', value: { nodes: [] } },
+      desired: { kind: 'raw', value: { nodes: [{ id: 'raw-node' }] } },
     }, 'invalid_operation', conflicted);
   });
 });

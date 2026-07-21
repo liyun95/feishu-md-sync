@@ -1,5 +1,12 @@
 import { canonicalHash } from './hash.js';
-import { normalizeProviderLinkUrl, providerBlocksToXml } from './codec.js';
+import {
+  assertNonEmptyWhiteboardRaw,
+  canonicalWhiteboardRawHash,
+  normalizeProviderLinkUrl,
+  providerBlocksToXml,
+  svgExpectedTexts,
+  whiteboardRawContainsTexts,
+} from './codec.js';
 import type {
   ApplyMutationInput,
   AssessRecoveryInput,
@@ -17,6 +24,7 @@ import type {
   PreparedProviderBlock,
   PreparedReadbackAssertion,
   RecoveryAssessment,
+  ResourceStateEvidence,
   SnapshotNode,
   VerifiedOperationEvidence,
 } from './model.js';
@@ -33,6 +41,8 @@ import {
   StructuredTreeProgressError,
 } from './structured-tree.js';
 import type { DocxTransport, ProviderBlock } from './transport.js';
+
+const WHITEBOARD_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
 
 export type EngineExecutionErrorCode =
   | 'document_mismatch'
@@ -161,6 +171,8 @@ async function applyMutationBatch(
     const before = current;
     const stepCreatedBlockIds: string[] = [];
     const resourceTokens: string[] = [];
+    const prewriteResourceEvidence: ResourceStateEvidence[] = [];
+    const verifiedResourceEvidence: ResourceStateEvidence[] = [];
     let stepHasRemoteWrite = false;
     let latestProviderRevision: string | undefined;
     let reconciledReadback: DocumentSnapshot | undefined;
@@ -184,6 +196,8 @@ async function applyMutationBatch(
         if (result.providerRevision !== undefined) latestProviderRevision = result.providerRevision;
         appendUnique(stepCreatedBlockIds, result.createdBlockIds);
         appendUnique(resourceTokens, result.resourceTokens);
+        appendResourceEvidence(prewriteResourceEvidence, result.prewriteResourceEvidence);
+        appendResourceEvidence(verifiedResourceEvidence, result.verifiedResourceEvidence);
         if (result.snapshot) current = result.snapshot;
         if (result.structuredTree) stepHasVerifiedStructuredTree = true;
       }
@@ -195,6 +209,9 @@ async function applyMutationBatch(
           hasVerifiedRemoteWrite = true;
         }
         appendUnique(stepCreatedBlockIds, actionProgress.createdBlockIds);
+        appendUnique(resourceTokens, actionProgress.resourceTokens);
+        appendResourceEvidence(prewriteResourceEvidence, actionProgress.prewriteResourceEvidence);
+        appendResourceEvidence(verifiedResourceEvidence, actionProgress.verifiedResourceEvidence);
         current = actionProgress.lastSnapshot;
         if (actionProgress.providerRevision !== undefined) {
           latestProviderRevision = actionProgress.providerRevision;
@@ -214,6 +231,9 @@ async function applyMutationBatch(
             cause: readbackCause,
             pendingSteps: batch.steps.slice(stepIndex + 1),
             createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+            resourceTokens,
+            prewriteResourceEvidence,
+            verifiedResourceEvidence,
             latestProviderRevision,
             recoveryDisposition: actionProgress.recoveryDisposition,
           });
@@ -229,6 +249,9 @@ async function applyMutationBatch(
               cause: actionProgress.cause ?? cause,
               pendingSteps: batch.steps.slice(stepIndex + 1),
               createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+              resourceTokens,
+              prewriteResourceEvidence,
+              verifiedResourceEvidence,
               recoveryDisposition: actionProgress.recoveryDisposition,
             });
           }
@@ -256,6 +279,9 @@ async function applyMutationBatch(
             cause: verificationCause,
             pendingSteps: batch.steps.slice(stepIndex + 1),
             createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+            resourceTokens,
+            prewriteResourceEvidence,
+            verifiedResourceEvidence,
             recoveryDisposition: actionProgress.recoveryDisposition,
           });
         }
@@ -270,6 +296,9 @@ async function applyMutationBatch(
             cause: actionProgress?.cause ?? cause,
             pendingSteps: batch.steps.slice(stepIndex + 1),
             createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+            resourceTokens,
+            prewriteResourceEvidence,
+            verifiedResourceEvidence,
             latestProviderRevision,
             recoveryDisposition: actionProgress?.recoveryDisposition,
           });
@@ -290,6 +319,9 @@ async function applyMutationBatch(
       readback = reconciledReadback ?? await fetchSnapshot(transport, batch.documentId);
       readbackObserved = true;
       lastObserved = readback;
+      if (latestProviderRevision !== undefined && stepContainsNativeTable(step)) {
+        assertExactProviderRevision(latestProviderRevision, readback, step.operationId);
+      }
       appendUnique(stepCreatedBlockIds, plannedCreatedBlockIds(step, before, readback));
       verifyStepReadback(step, before, readback);
     } catch (cause) {
@@ -303,6 +335,9 @@ async function applyMutationBatch(
           cause,
           pendingSteps: batch.steps.slice(stepIndex + 1),
           createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+          resourceTokens,
+          prewriteResourceEvidence,
+          verifiedResourceEvidence,
           ...(!readbackObserved && latestProviderRevision !== undefined
             ? { latestProviderRevision }
             : {}),
@@ -320,6 +355,12 @@ async function applyMutationBatch(
       operationId: step.operationId,
       createdBlockIds: [...stepCreatedBlockIds],
       ...(resourceTokens.length > 0 ? { resourceTokens: [...resourceTokens] } : {}),
+      ...(prewriteResourceEvidence.length > 0
+        ? { prewriteResourceEvidence: structuredClone(prewriteResourceEvidence) }
+        : {}),
+      ...(verifiedResourceEvidence.length > 0
+        ? { verifiedResourceEvidence: structuredClone(verifiedResourceEvidence) }
+        : {}),
       revision: readback.revision,
       afterSnapshotHash: readback.canonicalHash,
       verified: true as const,
@@ -338,6 +379,9 @@ async function applyMutationBatch(
           cause,
           pendingSteps: batch.steps.slice(stepIndex + 1),
           createdBlockIds: [...allCreatedBlockIds, ...stepCreatedBlockIds],
+          resourceTokens,
+          prewriteResourceEvidence,
+          verifiedResourceEvidence,
           recoveryDisposition: stepHasVerifiedStructuredTree
             ? 'resume_possible'
             : undefined,
@@ -514,6 +558,13 @@ function assertCurrentActionPreconditions(
       assertPreflight(assertion, snapshot, step.operationId);
     }
   }
+  if (stepContainsNativeTable(step) || step.kind === 'whiteboard-overwrite') {
+    for (const assertion of step.assertions.preflight) {
+      if (assertion.kind === 'sibling-boundary' || assertion.kind === 'insertion-boundary') {
+        assertPreflight(assertion, snapshot, step.operationId);
+      }
+    }
+  }
   const nodes = nodeIndex(snapshot);
   const fail = (message: string, context: Record<string, unknown> = {}): never => {
     throw new EngineExecutionError('preflight_assertion_failed', message, {
@@ -586,26 +637,14 @@ function assertTaskSevenSupport(step: PreparedMutationStep): void {
       context: { operationKind: step.kind },
     });
   };
-  if (step.kind === 'whiteboard-overwrite') {
-    unsupported('Whiteboard execution is reserved for the native-resource executor.');
-  }
-  if (containsNestedList(step.intent) && step.intent.kind !== 'insert') {
+  if (containsNestedList(step.intent) && step.intent.kind !== 'insert' &&
+    !(step.intent.kind === 'replace' &&
+      (step.intent.desired.kind === 'table' || step.intent.desired.kind === 'callout'))) {
     unsupported('Recursive nested-list replacement is not available in the ordinary mutation executor.');
   }
   for (const action of step.actions) {
     if (action.kind === 'replace-provider-blocks') {
       unsupported('Multi-block replacement cannot preserve an identical parent child order.');
-    }
-    if (action.kind === 'overwrite-whiteboard' || action.kind === 'replace-image-with-svg') {
-      unsupported('Whiteboard execution is reserved for the native-resource executor.');
-    }
-    if (action.kind === 'replace-xml' && action.nodeKind === 'table') {
-      unsupported('Native table execution is reserved for the native-resource executor.');
-    }
-    if (action.kind === 'insert-segments' && action.segments.some(
-      (segment) => segment.kind === 'xml' && segment.nodeKind === 'table',
-    )) {
-      unsupported('Native table execution is reserved for the native-resource executor.');
     }
     if ((action.kind === 'replace-provider-block' && hasProviderChildren(action.block)) ||
       (action.kind === 'replace-provider-blocks' && action.blocks.some(hasProviderChildren))) {
@@ -618,6 +657,8 @@ type ActionResult = {
   wrote: boolean;
   createdBlockIds: string[];
   resourceTokens: string[];
+  prewriteResourceEvidence: ResourceStateEvidence[];
+  verifiedResourceEvidence: ResourceStateEvidence[];
   providerRevision?: string;
   snapshot?: DocumentSnapshot;
   structuredTree?: boolean;
@@ -626,6 +667,9 @@ type ActionResult = {
 class ActionProgressError extends Error {
   readonly wrote: boolean;
   readonly createdBlockIds: string[];
+  readonly resourceTokens: string[];
+  readonly prewriteResourceEvidence: ResourceStateEvidence[];
+  readonly verifiedResourceEvidence: ResourceStateEvidence[];
   readonly lastSnapshot: DocumentSnapshot;
   readonly phase: 'provider' | 'verification';
   readonly attempted: boolean;
@@ -636,6 +680,9 @@ class ActionProgressError extends Error {
     cause: unknown;
     wrote: boolean;
     createdBlockIds: string[];
+    resourceTokens?: string[];
+    prewriteResourceEvidence?: ResourceStateEvidence[];
+    verifiedResourceEvidence?: ResourceStateEvidence[];
     lastSnapshot: DocumentSnapshot;
     phase: 'provider' | 'verification';
     attempted: boolean;
@@ -646,6 +693,9 @@ class ActionProgressError extends Error {
     this.name = 'ActionProgressError';
     this.wrote = input.wrote;
     this.createdBlockIds = [...input.createdBlockIds];
+    this.resourceTokens = [...(input.resourceTokens ?? [])];
+    this.prewriteResourceEvidence = structuredClone(input.prewriteResourceEvidence ?? []);
+    this.verifiedResourceEvidence = structuredClone(input.verifiedResourceEvidence ?? []);
     this.lastSnapshot = input.lastSnapshot;
     this.phase = input.phase;
     this.attempted = input.attempted;
@@ -662,6 +712,9 @@ function attemptedProviderError(
     cause,
     wrote: false,
     createdBlockIds: [],
+    resourceTokens: [],
+    prewriteResourceEvidence: [],
+    verifiedResourceEvidence: [],
     lastSnapshot: snapshot,
     phase: 'provider',
     attempted: true,
@@ -679,7 +732,7 @@ async function executeAction(
 ): Promise<ActionResult> {
   switch (action.kind) {
     case 'assert-node':
-      return { wrote: false, createdBlockIds: [], resourceTokens: [] };
+      return emptyActionResult(false);
     case 'replace-provider-block':
       {
         const content = providerBlocksToXml([action.block]);
@@ -698,6 +751,8 @@ async function executeAction(
           wrote: true,
           createdBlockIds: [],
           resourceTokens: [],
+          prewriteResourceEvidence: [],
+          verifiedResourceEvidence: [],
           ...(result.revision !== undefined ? { providerRevision: result.revision } : {}),
         };
       }
@@ -717,6 +772,8 @@ async function executeAction(
         wrote: true,
         createdBlockIds: [],
         resourceTokens: [],
+        prewriteResourceEvidence: [],
+        verifiedResourceEvidence: [],
         ...(result.revision !== undefined ? { providerRevision: result.revision } : {}),
       };
     }
@@ -736,6 +793,8 @@ async function executeAction(
         wrote: true,
         createdBlockIds: [],
         resourceTokens: [],
+        prewriteResourceEvidence: [],
+        verifiedResourceEvidence: [],
         ...(result.revision !== undefined ? { providerRevision: result.revision } : {}),
       };
     }
@@ -755,7 +814,7 @@ async function executeAction(
       } catch (cause) {
         throw attemptedProviderError(cause, current);
       }
-      return { wrote: true, createdBlockIds: [], resourceTokens: [] };
+      return emptyActionResult(true);
     case 'move-blocks':
       try {
         await transport.moveAfter({
@@ -766,15 +825,378 @@ async function executeAction(
       } catch (cause) {
         throw attemptedProviderError(cause, current);
       }
-      return { wrote: true, createdBlockIds: [], resourceTokens: [] };
+      return emptyActionResult(true);
     case 'overwrite-whiteboard':
+      return executeWhiteboardOverwrite(transport, documentId, step, action, current);
     case 'replace-image-with-svg':
-      throw new EngineExecutionError(
-        'unsupported_action',
-        `Action ${action.kind} is not supported by the ordinary mutation executor.`,
-        { operationId: step.operationId },
-      );
+      return executeImageWhiteboardReplacement(transport, documentId, step, action, current);
   }
+}
+
+async function executeWhiteboardOverwrite(
+  transport: DocxTransport,
+  documentId: string,
+  step: PreparedMutationStep,
+  action: Extract<PreparedMutationAction, { kind: 'overwrite-whiteboard' }>,
+  current: DocumentSnapshot,
+): Promise<ActionResult> {
+  const resourceTokens = action.desired.kind === 'copy-token'
+    ? [action.desired.sourceToken, action.targetToken]
+    : [action.targetToken];
+  let desiredRaw: unknown;
+  if (action.desired.kind === 'copy-token') {
+    try {
+      desiredRaw = await queryWhiteboardWithRetry(transport, action.desired.sourceToken);
+      assertNonEmptyWhiteboardRaw(desiredRaw);
+    } catch (cause) {
+      throw new ActionProgressError({
+        cause,
+        wrote: false,
+        createdBlockIds: [],
+        resourceTokens,
+        lastSnapshot: current,
+        phase: 'verification',
+        attempted: false,
+      });
+    }
+  } else if (action.desired.kind === 'raw') {
+    desiredRaw = structuredClone(action.desired.value);
+    try {
+      assertNonEmptyWhiteboardRaw(desiredRaw);
+    } catch (cause) {
+      throw new ActionProgressError({
+        cause,
+        wrote: false,
+        createdBlockIds: [],
+        resourceTokens,
+        lastSnapshot: current,
+        phase: 'verification',
+        attempted: false,
+      });
+    }
+  }
+
+  let prewriteRaw: unknown;
+  let prewriteEvidence: ResourceStateEvidence;
+  try {
+    prewriteRaw = await queryWhiteboardWithRetry(transport, action.targetToken);
+    prewriteEvidence = whiteboardEvidence(action.targetToken, prewriteRaw);
+  } catch (cause) {
+    throw new ActionProgressError({
+      cause,
+      wrote: false,
+      createdBlockIds: [],
+      resourceTokens,
+      lastSnapshot: current,
+      phase: 'verification',
+      attempted: false,
+    });
+  }
+
+  const overwriteInput = action.desired.kind === 'svg'
+    ? {
+        token: action.targetToken,
+        format: 'svg' as const,
+        value: action.desired.value,
+        idempotencyToken: step.idempotencyToken,
+      }
+    : {
+        token: action.targetToken,
+        format: 'raw' as const,
+        value: structuredClone(desiredRaw),
+        idempotencyToken: step.idempotencyToken,
+      };
+
+  let providerCause: unknown;
+  try {
+    await overwriteWhiteboardWithRetry(transport, overwriteInput);
+  } catch (cause) {
+    providerCause = cause;
+  }
+
+  let readbackRaw: unknown;
+  try {
+    readbackRaw = await queryWhiteboardWithRetry(transport, action.targetToken);
+    assertNonEmptyWhiteboardRaw(readbackRaw);
+  } catch (cause) {
+    throw new ActionProgressError({
+      cause: providerCause ?? cause,
+      wrote: true,
+      createdBlockIds: [],
+      resourceTokens,
+      prewriteResourceEvidence: [prewriteEvidence],
+      lastSnapshot: current,
+      phase: 'verification',
+      attempted: true,
+      recoveryDisposition: 'manual_inspection_required',
+    });
+  }
+
+  const verified = whiteboardEvidence(action.targetToken, readbackRaw);
+  if (providerCause && providerProvedNoWrite(providerCause)) {
+    throw new ActionProgressError({
+      cause: providerCause,
+      wrote: false,
+      createdBlockIds: [],
+      resourceTokens,
+      prewriteResourceEvidence: [prewriteEvidence],
+      verifiedResourceEvidence: [verified],
+      lastSnapshot: current,
+      phase: 'provider',
+      attempted: true,
+    });
+  }
+  const expectedSvgTexts = action.desired.kind === 'svg'
+    ? svgExpectedTexts(action.desired.value)
+    : [];
+  const matches = action.desired.kind === 'svg'
+    ? expectedSvgTexts.length > 0
+      ? whiteboardRawContainsTexts(readbackRaw, expectedSvgTexts)
+      : verified.rawHash !== prewriteEvidence.rawHash
+    : verified.rawHash === canonicalWhiteboardRawHash(desiredRaw);
+  if (matches) {
+    return {
+      wrote: true,
+      createdBlockIds: [],
+      resourceTokens,
+      prewriteResourceEvidence: [prewriteEvidence],
+      verifiedResourceEvidence: [verified],
+      snapshot: current,
+    };
+  }
+
+  throw new ActionProgressError({
+    cause: providerCause ?? new EngineExecutionError(
+      'readback_assertion_failed',
+      `Whiteboard ${action.targetToken} readback does not match the prepared overwrite.`,
+      { operationId: step.operationId },
+    ),
+    wrote: true,
+    createdBlockIds: [],
+    resourceTokens,
+    prewriteResourceEvidence: [prewriteEvidence],
+    verifiedResourceEvidence: [verified],
+    lastSnapshot: current,
+    phase: 'verification',
+    attempted: true,
+    recoveryDisposition: 'manual_inspection_required',
+  });
+}
+
+async function executeImageWhiteboardReplacement(
+  transport: DocxTransport,
+  documentId: string,
+  step: PreparedMutationStep,
+  action: Extract<PreparedMutationAction, { kind: 'replace-image-with-svg' }>,
+  current: DocumentSnapshot,
+): Promise<ActionResult> {
+  let providerRevision: string | undefined;
+  let providerCause: unknown;
+  try {
+    const result = await transport.replaceBlock({
+      documentId,
+      blockId: action.targetBlockId,
+      content: `<whiteboard type="svg">${action.svg}</whiteboard>`,
+      format: 'xml',
+    });
+    providerRevision = result.revision;
+  } catch (cause) {
+    providerCause = cause;
+  }
+
+  let observed: DocumentSnapshot;
+  let lastObserved = current;
+  try {
+    observed = await fetchSnapshot(transport, documentId);
+    lastObserved = observed;
+    if (providerRevision !== undefined) assertExactProviderRevision(providerRevision, observed, step.operationId);
+    const discovered = discoverImageReplacement(step, current, observed, action.targetBlockId);
+    const raw = await queryWhiteboardWithRetry(transport, discovered.token);
+    const verified = whiteboardEvidence(discovered.token, raw);
+    const expectedTexts = svgExpectedTexts(action.svg);
+    if (expectedTexts.length > 0 && !whiteboardRawContainsTexts(raw, expectedTexts)) {
+      throw new EngineExecutionError(
+        'readback_assertion_failed',
+        'Image replacement Whiteboard raw state does not contain the prepared SVG evidence.',
+        { operationId: step.operationId, context: { expectedTexts } },
+      );
+    }
+    return {
+      wrote: true,
+      createdBlockIds: [discovered.blockId],
+      resourceTokens: [discovered.token],
+      prewriteResourceEvidence: [],
+      verifiedResourceEvidence: [verified],
+      snapshot: observed,
+      ...(providerRevision !== undefined ? { providerRevision } : {}),
+    };
+  } catch (cause) {
+    const candidates = imageReplacementCandidates(step, current, lastObserved);
+    const candidateTokens = candidates.flatMap((blockId) => {
+      const token = resourceToken(nodeIndex(lastObserved).get(blockId), 'whiteboard');
+      return token ? [token] : [];
+    });
+    throw new ActionProgressError({
+      cause: providerCause ?? cause,
+      wrote: true,
+      createdBlockIds: candidates,
+      resourceTokens: candidateTokens,
+      lastSnapshot: lastObserved,
+      phase: 'verification',
+      attempted: true,
+      ...(providerRevision !== undefined ? { providerRevision } : {}),
+      recoveryDisposition: 'manual_inspection_required',
+    });
+  }
+}
+
+function whiteboardEvidence(token: string, raw: unknown): ResourceStateEvidence {
+  return {
+    resourceKind: 'whiteboard',
+    token,
+    rawHash: canonicalWhiteboardRawHash(raw),
+    raw: structuredClone(raw),
+  };
+}
+
+function providerProvedNoWrite(cause: unknown): boolean {
+  if (!cause || typeof cause !== 'object') return false;
+  const record = cause as { writeAccepted?: unknown; details?: { writeAccepted?: unknown } };
+  return record.writeAccepted === false || record.details?.writeAccepted === false;
+}
+
+async function overwriteWhiteboardWithRetry(
+  transport: DocxTransport,
+  input: Parameters<DocxTransport['overwriteWhiteboard']>[0],
+): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await transport.overwriteWhiteboard(input);
+      return;
+    } catch (cause) {
+      const delayMs = WHITEBOARD_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !isWhiteboardApplyingError(cause)) throw cause;
+      await delay(delayMs);
+    }
+  }
+}
+
+async function queryWhiteboardWithRetry(
+  transport: DocxTransport,
+  token: string,
+): Promise<unknown> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await transport.queryWhiteboard(token);
+    } catch (cause) {
+      const delayMs = WHITEBOARD_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined ||
+        (!isWhiteboardApplyingError(cause) && !isWhiteboardRawNotReadyError(cause))) throw cause;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isWhiteboardApplyingError(cause: unknown): boolean {
+  if (cause && typeof cause === 'object') {
+    const record = cause as {
+      code?: unknown;
+      details?: { providerCode?: unknown };
+      cause?: unknown;
+    };
+    if (record.code === 4003101 || record.details?.providerCode === 4003101) return true;
+    if (record.cause !== undefined && isWhiteboardApplyingError(record.cause)) return true;
+  }
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /(?:"code"\s*:\s*4003101\b|\b4003101\b)/.test(message) &&
+    /(?:doc is applying|doc data is not ready|resource error|whiteboard)/i.test(message);
+}
+
+function isWhiteboardRawNotReadyError(cause: unknown): boolean {
+  if (!cause || typeof cause !== 'object') return false;
+  const record = cause as { details?: { subtype?: unknown }; cause?: unknown };
+  if (record.details?.subtype === 'whiteboard_raw_not_ready') return true;
+  return record.cause !== undefined && isWhiteboardRawNotReadyError(record.cause);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function discoverImageReplacement(
+  step: PreparedMutationStep,
+  before: DocumentSnapshot,
+  after: DocumentSnapshot,
+  targetBlockId: string,
+): { blockId: string; token: string } {
+  const beforeTarget = nodeIndex(before).get(targetBlockId);
+  const parentId = beforeTarget?.parentBlockId;
+  if (!beforeTarget || !parentId) {
+    throw new EngineExecutionError('readback_assertion_failed', 'Image replacement target has no parent.', {
+      operationId: step.operationId,
+    });
+  }
+  const beforeParent = nodeIndex(before).get(parentId)!;
+  const afterParent = nodeIndex(after).get(parentId);
+  assertParentSemanticUnchanged(beforeParent, afterParent, step.operationId);
+  const targetIndex = beforeParent.childBlockIds.indexOf(targetBlockId);
+  const preceding = targetIndex === 0 ? parentId : beforeParent.childBlockIds[targetIndex - 1]!;
+  const following = beforeParent.childBlockIds[targetIndex + 1];
+  const candidates = afterParent
+    ? idsBetween(afterParent.childBlockIds, parentId, preceding, following)
+    : [];
+  if (candidates.length !== 1) {
+    throw new EngineExecutionError(
+      'readback_assertion_failed',
+      `Image replacement produced ${candidates.length} blocks; exactly one Whiteboard is required.`,
+      { operationId: step.operationId, context: { candidates } },
+    );
+  }
+  const blockId = candidates[0]!;
+  const board = nodeIndex(after).get(blockId);
+  const token = resourceToken(board, 'whiteboard');
+  if (!board || board.kind !== 'whiteboard' || board.blockType !== 43 || !token) {
+    throw new EngineExecutionError(
+      'readback_assertion_failed',
+      'Image replacement did not produce one identifiable Whiteboard block.',
+      { operationId: step.operationId, context: { blockId, actualKind: board?.kind } },
+    );
+  }
+  const expectedChildren = [...beforeParent.childBlockIds];
+  expectedChildren.splice(targetIndex, 1, blockId);
+  if (!sameStrings(afterParent?.childBlockIds, expectedChildren)) {
+    throw new EngineExecutionError('unplanned_remote_change', 'Image replacement changed surrounding siblings.', {
+      operationId: step.operationId,
+      context: { expectedChildBlockIds: expectedChildren, actualChildBlockIds: afterParent?.childBlockIds },
+    });
+  }
+  const allowed = new Set([parentId, targetBlockId, blockId]);
+  const unplanned = changedBlockIds(before, after).filter((id) => !allowed.has(id));
+  if (unplanned.length > 0) {
+    throw new EngineExecutionError('unplanned_remote_change', 'Image replacement changed unrelated blocks.', {
+      operationId: step.operationId,
+      context: { unplannedBlockIds: unplanned },
+    });
+  }
+  return { blockId, token };
+}
+
+function imageReplacementCandidates(
+  step: PreparedMutationStep,
+  before: DocumentSnapshot,
+  after: DocumentSnapshot,
+): string[] {
+  const action = step.actions.find((item) => item.kind === 'replace-image-with-svg');
+  if (!action || action.kind !== 'replace-image-with-svg') return [];
+  const target = nodeIndex(before).get(action.targetBlockId);
+  if (!target?.parentBlockId) return [];
+  const beforeParent = nodeIndex(before).get(target.parentBlockId);
+  const afterParent = nodeIndex(after).get(target.parentBlockId);
+  if (!beforeParent || !afterParent) return [];
+  const index = beforeParent.childBlockIds.indexOf(action.targetBlockId);
+  const preceding = index === 0 ? beforeParent.blockId : beforeParent.childBlockIds[index - 1]!;
+  const following = beforeParent.childBlockIds[index + 1];
+  return idsBetween(afterParent.childBlockIds, afterParent.blockId, preceding, following);
 }
 
 async function executeInsertSegments(
@@ -903,6 +1325,9 @@ async function executeInsertSegments(
         if (result.revision !== undefined) providerRevision = result.revision;
         phase = 'verification';
         snapshot = await fetchSnapshot(transport, documentId);
+        if (result.revision !== undefined && segment.nodeKind === 'table') {
+          assertExactProviderRevision(result.revision, snapshot, step.operationId);
+        }
         const ids = insertedIdsBetween(
           segmentBefore,
           snapshot,
@@ -943,11 +1368,23 @@ async function executeInsertSegments(
     wrote,
     createdBlockIds,
     resourceTokens: [],
+    prewriteResourceEvidence: [],
+    verifiedResourceEvidence: [],
     snapshot,
     structuredTree: action.segments.some(
       (segment) => segment.kind === 'provider-blocks' && segment.blocks.some(hasProviderChildren),
     ),
     ...(providerRevision !== undefined ? { providerRevision } : {}),
+  };
+}
+
+function emptyActionResult(wrote: boolean): ActionResult {
+  return {
+    wrote,
+    createdBlockIds: [],
+    resourceTokens: [],
+    prewriteResourceEvidence: [],
+    verifiedResourceEvidence: [],
   };
 }
 
@@ -1099,8 +1536,28 @@ function assertOneReadback(
       return;
     }
     case 'whiteboard-content':
-    case 'image-replaced-with-svg-whiteboard':
-      fail(`Readback assertion ${assertion.kind} requires the native-resource executor.`);
+      if (step.intent.kind !== 'whiteboard-overwrite') {
+        return fail('Whiteboard-content assertion requires a Whiteboard overwrite intent.');
+      }
+      {
+        const target = nodes.get(assertion.targetBlockId);
+        if (!target || target.kind !== 'whiteboard' || target.blockType !== 43 ||
+          resourceToken(target, 'whiteboard') !== assertion.targetToken) {
+          fail('Whiteboard block identity changed during resource overwrite.');
+        }
+      }
+      return;
+    case 'image-replaced-with-svg-whiteboard': {
+      if (step.intent.kind !== 'whiteboard-overwrite') {
+        return fail('Image replacement assertion requires a Whiteboard overwrite intent.');
+      }
+      const action = step.actions.find((item) => item.kind === 'replace-image-with-svg');
+      if (!action || action.kind !== 'replace-image-with-svg') {
+        return fail('Image replacement assertion has no prepared replacement action.');
+      }
+      discoverImageReplacement(step, _before, after, action.targetBlockId);
+      return;
+    }
   }
 }
 
@@ -1164,9 +1621,26 @@ function assertExactStructuralDelta(
         }
         return;
       }
-      const expected = beforeNodes.get(parentId)?.childBlockIds ?? [];
+      const expected = [...(beforeNodes.get(parentId)?.childBlockIds ?? [])];
       const actual = afterNodes.get(parentId)?.childBlockIds;
       assertParentSemanticUnchanged(beforeNodes.get(parentId), afterNodes.get(parentId), step.operationId);
+      if (step.intent.desired.kind === 'table') {
+        const boundary = step.assertions.preflight.find((item) => item.kind === 'sibling-boundary');
+        if (!boundary || boundary.kind !== 'sibling-boundary' || !actual) {
+          return fail('Table replacement has no exact prepared sibling boundary.', { parentBlockId: parentId });
+        }
+        const replacements = idsBetween(
+          actual,
+          parentId,
+          boundary.precedingBlockId,
+          boundary.followingBlockId,
+        );
+        if (replacements.length !== 1) {
+          fail('Table replacement did not produce exactly one table block.', { replacements });
+        }
+        const index = expected.indexOf(step.intent.targetBlockId);
+        expected.splice(index, 1, replacements[0]!);
+      }
       if (!sameStrings(actual, expected)) {
         fail('Replace operation changed parent child order.', {
           parentBlockId: parentId,
@@ -1243,6 +1717,17 @@ function assertExactStructuralDelta(
       return;
     }
     case 'whiteboard-overwrite':
+      if (step.actions.some((action) => action.kind === 'replace-image-with-svg')) {
+        const action = step.actions.find((item) => item.kind === 'replace-image-with-svg')!;
+        discoverImageReplacement(
+          step,
+          before,
+          after,
+          (action as Extract<PreparedMutationAction, { kind: 'replace-image-with-svg' }>).targetBlockId,
+        );
+      } else if (!sameSnapshot(before, after)) {
+        fail('Existing Whiteboard overwrite changed the Docx block snapshot.', {});
+      }
       return;
   }
 }
@@ -1367,6 +1852,25 @@ function allowedChangedBlockIds(
       allowed.add(step.intent.parentBlockId);
       return allowed;
     case 'whiteboard-overwrite':
+      if (step.actions.some((action) => action.kind === 'replace-image-with-svg')) {
+        const action = step.actions.find((item) => item.kind === 'replace-image-with-svg')!;
+        const targetId = (action as Extract<PreparedMutationAction, { kind: 'replace-image-with-svg' }>).targetBlockId;
+        const target = beforeNodes.get(targetId);
+        if (target?.parentBlockId) {
+          allowed.add(target.parentBlockId);
+          addSubtree(before, targetId);
+          const beforeParent = beforeNodes.get(target.parentBlockId);
+          const afterParent = afterNodes.get(target.parentBlockId);
+          if (beforeParent && afterParent) {
+            const index = beforeParent.childBlockIds.indexOf(targetId);
+            const preceding = index === 0 ? target.parentBlockId : beforeParent.childBlockIds[index - 1]!;
+            const following = beforeParent.childBlockIds[index + 1];
+            for (const id of idsBetween(afterParent.childBlockIds, target.parentBlockId, preceding, following)) {
+              addSubtree(after, id);
+            }
+          }
+        }
+      }
       return allowed;
   }
 }
@@ -1424,10 +1928,50 @@ function matchesDesiredNode(
   actual: SnapshotNode,
   desired: DesiredNode,
 ): boolean {
+  if (desired.kind === 'table') return matchesTable(snapshot, actual, desired);
   if (desired.kind === 'callout') return matchesCallout(snapshot, actual, desired);
   if (desired.kind === 'list') return matchesDesiredList(snapshot, [actual.blockId], desired);
   const decoded = decodeOrdinaryNode(actual);
   return decoded !== undefined && canonicalHash(decoded) === canonicalHash(desired);
+}
+
+function matchesTable(
+  snapshot: DocumentSnapshot,
+  actual: SnapshotNode,
+  desired: Extract<DesiredNode, { kind: 'table' }>,
+): boolean {
+  if (actual.kind !== 'table' || actual.blockType !== 31) return false;
+  const table = asRecord(actual.raw.table);
+  const property = asRecord(table?.property);
+  const rows = property?.row_size;
+  const columns = property?.column_size;
+  const desiredRows = desired.rows.length;
+  const desiredColumns = desired.rows[0]?.cells.length ?? 0;
+  if (rows !== desiredRows || columns !== desiredColumns ||
+    desiredRows === 0 || desiredColumns === 0 ||
+    actual.childBlockIds.length !== desiredRows * desiredColumns) return false;
+  if (!hasExactUnmergedCellSemantics(property?.merge_info, desiredRows * desiredColumns)) return false;
+  const index = nodeIndex(snapshot);
+  let cellIndex = 0;
+  for (const row of desired.rows) {
+    if (row.cells.length !== desiredColumns) return false;
+    for (const cell of row.cells) {
+      const actualCell = index.get(actual.childBlockIds[cellIndex++]!);
+      if (!actualCell || actualCell.blockType !== 32 || actualCell.kind !== 'opaque') return false;
+      if (!matchesDesiredIds(snapshot, actualCell.childBlockIds, cell.content)) return false;
+    }
+  }
+  return true;
+}
+
+function hasExactUnmergedCellSemantics(value: unknown, cellCount: number): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length !== cellCount) return false;
+  return value.every((entry) => {
+    if (entry === null || entry === undefined) return true;
+    const info = asRecord(entry);
+    return info?.row_span === 1 && info.col_span === 1;
+  });
 }
 
 function matchesDesiredList(
@@ -1653,6 +2197,40 @@ function appendUnique(target: string[], values: string[]): void {
   for (const value of values) if (!target.includes(value)) target.push(value);
 }
 
+function appendResourceEvidence(
+  target: ResourceStateEvidence[],
+  values: ResourceStateEvidence[],
+): void {
+  for (const value of values) {
+    const existing = target.find((entry) => entry.resourceKind === value.resourceKind &&
+      entry.token === value.token && entry.rawHash === value.rawHash);
+    if (!existing) target.push(structuredClone(value));
+  }
+}
+
+function stepContainsNativeTable(step: PreparedMutationStep): boolean {
+  return step.actions.some((action) =>
+    (action.kind === 'replace-xml' && action.nodeKind === 'table') ||
+    (action.kind === 'insert-segments' && action.segments.some(
+      (segment) => segment.kind === 'xml' && segment.nodeKind === 'table',
+    ))
+  );
+}
+
+function assertExactProviderRevision(
+  expectedRevision: string,
+  snapshot: DocumentSnapshot,
+  operationId: string,
+): void {
+  if (snapshot.revision !== expectedRevision) {
+    throw new EngineExecutionError(
+      'readback_assertion_failed',
+      `Fixed-revision readback expected ${expectedRevision} but observed ${snapshot.revision}.`,
+      { operationId, context: { expectedRevision, actualRevision: snapshot.revision } },
+    );
+  }
+}
+
 function inlineText(content: InlineContent[]): string {
   return content.map((item) => item.text).join('');
 }
@@ -1691,6 +2269,9 @@ function partialError(input: {
   cause: unknown;
   pendingSteps: PreparedMutationStep[];
   createdBlockIds: string[];
+  resourceTokens?: string[];
+  prewriteResourceEvidence?: ResourceStateEvidence[];
+  verifiedResourceEvidence?: ResourceStateEvidence[];
   latestProviderRevision?: string;
   recoveryDisposition?: 'resume_possible' | 'manual_inspection_required';
 }): PartialMutationError {
@@ -1709,6 +2290,15 @@ function partialError(input: {
     },
     pendingOperationIds: input.pendingSteps.map(({ operationId }) => operationId),
     createdBlockIds: [...new Set(input.createdBlockIds)],
+    ...(input.resourceTokens && input.resourceTokens.length > 0
+      ? { resourceTokens: [...new Set(input.resourceTokens)] }
+      : {}),
+    ...(input.prewriteResourceEvidence && input.prewriteResourceEvidence.length > 0
+      ? { prewriteResourceEvidence: structuredClone(input.prewriteResourceEvidence) }
+      : {}),
+    ...(input.verifiedResourceEvidence && input.verifiedResourceEvidence.length > 0
+      ? { verifiedResourceEvidence: structuredClone(input.verifiedResourceEvidence) }
+      : {}),
     recoveryDisposition: input.recoveryDisposition ?? 'manual_inspection_required',
   };
   return new PartialMutationError(deepFreeze(evidence), { cause: input.cause });

@@ -943,39 +943,6 @@ describe('verified mutation execution', () => {
     expect(entries.entries.map(({ operationId }) => operationId)).toEqual(['assert-a']);
   });
 
-  it('fails closed on native tables and Whiteboards before writing', async () => {
-    const cases: MutationIntent[] = [
-      {
-        operationId: 'table', kind: 'insert', parentBlockId: 'root', insertAfterBlockId: 'a',
-        desired: [{ kind: 'table', rows: [{ cells: [{ content: [paragraph('cell')] }] }] }],
-      },
-    ];
-    for (const operation of cases) {
-      const transport = new MemoryTransport();
-      const prepared = batch(transport, [operation]);
-      await expect(createFeishuDocxEngine({ transport }).apply({ batch: prepared, journal: journal() })).rejects.toMatchObject({
-        code: 'unsupported_action',
-      });
-      expect(transport.writeCount).toBe(0);
-    }
-
-    const transport = new MemoryTransport();
-    (transport.blocks[0]!.children as string[]).push('board');
-    transport.blocks.push({
-      block_id: 'board', parent_id: 'root', block_type: 43,
-      board: { token: 'board-token' },
-    });
-    const board = transport.snapshot().nodes.find(({ blockId }) => blockId === 'board')!;
-    const prepared = batch(transport, [{
-      operationId: 'board', kind: 'whiteboard-overwrite', targetBlockId: 'board',
-      expectedTargetHash: board.canonicalHash, desired: { kind: 'svg', value: '<svg />' },
-    }]);
-    await expect(createFeishuDocxEngine({ transport }).apply({ batch: prepared, journal: journal() })).rejects.toMatchObject({
-      code: 'unsupported_action', operationId: 'board',
-    });
-    expect(transport.writeCount).toBe(0);
-  });
-
   it('does not mutate caller input or the prepared batch', async () => {
     const transport = new MemoryTransport();
     const prepared = batch(transport, [{

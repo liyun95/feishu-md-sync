@@ -1,4 +1,10 @@
-import { calloutToXml, tableToXml, toProviderBlock, toProviderTree } from './codec.js';
+import {
+  assertNonEmptyWhiteboardRaw,
+  calloutToXml,
+  tableToXml,
+  toProviderBlock,
+  toProviderTree,
+} from './codec.js';
 import { canonicalHash } from './hash.js';
 import type {
   DesiredNode,
@@ -783,8 +789,9 @@ function validateWhiteboardOverwrite(
       try {
         structuredClone(desired.value);
         canonicalHash(desired.value);
+        assertNonEmptyWhiteboardRaw(desired.value);
       } catch (cause) {
-        fail('invalid_operation', 'Raw Whiteboard desired data must be JSON-serializable.', {
+        fail('invalid_operation', 'Raw Whiteboard desired data must be nonempty and JSON-serializable.', {
           field: 'desired.value',
         }, intent.operationId, cause);
       }

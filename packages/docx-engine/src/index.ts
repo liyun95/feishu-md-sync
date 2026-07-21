@@ -11,7 +11,17 @@ export {
   EngineExecutionError,
   type EngineExecutionErrorCode,
 } from './apply.js';
-export { calloutToXml, providerBlocksToXml, tableToXml, toProviderBlock, toProviderTree } from './codec.js';
+export {
+  assertNonEmptyWhiteboardRaw,
+  calloutToXml,
+  canonicalWhiteboardRawHash,
+  providerBlocksToXml,
+  svgExpectedTexts,
+  tableToXml,
+  toProviderBlock,
+  toProviderTree,
+  whiteboardRawContainsTexts,
+} from './codec.js';
 export {
   ENGINE_SCHEMA_VERSION,
   ENGINE_VERSION,
@@ -60,6 +70,7 @@ export {
   type PreparedMutationStep,
   type PrepareMutationInput,
   type RecoveryAssessment,
+  type ResourceStateEvidence,
   type SnapshotNode,
   type VerifiedOperationEvidence,
 } from './model.js';

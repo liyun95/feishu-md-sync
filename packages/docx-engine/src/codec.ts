@@ -1,3 +1,4 @@
+import { canonicalHash } from './hash.js';
 import type { DesiredNode, InlineContent, PreparedProviderBlock } from './model.js';
 import type { ProviderBlock } from './transport.js';
 
@@ -232,6 +233,79 @@ export function tableToXml(table: TableNode): string {
     throw new Error('table must contain at least one row and one column');
   }
   return `<table>${headerXml}${bodyXml}</table>`;
+}
+
+export function canonicalWhiteboardRawHash(raw: unknown): string {
+  assertNonEmptyWhiteboardRaw(raw);
+  return canonicalHash(normalizeWhiteboardRaw(raw));
+}
+
+export function assertNonEmptyWhiteboardRaw(raw: unknown): void {
+  const nodes = Array.isArray(raw)
+    ? raw
+    : asRecord(raw)?.nodes;
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    throw new Error('Whiteboard raw state must contain at least one node.');
+  }
+  canonicalHash(raw);
+}
+
+export function svgExpectedTexts(svg: string): string[] {
+  const values = [...svg.matchAll(/<text(?:\s[^>]*)?>([\s\S]*?)<\/text>/gi)]
+    .map((match) => decodeXmlText(match[1]!.replace(/<[^>]+>/g, '')))
+    .map((value) => value.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  return [...new Set(values)];
+}
+
+export function whiteboardRawContainsTexts(raw: unknown, expectedTexts: string[]): boolean {
+  assertNonEmptyWhiteboardRaw(raw);
+  if (expectedTexts.length === 0) return false;
+  const nodes = Array.isArray(raw) ? raw : asRecord(raw)!.nodes as unknown[];
+  const visible = nodes.flatMap(whiteboardNodeText).join('\n').replace(/\s+/g, ' ').trim();
+  return expectedTexts.every((text) => visible.includes(text.replace(/\s+/g, ' ').trim()));
+}
+
+function normalizeWhiteboardRaw(value: unknown, key?: string): unknown {
+  if (Array.isArray(value)) {
+    const normalized = value.map((item) => normalizeWhiteboardRaw(item));
+    if (key === 'nodes' && normalized.every(isIdentifiedWhiteboardNode)) {
+      return normalized.sort((left, right) => left.id.localeCompare(right.id));
+    }
+    return normalized;
+  }
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [
+    childKey,
+    normalizeWhiteboardRaw(child, childKey),
+  ]));
+}
+
+function isIdentifiedWhiteboardNode(value: unknown): value is { id: string } {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
+    typeof (value as { id?: unknown }).id === 'string');
+}
+
+function whiteboardNodeText(node: unknown): string[] {
+  const record = asRecord(node);
+  if (!record || record.type !== 'text_shape') return [];
+  return collectStrings(record.text);
+}
+
+function collectStrings(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(collectStrings);
+  const record = asRecord(value);
+  return record ? Object.values(record).flatMap(collectStrings) : [];
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&amp;', '&');
 }
 
 export function providerBlocksToXml(blocks: PreparedProviderBlock[]): string {
