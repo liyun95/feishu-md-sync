@@ -78,6 +78,157 @@ describe('Zdoc protected Supademo planning', () => {
     }));
     expect(plan.entries).toEqual([receipt]);
   });
+
+  it('blocks a tracked Supademo whose local showcase mode changed', () => {
+    const plan = planProtectedResources({
+      local: document(resource('demo', undefined, true), false),
+      remote: document(resource('demo', 'isv1', false), true),
+      receiptEntries: [{
+        kind: 'supademo',
+        componentId: 'demo',
+        isShowcase: false,
+        blockId: 'isv1',
+        remoteShape: 'add-ons:supademo',
+        sectionPath: ['Demo'],
+        ordinal: 0
+      }]
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: 'supademo-changed' }));
+    expect(plan.items).not.toContainEqual(expect.objectContaining({ code: 'supademo-protected' }));
+  });
+
+  it('blocks untracked adoption when showcase identity does not match', () => {
+    const plan = planProtectedResources({
+      local: document(resource('demo', undefined, true), false),
+      remote: document(resource('demo', 'isv1', false), true),
+      receiptEntries: []
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: 'supademo-missing' }));
+    expect(plan.entries).toEqual([]);
+  });
+
+  it('blocks remote showcase drift from a tracked receipt', () => {
+    const plan = planProtectedResources({
+      local: document(resource('demo', undefined, false), false),
+      remote: document(resource('demo', 'isv1', true), true),
+      receiptEntries: [{
+        kind: 'supademo',
+        componentId: 'demo',
+        isShowcase: false,
+        blockId: 'isv1',
+        remoteShape: 'add-ons:supademo',
+        sectionPath: ['Demo'],
+        ordinal: 0
+      }]
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: 'supademo-changed' }));
+  });
+
+  it('upgrades a verified historical receipt entry with showcase identity', () => {
+    const plan = planProtectedResources({
+      local: document(resource('demo', undefined, true), false),
+      remote: document(resource('demo', 'isv1', true), true),
+      receiptEntries: [{
+        kind: 'supademo',
+        componentId: 'demo',
+        blockId: 'isv1',
+        remoteShape: 'add-ons:supademo',
+        sectionPath: ['Demo'],
+        ordinal: 0
+      }]
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.entries).toEqual([expect.objectContaining({
+      componentId: 'demo',
+      isShowcase: true,
+      blockId: 'isv1'
+    })]);
+  });
+
+  it('blocks a tracked Supademo moved to a different local section', () => {
+    const localResource = resource('demo', undefined, false);
+    localResource.locator = {
+      sectionPath: ['Moved'],
+      kind: 'protected-resource',
+      ordinal: 0
+    };
+    const plan = planProtectedResources({
+      local: document(localResource, false),
+      remote: document(resource('demo', 'isv1', false), true),
+      receiptEntries: [{
+        kind: 'supademo',
+        componentId: 'demo',
+        isShowcase: false,
+        blockId: 'isv1',
+        remoteShape: 'add-ons:supademo',
+        sectionPath: ['Demo'],
+        ordinal: 0
+      }]
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: 'supademo-changed' }));
+  });
+
+  it('blocks duplicate tracked receipt mappings for one Supademo', () => {
+    const plan = planProtectedResources({
+      local: document(resource('demo', undefined, false), false),
+      remote: document(resource('demo', 'isv1', false), true),
+      receiptEntries: [
+        {
+          kind: 'supademo',
+          componentId: 'demo',
+          isShowcase: false,
+          blockId: 'isv1',
+          remoteShape: 'add-ons:supademo',
+          sectionPath: ['Demo'],
+          ordinal: 0
+        },
+        {
+          kind: 'supademo',
+          componentId: 'demo',
+          isShowcase: false,
+          blockId: 'isv2',
+          remoteShape: 'add-ons:supademo',
+          sectionPath: ['Demo'],
+          ordinal: 0
+        }
+      ]
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: 'supademo-ambiguous' }));
+    expect(plan.items).not.toContainEqual(expect.objectContaining({ code: 'supademo-protected' }));
+  });
+
+  it('blocks duplicate local Supademo identities against one tracked mapping', () => {
+    const duplicate = resource('demo', undefined, false);
+    duplicate.locator = {
+      sectionPath: ['Demo'],
+      kind: 'protected-resource',
+      ordinal: 1
+    };
+    const local = document(resource('demo', undefined, false), false);
+    local.nodes.splice(2, 0, duplicate);
+    const plan = planProtectedResources({
+      local,
+      remote: document(resource('demo', 'isv1', false), true),
+      receiptEntries: [{
+        kind: 'supademo',
+        componentId: 'demo',
+        isShowcase: false,
+        blockId: 'isv1',
+        remoteShape: 'add-ons:supademo',
+        sectionPath: ['Demo'],
+        ordinal: 0
+      }]
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: 'supademo-ambiguous' }));
+    expect(plan.items).not.toContainEqual(expect.objectContaining({ code: 'supademo-protected' }));
+  });
 });
 
 function document(resourceNode: SemanticProtectedResource, remote: boolean): SemanticDocument {
@@ -90,12 +241,17 @@ function document(resourceNode: SemanticProtectedResource, remote: boolean): Sem
   };
 }
 
-function resource(componentId: string, remoteBlockId?: string): SemanticProtectedResource {
+function resource(
+  componentId: string,
+  remoteBlockId?: string,
+  isShowcase = false
+): SemanticProtectedResource {
   return {
     kind: 'protected-resource',
     locator: { sectionPath: ['Demo'], kind: 'protected-resource', ordinal: 0 },
     resourceKind: 'supademo',
     componentId,
+    isShowcase,
     remoteBlockId,
     ...(remoteBlockId ? { remoteShape: 'add-ons:supademo' } : {})
   };

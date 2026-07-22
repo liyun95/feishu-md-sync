@@ -14,6 +14,7 @@ export type ProtectedResourcePlanBlocker = {
 
 export function planProtectedResources(input: {
   local: SemanticDocument;
+  localBase?: SemanticDocument;
   remote: SemanticDocument;
   receiptEntries: ProtectedResourceReceiptEntry[];
 }): {
@@ -27,6 +28,15 @@ export function planProtectedResources(input: {
   const localResources = resources(input.local);
   const remoteResources = resources(input.remote);
   const tracked = input.receiptEntries.length > 0;
+  const localIdentityCounts = new Map<string, number>();
+  for (const resource of localResources) {
+    if (!resource.componentId) continue;
+    localIdentityCounts.set(
+      resource.componentId,
+      (localIdentityCounts.get(resource.componentId) ?? 0) + 1
+    );
+  }
+  const reportedAmbiguousLocalIdentities = new Set<string>();
 
   for (const receipt of input.receiptEntries) {
     if (localResources.some((resource) => resource.componentId === receipt.componentId)) continue;
@@ -46,18 +56,57 @@ export function planProtectedResources(input: {
       });
       continue;
     }
+    if ((localIdentityCounts.get(componentId) ?? 0) !== 1) {
+      if (!reportedAmbiguousLocalIdentities.has(componentId)) {
+        blockers.push({
+          code: 'supademo-ambiguous',
+          message: `Multiple local Supademo components use identity ${componentId}.`
+        });
+        reportedAmbiguousLocalIdentities.add(componentId);
+      }
+      continue;
+    }
 
     if (tracked) {
-      const receipt = input.receiptEntries.find((entry) => entry.componentId === componentId);
-      if (!receipt) {
+      const matchingReceipts = input.receiptEntries.filter((entry) => entry.componentId === componentId);
+      if (matchingReceipts.length === 0) {
         blockers.push({
           code: 'supademo-missing',
           message: `No receipt mapping exists for Supademo ${componentId}.`
         });
         continue;
       }
+      if (matchingReceipts.length !== 1) {
+        blockers.push({
+          code: 'supademo-ambiguous',
+          message: `Multiple receipt mappings exist for Supademo ${componentId}.`
+        });
+        continue;
+      }
+      const receipt = matchingReceipts[0];
+      if (!receipt) continue;
+      const baselineResources = input.localBase
+        ? resources(input.localBase).filter((resource) => resource.componentId === componentId)
+        : [];
+      if (input.localBase && baselineResources.length !== 1) {
+        blockers.push({
+          code: baselineResources.length === 0 ? 'supademo-changed' : 'supademo-ambiguous',
+          message: baselineResources.length === 0
+            ? `The local baseline has no Supademo ${componentId}.`
+            : `The local baseline has multiple Supademo components using identity ${componentId}.`
+        });
+        continue;
+      }
+      const baselineResource = baselineResources[0];
       const remote = remoteResources.find((candidate) => candidate.remoteBlockId === receipt.blockId);
       if (!remote || remote.componentId !== componentId ||
+        remote.isShowcase !== local.isShowcase ||
+        (receipt.isShowcase !== undefined &&
+          (receipt.isShowcase !== local.isShowcase || receipt.isShowcase !== remote.isShowcase)) ||
+        !sameSectionPath(local.locator.sectionPath, receipt.sectionPath) ||
+        local.locator.ordinal !== receipt.ordinal ||
+        (input.localBase && baselineResource &&
+          !sameLocalPlacement(input.localBase, baselineResource, input.local, local)) ||
         remote.remoteShape !== receipt.remoteShape ||
         remote.remoteToken !== receipt.remoteToken ||
         !correspondingSectionPath(remote.locator.sectionPath, receipt.sectionPath) ||
@@ -72,7 +121,7 @@ export function planProtectedResources(input: {
         });
         continue;
       }
-      entries.push(receipt);
+      entries.push({ ...receipt, isShowcase: local.isShowcase });
       items.push({
         code: 'supademo-protected',
         severity: 'info',
@@ -87,6 +136,7 @@ export function planProtectedResources(input: {
     const nextFingerprint = neighborFingerprint(input.local, local, 1);
     const candidates = remoteResources.filter((remote) => {
       return remote.componentId === componentId &&
+        remote.isShowcase === local.isShowcase &&
         correspondingSectionPath(remote.locator.sectionPath, local.locator.sectionPath) &&
         remote.locator.ordinal === local.locator.ordinal &&
         (previousFingerprint === undefined ||
@@ -119,6 +169,7 @@ export function planProtectedResources(input: {
     const entry: ProtectedResourceReceiptEntry = {
       kind: 'supademo',
       componentId,
+      isShowcase: local.isShowcase,
       blockId: remote.remoteBlockId,
       remoteShape: remote.remoteShape,
       ...(remote.remoteToken ? { remoteToken: remote.remoteToken } : {}),
@@ -170,4 +221,42 @@ function correspondingSectionPath(left: string[], right: string[]): boolean {
   const longer = left.length <= right.length ? right : left;
   const offset = longer.length - shorter.length;
   return shorter.every((part, index) => part === longer[index + offset]);
+}
+
+function sameSectionPath(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
+}
+
+function sameLocalPlacement(
+  baseline: SemanticDocument,
+  baselineResource: SemanticProtectedResource,
+  current: SemanticDocument,
+  currentResource: SemanticProtectedResource
+): boolean {
+  const before = adjacentLocatorKeys(baseline, baselineResource);
+  const after = adjacentLocatorKeys(current, currentResource);
+  return before.previous === after.previous && before.next === after.next;
+}
+
+function adjacentLocatorKeys(
+  document: SemanticDocument,
+  resource: SemanticProtectedResource
+): { previous?: string; next?: string } {
+  const index = document.nodes.indexOf(resource);
+  return {
+    ...(index > 0 ? { previous: locatorKey(document.nodes[index - 1]!) } : {}),
+    ...(index >= 0 && index + 1 < document.nodes.length
+      ? { next: locatorKey(document.nodes[index + 1]!) }
+      : {})
+  };
+}
+
+function locatorKey(node: SemanticNode): string {
+  const locator = node.locator;
+  return JSON.stringify({
+    sectionPath: locator.sectionPath,
+    kind: locator.kind,
+    ordinal: locator.ordinal,
+    ...(locator.textPath ? { textPath: locator.textPath } : {})
+  });
 }

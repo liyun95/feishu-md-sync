@@ -385,15 +385,39 @@ describe('remote semantic document', () => {
         kind: 'protected-resource',
         resourceKind: 'supademo',
         componentId: 'cmj9f3j6u0johf6zpk5kdyx3u',
+        isShowcase: false,
         remoteBlockId: 'XViWdTKb4ouwFJxEeepcSNQInLf'
       }),
       expect.objectContaining({
         kind: 'protected-resource',
         resourceKind: 'supademo',
         componentId: 'cmjcjqyk3017cw10i8dbm2ret',
+        isShowcase: true,
         remoteBlockId: 'RYSAdAA9XojPNBxd0fqcZt42nEg'
       })
     ]);
+  });
+
+  it('keeps a Supademo add-on record without boolean showcase identity opaque', () => {
+    const document = remoteSemanticDocument([
+      { block_id: 'doc_token', block_type: 1, children: ['isv1'] },
+      {
+        block_id: 'isv1',
+        block_type: 40,
+        add_ons: {
+          component_type_id: 'blk_682093ba9580c002363b9dc3',
+          record: '{"id":"demo-id"}'
+        }
+      }
+    ], 'doc_token');
+
+    expect(document.nodes).not.toContainEqual(expect.objectContaining({
+      kind: 'protected-resource'
+    }));
+    expect(document.nodes).toContainEqual(expect.objectContaining({
+      kind: 'opaque',
+      remoteBlockId: 'isv1'
+    }));
   });
 });
 

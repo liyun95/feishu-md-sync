@@ -14,6 +14,7 @@ export type ZdocProceduresComponent = ZdocComponentBase & {
 export type ZdocSupademoComponent = ZdocComponentBase & {
   kind: 'supademo';
   componentId: string;
+  isShowcase: boolean;
 };
 
 export type ZdocAdmonitionComponent = ZdocComponentBase & {

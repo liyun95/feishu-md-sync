@@ -108,7 +108,8 @@ export function localSemanticDocument(
             kind: 'protected-resource',
             locator: nextLocator(headingPath, 'protected-resource', ordinals),
             resourceKind: 'supademo',
-            componentId: supademo.componentId
+            componentId: supademo.componentId,
+            isShowcase: supademo.isShowcase
           });
         } else {
           nodes.push({

@@ -255,11 +255,14 @@ function remoteSupademo(
   } catch {
     return undefined;
   }
-  if (typeof record?.id !== 'string' || !record.id) return undefined;
+  if (typeof record?.id !== 'string' || !record.id || typeof record.isShowcase !== 'boolean') {
+    return undefined;
+  }
   return {
     kind: 'protected-resource',
     resourceKind: 'supademo',
     componentId: record.id,
+    isShowcase: record.isShowcase,
     remoteBlockId: block.block_id,
     remoteShape: `add-ons:${SUPADEMO_COMPONENT_TYPE_ID}`
   };

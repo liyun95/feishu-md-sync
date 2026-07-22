@@ -121,12 +121,11 @@ export function inventoryAndTransformZdoc(input: {
 
     const supademo = body.match(/^ {0,3}<Supademo\b([^>]*)\/\>\s*$/);
     if (supademo) {
-      const attributes = parseAttributes(supademo[1] ?? '');
-      const componentId = attributes.values.id;
-      if (!attributes.valid || !componentId) {
+      const attributes = parseSupademoAttributes(supademo[1] ?? '');
+      if (!attributes) {
         blockers.push(diagnostic(
           'zdoc-component-unsupported',
-          'Supademo requires a quoted id and supports only id and title attributes.',
+          'Supademo requires a quoted id and supports only id, title, and boolean isShowcase attributes.',
           input.sourcePath,
           sourceLine
         ));
@@ -142,7 +141,8 @@ export function inventoryAndTransformZdoc(input: {
       }
       inventory.components.push({
         kind: 'supademo',
-        componentId,
+        componentId: attributes.componentId,
+        isShowcase: attributes.isShowcase,
         status: 'preserved',
         sourceLine,
         sectionPath: compactSectionPath(sectionPath)
@@ -243,6 +243,40 @@ export function inventoryAndTransformZdoc(input: {
 }
 
 const REGISTERED_COMPONENTS = new Set(['Admonition', 'Procedures', 'Supademo']);
+
+function parseSupademoAttributes(raw: string): {
+  componentId: string;
+  isShowcase: boolean;
+} | undefined {
+  const values = new Map<string, string | true>();
+  const pattern = /\s+([A-Za-z][A-Za-z0-9_-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/y;
+  let cursor = 0;
+  while (cursor < raw.length) {
+    if (/^\s*$/.test(raw.slice(cursor))) break;
+    pattern.lastIndex = cursor;
+    const match = pattern.exec(raw);
+    if (!match) return undefined;
+    const key = match[1];
+    if (!key || values.has(key)) return undefined;
+    values.set(key, match[2] ?? match[3] ?? true);
+    cursor = pattern.lastIndex;
+  }
+  if ([...values.keys()].some((key) => key !== 'id' && key !== 'title' && key !== 'isShowcase')) {
+    return undefined;
+  }
+  const componentId = values.get('id');
+  const title = values.get('title');
+  const showcase = values.get('isShowcase');
+  if (typeof componentId !== 'string' || !componentId) return undefined;
+  if (title === true) return undefined;
+  if (showcase !== undefined && showcase !== true && showcase !== 'true' && showcase !== 'false') {
+    return undefined;
+  }
+  return {
+    componentId,
+    isShowcase: showcase === true || showcase === 'true'
+  };
+}
 
 function parseAdmonition(rawAttributes: string): Pick<
   ZdocAdmonitionComponent,
