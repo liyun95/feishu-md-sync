@@ -108,6 +108,9 @@ jobs:
           ].join('\n') + '\n');
           NODE
 
+      - name: Build workspace packages
+        run: npm run build
+
       - name: Typecheck
         run: npm run typecheck
 

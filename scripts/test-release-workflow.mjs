@@ -8,7 +8,7 @@ const workflowPath = join(root, '.github', 'workflows', 'release.yml');
 const workflow = parse(readFileSync(workflowPath, 'utf8'));
 const readme = readFileSync(join(root, 'README.md'), 'utf8');
 const releaseChecklist = readFileSync(
-  join(root, 'docs', 'plans', '2026-07-20-feishu-docx-engine-release-checklist.md'),
+  join(root, 'docs', 'plans', '2026-07-22-v0.6.1-release-recovery-checklist.md'),
   'utf8',
 );
 const cli = readJson('packages/cli/package.json');
@@ -35,18 +35,19 @@ assert(
   !/unreleased[^\n]*feishu-md-sync[^\n]*0\.6|feishu-md-sync[^\n]*0\.6[^\n]*unreleased/i.test(readme),
   'README must not call feishu-md-sync 0.6 unreleased',
 );
+const releaseTag = `v${cli.version}`;
 const taggedVerificationPreamble = `set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 test -z "$(git status --porcelain)"
 test "$(git rev-parse --abbrev-ref HEAD)" = 'HEAD'
-test "$(git describe --tags --exact-match)" = 'v0.6.0'`;
+test "$(git describe --tags --exact-match)" = '${releaseTag}'`;
 assert(
   releaseChecklist.includes(taggedVerificationPreamble),
-  'release checklist must fail fast from a clean checkout detached at the exact v0.6.0 tag',
+  `release checklist must fail fast from a clean checkout detached at the exact ${releaseTag} tag`,
 );
 for (const expected of [
-  'Run from a clean checkout detached at the immutable `v0.6.0` tag',
+  `Run from a clean checkout detached at the immutable \`${releaseTag}\` tag`,
   'TEMP_HOME="$(mktemp -d)"',
   'CLI_PREFIX="$(mktemp -d)"',
   'node "$REPO_ROOT/scripts/hash-skill-tree.mjs"',
@@ -75,7 +76,9 @@ expectFailure(
 const steps = new Map(publishJob.steps.map((step) => [step.name, step]));
 const orderedNames = [
   'Checkout tagged release commit',
+  'Install dependencies',
   'Load and validate release manifest',
+  'Build workspace packages',
   'Typecheck',
   'Test',
   'Test coverage',
@@ -94,6 +97,12 @@ const orderedNames = [
   'Verify installed tagged Skill with released CLI',
 ];
 assertStepOrder(publishJob.steps, orderedNames);
+
+const buildWorkspace = requiredStep(steps, 'Build workspace packages');
+assert(
+  typeof buildWorkspace.run === 'string' && buildWorkspace.run.trim() === 'npm run build',
+  'release workflow must build all workspace packages before root typecheck',
+);
 
 const manifestStep = requiredStep(steps, 'Load and validate release manifest');
 assert(manifestStep.id === 'release_manifest', 'release manifest step must expose release_manifest outputs');
