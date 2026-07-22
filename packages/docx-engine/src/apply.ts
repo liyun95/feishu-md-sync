@@ -45,6 +45,7 @@ import { assessRecovery } from './recovery.js';
 import type { DocxTransport, ProviderBlock } from './transport.js';
 
 const WHITEBOARD_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
+const CREATED_CODE_READBACK_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
 
 export type EngineExecutionErrorCode =
   | 'document_mismatch'
@@ -1299,16 +1300,17 @@ async function executeInsertSegments(
         appendUnique(createdBlockIds, ids);
         if (topLevelIds.length > 0) anchorBlockId = topLevelIds.at(-1)!;
         phase = 'verification';
-        snapshot = await fetchSnapshot(transport, documentId);
-        verifyInsertSegmentPrefix(
+        snapshot = await fetchAndVerifyCreatedProviderSegment({
+          transport,
+          documentId,
           step,
           action,
-          segment.desiredIndex,
-          segmentBefore,
-          snapshot,
+          desiredIndex: segment.desiredIndex,
+          before: segmentBefore,
           topLevelIds,
-          index,
-        );
+          insertionIndex: index,
+          retryEventuallyConsistentReadback: segment.blocks.length === 1 && segment.blocks[0]?.block_type === 14,
+        });
       } else {
         const beforeParent = nodeIndex(segmentBefore).get(action.parentBlockId);
         if (!beforeParent) throw new Error(`Insert parent ${action.parentBlockId} disappeared.`);
@@ -1380,6 +1382,51 @@ async function executeInsertSegments(
     ),
     ...(providerRevision !== undefined ? { providerRevision } : {}),
   };
+}
+
+async function fetchAndVerifyCreatedProviderSegment(input: {
+  transport: DocxTransport;
+  documentId: string;
+  step: PreparedMutationStep;
+  action: Extract<PreparedMutationAction, { kind: 'insert-segments' }>;
+  desiredIndex: number;
+  before: DocumentSnapshot;
+  topLevelIds: string[];
+  insertionIndex: number;
+  retryEventuallyConsistentReadback: boolean;
+}): Promise<DocumentSnapshot> {
+  for (let attempt = 0; ; attempt += 1) {
+    const snapshot = await fetchSnapshot(input.transport, input.documentId);
+    try {
+      verifyInsertSegmentPrefix(
+        input.step,
+        input.action,
+        input.desiredIndex,
+        input.before,
+        snapshot,
+        input.topLevelIds,
+        input.insertionIndex,
+      );
+      return snapshot;
+    } catch (cause) {
+      const delayMs = CREATED_CODE_READBACK_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined || !input.retryEventuallyConsistentReadback ||
+        !isPendingCreatedBlockReadback(cause, input.before, snapshot)) throw cause;
+      await delay(delayMs);
+    }
+  }
+}
+
+function isPendingCreatedBlockReadback(
+  cause: unknown,
+  before: DocumentSnapshot,
+  snapshot: DocumentSnapshot,
+): boolean {
+  return cause instanceof EngineExecutionError &&
+    cause.code === 'readback_assertion_failed' &&
+    cause.message === 'Insert segment returned block IDs that do not exist in readback.' &&
+    before.documentId === snapshot.documentId &&
+    before.canonicalHash === snapshot.canonicalHash;
 }
 
 function emptyActionResult(wrote: boolean): ActionResult {
