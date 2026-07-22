@@ -16,6 +16,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      NPM_PROVENANCE_MAX_WAIT_SECONDS: 300
+      NPM_PROVENANCE_RETRY_DELAY_SECONDS: 5
 
     steps:
       - name: Checkout tagged release commit
@@ -224,31 +227,16 @@ jobs:
           PACKAGE_NAME: ${{ steps.release_manifest.outputs.engine_name }}
           PACKAGE_VERSION: ${{ steps.release_manifest.outputs.engine_version }}
           PACKAGE_INTEGRITY: ${{ steps.release_manifest.outputs.engine_integrity }}
-          ENGINE_PROVENANCE_REF: ${{ steps.release_manifest.outputs.engine_provenance_ref }}
-          ENGINE_PROVENANCE_SHA: ${{ steps.release_manifest.outputs.engine_provenance_sha }}
           EXPECTED_REPOSITORY: https://github.com/${{ github.repository }}
           EXPECTED_WORKFLOW: .github/workflows/release.yml
           EXPECTED_BUILD_TYPE: https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1
           EXPECTED_BUILDER: https://github.com/actions/runner/github-hosted
           EXPECTED_EVENT: push
+          EXPECTED_CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ steps.release_manifest.outputs.engine_provenance_ref }}
           SIGSTORE_BUNDLE_PATH: release-artifacts/npm-provenance-engine.sigstore
-        run: |
-          export EXPECTED_REF="$ENGINE_PROVENANCE_REF"
-          export EXPECTED_SHA="$ENGINE_PROVENANCE_SHA"
-          export EXPECTED_CERTIFICATE_IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${ENGINE_PROVENANCE_REF}"
-          certificate_identity_pattern="$(node -e 'process.stdout.write("^" + process.env.EXPECTED_CERTIFICATE_IDENTITY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$")')"
-          for attempt in {1..12}; do
-            if node .github/scripts/download-npm-provenance.mjs \
-              && sigstore verify "$SIGSTORE_BUNDLE_PATH" \
-                --certificate-identity-uri "$certificate_identity_pattern" \
-                --certificate-issuer 'https://token.actions.githubusercontent.com' \
-              && node .github/scripts/verify-npm-provenance.mjs; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "engine provenance did not match $ENGINE_PROVENANCE_REF at $ENGINE_PROVENANCE_SHA." >&2
-          exit 1
+          EXPECTED_REF: ${{ steps.release_manifest.outputs.engine_provenance_ref }}
+          EXPECTED_SHA: ${{ steps.release_manifest.outputs.engine_provenance_sha }}
+        run: bash .github/scripts/verify-npm-provenance-with-retry.sh
 
       - name: Smoke CLI candidate with registry-resolved engine
         env:
@@ -304,20 +292,7 @@ jobs:
           EXPECTED_EVENT: push
           EXPECTED_CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
           SIGSTORE_BUNDLE_PATH: release-artifacts/npm-provenance-cli.sigstore
-        run: |
-          certificate_identity_pattern="$(node -e 'process.stdout.write("^" + process.env.EXPECTED_CERTIFICATE_IDENTITY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$")')"
-          for attempt in {1..12}; do
-            if node .github/scripts/download-npm-provenance.mjs \
-              && sigstore verify "$SIGSTORE_BUNDLE_PATH" \
-                --certificate-identity-uri "$certificate_identity_pattern" \
-                --certificate-issuer 'https://token.actions.githubusercontent.com' \
-              && node .github/scripts/verify-npm-provenance.mjs; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "CLI provenance did not match $GITHUB_REF at $GITHUB_SHA." >&2
-          exit 1
+        run: bash .github/scripts/verify-npm-provenance-with-retry.sh
 
       - name: Verify installed tagged Skill with released CLI
         env:
