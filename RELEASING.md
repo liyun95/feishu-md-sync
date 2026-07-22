@@ -132,6 +132,9 @@ npx skills add 'liyun95/feishu-md-sync#vX.Y.Z' --skill feishu-md-sync --global -
 | `v0.3.0` | Agent-ready CLI contract, version-matched Agent Skill, structured failures, and Skill distribution validation. | Published |
 | `v0.4.0` | Source dialect preprocessing, read-only Base link resolution, receipt V4 baselines, and non-GFM merge safety. | Published |
 | `v0.5.0` | Verified Zdoc round trips, explicit baseline adoption, nested hierarchy recovery, and resumable scoped publishing. | Published |
-| `v0.6.0` | Separately versioned shared Docx engine, engine-backed scoped writes, nested-list/native-table verification, and dependency-ordered release provenance. | Release PR |
+| `v0.6.0` | Failed immutable tag; workflow stopped at clean-checkout typechecking before any npm package or GitHub Release was published. | Tagged, unpublished |
+| `v0.6.1` | Recovery release for the shared Docx engine, engine-backed scoped writes, nested-list/native-table verification, and dependency-ordered provenance. | Release PR |
+
+If an immutable tag fails before publication, keep that tag unchanged and advance the affected package to the next patch version. A still-unpublished independently versioned dependency may retain its candidate version, but its provenance must bind to the new recovery tag and commit.
 
 The current process uses GitHub labels and milestones as the release-planning source. If Changesets is introduced later, changeset files become the machine-readable version input while these labels remain useful for review and filtering.
