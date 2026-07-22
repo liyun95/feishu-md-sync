@@ -6,6 +6,13 @@ import { parse } from 'yaml';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const workflowPath = join(root, '.github', 'workflows', 'release.yml');
 const workflow = parse(readFileSync(workflowPath, 'utf8'));
+const liveFeishuWorkflow = parse(
+  readFileSync(join(root, '.github', 'workflows', 'live-feishu.yml'), 'utf8'),
+);
+const provenanceRetryScript = readFileSync(
+  join(root, '.github', 'scripts', 'verify-npm-provenance-with-retry.sh'),
+  'utf8',
+);
 const readme = readFileSync(join(root, 'README.md'), 'utf8');
 const releaseChecklist = readFileSync(
   join(root, 'docs', 'plans', '2026-07-22-v0.6.1-release-recovery-checklist.md'),
@@ -25,6 +32,14 @@ assert(publishJob.environment === 'npm', 'publish job must use the protected npm
 assert(publishJob.permissions?.contents === 'read', 'publish job must keep contents read-only');
 assert(publishJob.permissions?.['id-token'] === 'write', 'publish job must grant id-token: write for provenance');
 assert(Array.isArray(publishJob.steps), 'publish job steps must be an array');
+assert(
+  Number(publishJob.env?.NPM_PROVENANCE_MAX_WAIT_SECONDS) >= 300,
+  'release workflow must allow at least five minutes for npm provenance propagation',
+);
+assert(
+  Number(publishJob.env?.NPM_PROVENANCE_RETRY_DELAY_SECONDS) > 0,
+  'release workflow must configure a positive npm provenance retry delay',
+);
 
 validateManifest(manifest, cli, engine);
 assert(
@@ -145,16 +160,21 @@ assertRunContains(engineRegistry, [
 
 const engineProvenance = requiredStep(steps, 'Verify engine provenance before CLI publication');
 assert(engineProvenance.if === undefined, 'engine provenance verification must run for new and reused engines');
-assertRunContains(engineProvenance, [
-  'ENGINE_PROVENANCE_REF',
-  'ENGINE_PROVENANCE_SHA',
-  'download-npm-provenance.mjs',
-  'verify-npm-provenance.mjs',
-]);
+assert(
+  engineProvenance.env?.EXPECTED_REF === '${{ steps.release_manifest.outputs.engine_provenance_ref }}' &&
+    engineProvenance.env?.EXPECTED_SHA === '${{ steps.release_manifest.outputs.engine_provenance_sha }}',
+  'engine provenance must verify the manifest-recorded ref and commit',
+);
 assert(
   engineProvenance.env?.SIGSTORE_BUNDLE_PATH === 'release-artifacts/npm-provenance-engine.sigstore',
   'engine provenance must use a distinct Sigstore bundle',
 );
+assert(
+  engineProvenance.env?.EXPECTED_CERTIFICATE_IDENTITY ===
+    'https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ steps.release_manifest.outputs.engine_provenance_ref }}',
+  'engine provenance must bind the shared verifier to the recorded release ref',
+);
+assertSharedProvenanceVerification(engineProvenance);
 
 const consumer = requiredStep(steps, 'Smoke CLI candidate with registry-resolved engine');
 assertRunContains(consumer, [
@@ -172,13 +192,36 @@ assertRunContains(publishCli, [
 ]);
 
 const cliProvenance = requiredStep(steps, 'Verify CLI registry and provenance');
-assertRunContains(cliProvenance, [
-  'download-npm-provenance.mjs',
-  'verify-npm-provenance.mjs',
-]);
+assert(
+  cliProvenance.env?.EXPECTED_REF === '${{ github.ref }}' &&
+    cliProvenance.env?.EXPECTED_SHA === '${{ github.sha }}',
+  'CLI provenance must verify the current release ref and commit',
+);
 assert(
   cliProvenance.env?.SIGSTORE_BUNDLE_PATH === 'release-artifacts/npm-provenance-cli.sigstore',
   'CLI provenance must use a distinct Sigstore bundle',
+);
+assertSharedProvenanceVerification(cliProvenance);
+
+assertRunContains({ name: 'shared npm provenance verifier', run: provenanceRetryScript }, [
+  'download-npm-provenance.mjs',
+  'sigstore verify',
+  'verify-npm-provenance.mjs',
+  'NPM_PROVENANCE_MAX_WAIT_SECONDS',
+  'NPM_PROVENANCE_RETRY_DELAY_SECONDS',
+]);
+
+const liveFeishuSteps = liveFeishuWorkflow.jobs?.['live-feishu']?.steps;
+assert(Array.isArray(liveFeishuSteps), 'live Feishu workflow steps must be an array');
+assert(
+  liveFeishuSteps.some((step) =>
+    step.uses === 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10'),
+  'live Feishu workflow must pin actions/checkout v6',
+);
+assert(
+  liveFeishuSteps.some((step) =>
+    step.uses === 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e'),
+  'live Feishu workflow must pin actions/setup-node v6',
 );
 
 const taggedSkill = requiredStep(steps, 'Verify installed tagged Skill with released CLI');
@@ -244,6 +287,13 @@ function requiredStep(allSteps, name) {
 function assertRunContains(step, values) {
   assert(typeof step.run === 'string', `${step.name} must be a run step`);
   for (const value of values) assert(step.run.includes(value), `${step.name} is missing ${value}`);
+}
+
+function assertSharedProvenanceVerification(step) {
+  assert(
+    step.run.trim() === 'bash .github/scripts/verify-npm-provenance-with-retry.sh',
+    `${step.name} must use the shared npm provenance verifier`,
+  );
 }
 
 function readJson(relativePath) {
