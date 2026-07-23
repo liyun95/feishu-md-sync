@@ -54,6 +54,7 @@ describe('semantic normalization', () => {
       kind: 'protected-resource',
       resourceKind: 'supademo',
       componentId: 'demo-id',
+      isShowcase: true,
       remoteBlockId: 'isv1',
       remoteToken: 'token1',
       remoteShape: 'isv'
@@ -61,6 +62,7 @@ describe('semantic normalization', () => {
       kind: 'protected-resource',
       resourceKind: 'supademo',
       componentId: 'demo-id',
+      isShowcase: true,
       remoteShape: 'isv'
     });
   });

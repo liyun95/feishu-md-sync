@@ -99,6 +99,7 @@ export type PartialWriteCheckpoint = {
 export type ProtectedResourceReceiptEntry = {
   kind: 'supademo';
   componentId: string;
+  isShowcase?: boolean;
   blockId: string;
   remoteShape: string;
   remoteToken?: string;

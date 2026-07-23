@@ -115,12 +115,15 @@ If the correspondence is missing or ambiguous, publishing is blocked.
 The publish receipt records, for each adopted Supademo:
 
 - local Supademo component ID;
+- normalized showcase mode (`isShowcase` or `isShowcase="true"` is `true`; omission or `isShowcase="false"` is `false`);
 - remote block ID;
 - remote resource type and token when exposed by Feishu;
 - semantic section and ordinal;
 - adjacent-content fingerprints used during adoption.
 
-On later publishes, the planner uses the receipt mapping rather than rediscovering correspondence. It blocks when the remote block is missing, its type or token changed, or its placement no longer satisfies the protected-resource invariant.
+On later publishes, the planner uses the receipt mapping rather than rediscovering correspondence. It blocks when the local component ID or showcase mode changed, the remote block is missing, its add-on record no longer has the same component ID and showcase mode, its type or token changed, or its placement no longer satisfies the protected-resource invariant.
+
+A receipt-mapped Supademo outside the changed ordinary-text scopes is still validated against the receipt-backed local baseline, current local source, receipt state, and the current remote add-on record. Local placement compares stable adjacent semantic locators from the baseline, so editing a neighbour's content does not look like a move while moving the Supademo across that neighbour does. When all protected identity checks pass, it is reported as preserved and produces no create, update, move, or delete operation. This prevents an unchanged opaque ISV resource from globally blocking an unrelated text change without weakening fail-closed behavior: untracked, missing, ambiguous, moved, locally changed, or remotely drifted resources remain blockers.
 
 Protected resources participate in document ordering as explicit anchors. They must not be dropped from the planning sequence as generic opaque nodes.
 

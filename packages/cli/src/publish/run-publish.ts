@@ -658,13 +658,6 @@ export async function analyzeExistingPublish(input: {
     codeBlocks,
     publishContext.zdoc?.inventory
   );
-  const protectedResources = publishContext.zdoc
-    ? planProtectedResources({
-        local: localCurrent,
-        remote: remoteCurrent,
-        receiptEntries: protectedResourceEntries(receipt)
-      })
-    : undefined;
   const baseline = await loadSemanticBaselines({
     cwd: input.cwd,
     receipt,
@@ -676,6 +669,14 @@ export async function analyzeExistingPublish(input: {
     documentTitle: publishContext.documentTitle,
     zdoc: publishContext.zdoc?.inventory
   });
+  const protectedResources = publishContext.zdoc
+    ? planProtectedResources({
+        local: localCurrent,
+        ...(baseline.localBase ? { localBase: baseline.localBase } : {}),
+        remote: remoteCurrent,
+        receiptEntries: protectedResourceEntries(receipt)
+      })
+    : undefined;
   const scopedPatch = baseline.blocker
     ? blockedScopedPatch(baseline.blocker)
     : planScopedPatch({

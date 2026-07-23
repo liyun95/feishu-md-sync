@@ -47,6 +47,7 @@ export type SemanticProtectedResource = {
   locator: SemanticLocator;
   resourceKind: 'supademo';
   componentId?: string;
+  isShowcase: boolean;
   remoteBlockId?: string;
   remoteToken?: string;
   remoteShape?: string;

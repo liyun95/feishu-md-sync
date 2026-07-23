@@ -169,6 +169,7 @@ First warning.
       components: [{
         kind: 'supademo',
         componentId: 'demo-id',
+        isShowcase: true,
         status: 'preserved',
         sourceLine: 3,
         sectionPath: ['Demo']
@@ -185,6 +186,7 @@ First warning.
       kind: 'protected-resource',
       resourceKind: 'supademo',
       componentId: 'demo-id',
+      isShowcase: true,
       locator: { sectionPath: ['Demo'], kind: 'protected-resource', ordinal: 0 }
     }));
   });

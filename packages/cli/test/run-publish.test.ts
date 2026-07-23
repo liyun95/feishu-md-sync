@@ -2975,6 +2975,142 @@ Next text.`, 'utf8');
     });
   });
 
+  it('preserves a tracked showcase Supademo while planning unrelated text', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'fms-supademo-showcase-'));
+    const markdownPath = join(dir, 'doc.md');
+    await writeFile(
+      markdownPath,
+      '# Demo\n\n<Supademo id="demo-id" title="" isShowcase />\n\nAfter.',
+      'utf8'
+    );
+    const adapter: FeishuAdapter = {
+      fetchDocMarkdown: async () => ({
+        markdown: '# Demo\n\n<readonly-block type="isv"></readonly-block>\n\nAfter.'
+      }),
+      fetchDocBlocks: async () => ({ blocks: [
+        { block_id: 'doc_token', block_type: 1, children: ['isv1', 'after'] },
+        {
+          block_id: 'isv1',
+          block_type: 40,
+          add_ons: {
+            component_type_id: 'blk_682093ba9580c002363b9dc3',
+            record: '{"id":"demo-id","isShowcase":true}'
+          }
+        },
+        textBlock('after', 'After.')
+      ] }),
+      replaceDocument: async () => {},
+      createDocument: async () => ({ documentId: 'created' })
+    };
+
+    const adopted = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: true,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      confirmUntrackedRemote: true,
+      adapter
+    });
+    expect(adopted.plan.strategy).toBe('no-op');
+    await expect(readPublishReceipt({
+      cwd: dir,
+      target: { kind: 'docx', token: 'doc_token' }
+    })).resolves.toMatchObject({
+      version: 5,
+      protectedResources: [expect.objectContaining({
+        componentId: 'demo-id',
+        isShowcase: true,
+        blockId: 'isv1'
+      })]
+    });
+
+    await writeFile(
+      markdownPath,
+      '# Demo\n\n<Supademo id="demo-id" title="" isShowcase />\n\nAfter updated.',
+      'utf8'
+    );
+    const dryRun = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+
+    expect(dryRun.plan.zdocRoundTrip).toMatchObject({ safeToPublish: true });
+    expect(dryRun.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'supademo-protected',
+      remoteBlockId: 'isv1'
+    }));
+    expect(dryRun.plan.scopedPatch?.operations).toEqual([expect.objectContaining({
+      kind: 'update',
+      remoteBlockId: 'after',
+      desiredMarkdown: 'After updated.'
+    })]);
+    expect(dryRun.plan.scopedPatch?.operations).not.toContainEqual(expect.objectContaining({
+      remoteBlockId: 'isv1'
+    }));
+
+    await writeFile(
+      markdownPath,
+      '# Demo\n\nAfter.\n\n<Supademo id="demo-id" title="" isShowcase />',
+      'utf8'
+    );
+    const movedComponent = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+    expect(movedComponent.plan.zdocRoundTrip).toMatchObject({ safeToPublish: false });
+    expect(movedComponent.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'supademo-changed',
+      severity: 'blocker'
+    }));
+
+    await writeFile(
+      markdownPath,
+      '# Demo\n\n<Supademo id="demo-id" title="" />\n\nAfter.',
+      'utf8'
+    );
+    const changedComponent = await runPublish({
+      cwd: dir,
+      file: markdownPath,
+      target: { kind: 'docx', token: 'doc_token' },
+      profile: 'none',
+      dialect: 'zdoc-authoring',
+      write: false,
+      create: false,
+      strategy: 'auto',
+      confirmDestructive: false,
+      adapter
+    });
+    expect(changedComponent.plan.zdocRoundTrip).toMatchObject({ safeToPublish: false });
+    expect(changedComponent.plan.zdocRoundTrip?.items).toContainEqual(expect.objectContaining({
+      code: 'supademo-changed',
+      severity: 'blocker'
+    }));
+    expect(changedComponent.plan.scopedPatch?.operations ?? []).not.toContainEqual(expect.objectContaining({
+      remoteBlockId: 'isv1'
+    }));
+  });
+
   it('plans revision 790 as Procedures creates plus Supademo adoption only', async () => {
     const remote = await incidentCreateSection('revision-790.md');
     const local = canonicalIncidentCreateSection(remote);

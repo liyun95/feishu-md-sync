@@ -75,6 +75,50 @@ import Procedures from '@site/src/components/Procedures';
   });
 
   it.each([
+    '<Supademo id="demo" title="" isShowcase />',
+    '<Supademo id="demo" title="" isShowcase="true" />'
+  ])('records showcase mode from %s', (source) => {
+    const result = inventoryAndTransformZdoc({
+      sourcePath: '/workspace/article.md',
+      markdown: `# Demo\n\n${source}\n`,
+      lineOffset: 0
+    });
+
+    expect(result.inventory.components).toContainEqual(expect.objectContaining({
+      kind: 'supademo',
+      componentId: 'demo',
+      isShowcase: true,
+      status: 'preserved'
+    }));
+    expect(result.markdown).toContain('<readonly-block type="isv"></readonly-block>');
+    expect(result.blockers).toEqual([]);
+  });
+
+  it.each([
+    '<Supademo id="demo" title="" isShowcase="yes" />',
+    '<Supademo id="demo" title="" isShowcase={true} />',
+    '<Supademo id="demo" title="" isShowcase isShowcase />',
+    '<Supademo id="demo" title="" autoplay="true" />',
+    '<Supademo id="demo"title="" isShowcase />',
+    '<Supademo id="demo" title=""isShowcase="true" />'
+  ])('blocks unsupported Supademo metadata in %s', (source) => {
+    const result = inventoryAndTransformZdoc({
+      sourcePath: '/workspace/article.md',
+      markdown: `${source}\n`,
+      lineOffset: 0
+    });
+
+    expect(result.inventory.components).toContainEqual(expect.objectContaining({
+      kind: 'unknown',
+      componentName: 'Supademo',
+      status: 'blocking'
+    }));
+    expect(result.blockers).toContainEqual(expect.objectContaining({
+      code: 'zdoc-component-unsupported'
+    }));
+  });
+
+  it.each([
     {
       markdown: '<Procedures>\n\n1. Step.\n',
       code: 'zdoc-procedures-unpaired'
