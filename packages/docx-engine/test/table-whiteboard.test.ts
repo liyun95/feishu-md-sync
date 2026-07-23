@@ -97,6 +97,7 @@ class ResourceTransport implements DocxTransport {
   failCreatedBoardQuery = false;
   imageReplacementAmbiguous = false;
   staleProviderRevision = false;
+  futureProviderRevision = false;
   svgNoop = false;
   transientOverwriteFailures = 0;
   transientQueryFailures = 0;
@@ -122,7 +123,13 @@ class ResourceTransport implements DocxTransport {
     }
     this.revision += 1;
     if (this.tableThrowAfterWrite) throw new Error('table provider response lost');
-    return { revision: String(this.staleProviderRevision ? this.revision - 1 : this.revision) };
+    return {
+      revision: String(this.futureProviderRevision
+        ? this.revision + 1
+        : this.staleProviderRevision
+          ? this.revision - 1
+          : this.revision),
+    };
   }
 
   async insertAfter(input: Parameters<DocxTransport['insertAfter']>[0]) {
@@ -251,6 +258,9 @@ class ResourceTransport implements DocxTransport {
       });
     }
     children.splice(index, 1, ...ids);
+    if (this.surroundingDrift) {
+      (this.find('after').text as ReturnType<typeof textPayload>).elements[0]!.text_run.content = 'drift';
+    }
   }
 }
 
@@ -615,6 +625,47 @@ describe('verified Whiteboard mutations', () => {
       createdBlockIds: ['board-new-1'],
       resourceTokens: ['board-new-1-token'],
     });
+  });
+
+  it('accepts a later image-replacement readback revision after exact structural and raw verification', async () => {
+    const transport = new ResourceTransport();
+    transport.staleProviderRevision = true;
+
+    const result = await apply(transport, [boardIntent(transport, {
+      kind: 'svg',
+      value: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>',
+    }, 'image')]);
+
+    expect(result.operations).toHaveLength(1);
+    expect(result.finalSnapshot.revision).toBe('2');
+    expect(transport.replaceCalls).toHaveLength(1);
+  });
+
+  it('fails closed when image-replacement readback is behind the provider revision', async () => {
+    const transport = new ResourceTransport();
+    transport.futureProviderRevision = true;
+    const mutationJournal = journal();
+
+    await expect(apply(transport, [boardIntent(transport, {
+      kind: 'svg',
+      value: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>',
+    }, 'image')], mutationJournal)).rejects.toBeInstanceOf(PartialMutationError);
+    expect(mutationJournal.entries).toEqual([]);
+    expect(transport.replaceCalls).toHaveLength(1);
+  });
+
+  it('rejects unrelated document drift even when image-replacement readback advanced past the provider revision', async () => {
+    const transport = new ResourceTransport();
+    transport.staleProviderRevision = true;
+    transport.surroundingDrift = true;
+    const mutationJournal = journal();
+
+    await expect(apply(transport, [boardIntent(transport, {
+      kind: 'svg',
+      value: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>',
+    }, 'image')], mutationJournal)).rejects.toBeInstanceOf(PartialMutationError);
+    expect(mutationJournal.entries).toEqual([]);
+    expect(transport.replaceCalls).toHaveLength(1);
   });
 
   it('returns manual partial evidence after an accepted overwrite whose readback is unavailable', async () => {

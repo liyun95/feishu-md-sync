@@ -1007,7 +1007,13 @@ async function executeImageWhiteboardReplacement(
   try {
     observed = await fetchSnapshot(transport, documentId);
     lastObserved = observed;
-    if (providerRevision !== undefined) assertExactProviderRevision(providerRevision, observed, step.operationId);
+    if (providerRevision !== undefined) {
+      // Image-to-Whiteboard replacement is a compound provider operation. The returned
+      // revision can identify an intermediate accepted write while Whiteboard materialization
+      // advances the document again. Structural and raw-resource verification below still
+      // proves the exact intended effect and rejects every unrelated block change.
+      assertProviderRevisionReached(providerRevision, observed, step.operationId);
+    }
     const discovered = discoverImageReplacement(step, current, observed, action.targetBlockId);
     const raw = await queryWhiteboardWithRetry(transport, discovered.token);
     const verified = whiteboardEvidence(discovered.token, raw);
@@ -2224,6 +2230,22 @@ function assertExactProviderRevision(
       { operationId, context: { expectedRevision, actualRevision: snapshot.revision } },
     );
   }
+}
+
+function assertProviderRevisionReached(
+  expectedRevision: string,
+  snapshot: DocumentSnapshot,
+  operationId: string,
+): void {
+  if (/^\d+$/.test(expectedRevision) && /^\d+$/.test(snapshot.revision)) {
+    if (BigInt(snapshot.revision) >= BigInt(expectedRevision)) return;
+    throw new EngineExecutionError(
+      'readback_assertion_failed',
+      `Provider-revision readback expected at least ${expectedRevision} but observed ${snapshot.revision}.`,
+      { operationId, context: { expectedRevision, actualRevision: snapshot.revision } },
+    );
+  }
+  assertExactProviderRevision(expectedRevision, snapshot, operationId);
 }
 
 function inlineText(content: InlineContent[]): string {
