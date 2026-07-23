@@ -4,6 +4,7 @@
   "description": "Workspace root for the feishu-md-sync CLI and documentation site.",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.18.0",
   "workspaces": [
     "packages/cli",
     "packages/docx-engine",
@@ -22,6 +23,8 @@
     "test:coverage:cli": "npm run test:coverage --workspace=feishu-md-sync",
     "test:package": "npm run test:package --workspace=feishu-docx-engine && npm run test:package --workspace=feishu-md-sync",
     "test:release-workflow": "node scripts/test-release-workflow.mjs",
+    "release:manifest:write": "node scripts/release-artifacts.mjs --write",
+    "release:manifest:check": "node scripts/release-artifacts.mjs --check",
     "test:skill-hash": "node scripts/test-skill-tree-hash.mjs",
     "test:skill": "npm run build && node scripts/test-agent-skill-validator.mjs && node scripts/test-skill-tree-hash.mjs && node scripts/validate-agent-skill.mjs --allow-development-version && node scripts/smoke-agent-skill-install.mjs",
     "test:skill:release": "npm run build && node scripts/test-agent-skill-validator.mjs && node scripts/test-skill-tree-hash.mjs && node scripts/validate-agent-skill.mjs && node scripts/smoke-agent-skill-install.mjs",

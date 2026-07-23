@@ -33,6 +33,6 @@ Calling products own intent and policy. They choose what content should change, 
 
 ## Compatibility
 
-The `0.1.x` engine API is the compatibility line for callers declaring `feishu-docx-engine >=0.1.0 <0.2.0`. Published applications may pin one exact patch version for a reproducible execution graph; `feishu-md-sync` 0.6.2 pins `0.1.1` exactly. Engine 0.1.1 accepts schema-v1 prepared batches and recovery checkpoints produced by 0.1.0, while future or schema-incompatible batches remain fail closed. Engine and application packages are released independently.
+The `0.1.x` engine API is the compatibility line for callers declaring `feishu-docx-engine >=0.1.0 <0.2.0`. Published applications may pin one exact patch version for a reproducible execution graph; `feishu-md-sync` 0.6.3 pins `0.1.1` exactly. Engine 0.1.1 accepts schema-v1 prepared batches and recovery checkpoints produced by 0.1.0, while future or schema-incompatible batches remain fail closed. Engine and application packages are released independently.
 
 Node.js 20 or newer and the official `lark-cli` are required at runtime. Import runtime and type contracts from the package root; internal `dist` modules are not public entrypoints.

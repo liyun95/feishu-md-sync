@@ -4,11 +4,13 @@ All notable changes to the published `feishu-md-sync` package are documented her
 
 ## Unreleased
 
-## [0.6.2] - 2026-07-23
+## [0.6.3] - 2026-07-23
 
 ### Changed
 
-- Release `feishu-docx-engine` 0.1.1 and pin `feishu-md-sync` 0.6.2 to that exact engine patch.
+- Release `feishu-docx-engine` 0.1.1 and pin `feishu-md-sync` 0.6.3 to that exact engine patch.
+- Pin release artifact generation and tagged publication to Node 24.18.0 and npm 11.18.0, record that toolchain in the committed manifest, and verify two byte-identical packs before accepting it.
+- Add a release-manifest-only GitHub Actions gate that regenerates both package artifacts with the pinned toolchain before a Release PR can merge.
 - Keep schema-v1 prepared mutation batches and recovery checkpoints created by engine 0.1.0 valid under engine 0.1.1, while rejecting future or schema-incompatible batches before any transport call.
 - Preserve receipt-tracked Supademo blocks only when component identity, `isShowcase`, local baseline placement, adjacent semantic locators, remote block identity, and remote shape still match exactly.
 
@@ -17,6 +19,10 @@ All notable changes to the published `feishu-md-sync` package are documented her
 - Retry eventual post-create Code readback without replaying the successful provider mutation, and retain partial-write evidence when the created block never becomes visible.
 - Accept a later readback revision after image-to-Whiteboard replacement only when exact structural and raw-resource verification proves the intended compound mutation; lagging readback or unrelated drift still fails closed.
 - Wait for npm provenance propagation through one shared integrity, Sigstore, tag, and commit verification loop for both engine and CLI packages.
+
+## [0.6.2] - 2026-07-23
+
+- Tagged but not published. The protected workflow stopped before either npm publish because the manifest was generated with Node 23/npm 10 while the tagged workflow packed with Node 24/npm 11. Recovery advances the CLI to 0.6.3, retains the still-unpublished engine at 0.1.1, and pins one exact artifact toolchain.
 
 ## [0.6.1] - 2026-07-22
 

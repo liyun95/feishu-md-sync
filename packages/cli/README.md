@@ -30,8 +30,8 @@ The selected `lark-cli` identity must have access to the target document, Drive 
 Install the Agent Skill from the release tag matching the CLI version:
 
 ```bash
-npm install --global feishu-md-sync@0.6.2
-npx skills add 'liyun95/feishu-md-sync#v0.6.2' --skill feishu-md-sync --global --yes
+npm install --global feishu-md-sync@0.6.3
+npx skills add 'liyun95/feishu-md-sync#v0.6.3' --skill feishu-md-sync --global --yes
 ```
 
 Invoke it explicitly during dogfood:

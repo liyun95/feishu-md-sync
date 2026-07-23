@@ -9,17 +9,21 @@ const workflow = parse(readFileSync(workflowPath, 'utf8'));
 const liveFeishuWorkflow = parse(
   readFileSync(join(root, '.github', 'workflows', 'live-feishu.yml'), 'utf8'),
 );
+const releaseArtifactWorkflow = parse(
+  readFileSync(join(root, '.github', 'workflows', 'release-artifacts.yml'), 'utf8'),
+);
 const provenanceRetryScript = readFileSync(
   join(root, '.github', 'scripts', 'verify-npm-provenance-with-retry.sh'),
   'utf8',
 );
 const readme = readFileSync(join(root, 'README.md'), 'utf8');
 const releaseChecklist = readFileSync(
-  join(root, 'docs', 'plans', '2026-07-23-v0.6.2-release-checklist.md'),
+  join(root, 'docs', 'plans', '2026-07-23-v0.6.3-release-recovery-checklist.md'),
   'utf8',
 );
 const cli = readJson('packages/cli/package.json');
 const engine = readJson('packages/docx-engine/package.json');
+const rootPackage = readJson('package.json');
 const manifest = readJson(`.github/releases/v${cli.version}.json`);
 
 assertRecord(workflow, 'release workflow');
@@ -32,6 +36,7 @@ assert(publishJob.environment === 'npm', 'publish job must use the protected npm
 assert(publishJob.permissions?.contents === 'read', 'publish job must keep contents read-only');
 assert(publishJob.permissions?.['id-token'] === 'write', 'publish job must grant id-token: write for provenance');
 assert(Array.isArray(publishJob.steps), 'publish job steps must be an array');
+assert(rootPackage.packageManager === 'npm@11.18.0', 'root packageManager must pin the release npm version');
 assert(
   Number(publishJob.env?.NPM_PROVENANCE_MAX_WAIT_SECONDS) >= 300,
   'release workflow must allow at least five minutes for npm provenance propagation',
@@ -89,6 +94,12 @@ expectFailure(
 );
 
 const steps = new Map(publishJob.steps.map((step) => [step.name, step]));
+const setupNode = requiredStep(steps, 'Setup Node');
+assert(
+  setupNode.with?.['node-version'] === '24.18.0',
+  'release workflow must pin the exact Node version used to generate artifact manifests',
+);
+assertRunContains(requiredStep(steps, 'Install pinned release tooling'), ['npm@11.18.0']);
 const orderedNames = [
   'Checkout tagged release commit',
   'Install dependencies',
@@ -127,6 +138,8 @@ assertRunContains(manifestStep, [
   'manifest.publishEngine',
   'provenance.commit',
   'engine_provenance_sha',
+  'manifest.toolchain',
+  "execFileSync('npm', ['--version']",
 ]);
 
 const packStep = requiredStep(steps, 'Pack engine and CLI release artifacts');
@@ -227,6 +240,35 @@ assert(
   'live Feishu workflow must pin actions/setup-node v6',
 );
 
+assertRecord(releaseArtifactWorkflow, 'release artifact workflow');
+assert(releaseArtifactWorkflow.name === 'Verify release artifact manifest', 'release artifact workflow must have a stable name');
+assert(
+  Array.isArray(releaseArtifactWorkflow.on?.pull_request?.paths) &&
+    releaseArtifactWorkflow.on.pull_request.paths.includes('.github/releases/**'),
+  'release artifact workflow must run when a release manifest changes',
+);
+const artifactJob = releaseArtifactWorkflow.jobs?.verify;
+assertRecord(artifactJob, 'release artifact verify job');
+assert(artifactJob.permissions?.contents === 'read', 'release artifact workflow must keep contents read-only');
+assert(Array.isArray(artifactJob.steps), 'release artifact workflow steps must be an array');
+const artifactSteps = new Map(artifactJob.steps.map((step) => [step.name, step]));
+const artifactSetupNode = requiredStep(artifactSteps, 'Setup Node');
+assert(
+  artifactSetupNode.with?.['node-version'] === '24.18.0',
+  'release artifact workflow must use the manifest toolchain Node version',
+);
+assertRunContains(requiredStep(artifactSteps, 'Install pinned npm'), ['npm@11.18.0']);
+assertRunContains(requiredStep(artifactSteps, 'Verify deterministic release artifacts'), ['npm run release:manifest:check']);
+assert(
+  rootPackage.scripts?.['release:manifest:write'] === 'node scripts/release-artifacts.mjs --write' &&
+    rootPackage.scripts?.['release:manifest:check'] === 'node scripts/release-artifacts.mjs --check',
+  'root scripts must expose pinned release manifest write and check commands',
+);
+const releaseArtifactScript = readFileSync(join(root, 'scripts', 'release-artifacts.mjs'), 'utf8');
+for (const expected of ['v24.18.0', '11.18.0', 'npm pack', '--write', '--check', 'timingSafeEqual']) {
+  assert(releaseArtifactScript.includes(expected), `release artifact script is missing ${expected}`);
+}
+
 const taggedSkill = requiredStep(steps, 'Verify installed tagged Skill with released CLI');
 assertRunContains(taggedSkill, [
   'skills@1.5.17',
@@ -245,6 +287,9 @@ process.stdout.write('Structured release workflow and manifest checks passed.\n'
 function validateManifest(value, cliManifest, engineManifest) {
   assertRecord(value, 'release manifest');
   assert(value.schemaVersion === 1, 'release manifest schemaVersion must be 1');
+  assertRecord(value.toolchain, 'release manifest toolchain');
+  assert(value.toolchain.node === '24.18.0', 'release manifest Node version must be exact');
+  assert(value.toolchain.npm === '11.18.0', 'release manifest npm version must be exact');
   assert(value.tag === `v${cliManifest.version}`, 'release manifest tag must match CLI version');
   assert(typeof value.publishEngine === 'boolean', 'release manifest publishEngine must be boolean');
   validatePackage(value.cli, cliManifest.name, cliManifest.version, 'CLI');
