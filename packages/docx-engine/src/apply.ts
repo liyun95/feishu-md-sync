@@ -33,8 +33,10 @@ import { PartialMutationError } from './model.js';
 import {
   ENGINE_SCHEMA_VERSION,
   ENGINE_VERSION,
+  SUPPORTED_PREPARED_ENGINE_VERSIONS,
   assertPreparedMutationBatchIntegrity,
   prepareMutationBatch,
+  supportsPreparedEngineVersion,
 } from './prepare.js';
 import { createDocumentSnapshot } from './snapshot.js';
 import {
@@ -120,11 +122,16 @@ async function applyMutationBatch(
       { context: { actualSchemaVersion: batch.schemaVersion, supportedSchemaVersion: ENGINE_SCHEMA_VERSION } },
     );
   }
-  if (batch.engineVersion !== ENGINE_VERSION) {
+  if (!supportsPreparedEngineVersion(batch.engineVersion)) {
     throw new EngineExecutionError(
       'unsupported_engine_version',
       `Prepared mutation engine ${batch.engineVersion} is not supported by engine ${ENGINE_VERSION}.`,
-      { context: { actualEngineVersion: batch.engineVersion, supportedEngineVersion: ENGINE_VERSION } },
+      {
+        context: {
+          actualEngineVersion: batch.engineVersion,
+          supportedEngineVersions: [...SUPPORTED_PREPARED_ENGINE_VERSIONS],
+        },
+      },
     );
   }
 

@@ -19,8 +19,14 @@ import type {
   SnapshotNode,
 } from './model.js';
 
-export const ENGINE_VERSION = '0.1.0';
+export const ENGINE_VERSION = '0.1.1';
 export const ENGINE_SCHEMA_VERSION = 1;
+export const SUPPORTED_PREPARED_ENGINE_VERSIONS = ['0.1.0', ENGINE_VERSION] as const;
+const compatiblePreparedEngineVersions = new Set<string>(SUPPORTED_PREPARED_ENGINE_VERSIONS);
+
+export function supportsPreparedEngineVersion(version: string): boolean {
+  return compatiblePreparedEngineVersions.has(version);
+}
 
 export type MutationPreflightErrorCode =
   | 'anchor_missing'

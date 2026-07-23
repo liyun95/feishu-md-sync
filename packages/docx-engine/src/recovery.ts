@@ -25,6 +25,7 @@ import {
   ENGINE_VERSION,
   assertPreparedMutationBatchIntegrity,
   prepareMutationBatch,
+  supportsPreparedEngineVersion,
 } from './prepare.js';
 import { createDocumentSnapshot } from './snapshot.js';
 import type { DocxTransport, ProviderBlock } from './transport.js';
@@ -310,7 +311,7 @@ function validateBeforeRead(input: AssessRecoveryInput): RecoveryReason | undefi
     return 'invalid_batch_integrity';
   }
   if (input.batch.schemaVersion !== ENGINE_SCHEMA_VERSION) return 'unsupported_schema_version';
-  if (input.batch.engineVersion !== ENGINE_VERSION) return 'unsupported_engine_version';
+  if (!supportsPreparedEngineVersion(input.batch.engineVersion)) return 'unsupported_engine_version';
 
   const { prewriteSnapshot, completedOperations } = input.checkpoint;
   if (!prewriteSnapshot || !Array.isArray(prewriteSnapshot.nodes) || !Array.isArray(completedOperations)) {

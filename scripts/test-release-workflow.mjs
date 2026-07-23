@@ -15,7 +15,7 @@ const provenanceRetryScript = readFileSync(
 );
 const readme = readFileSync(join(root, 'README.md'), 'utf8');
 const releaseChecklist = readFileSync(
-  join(root, 'docs', 'plans', '2026-07-22-v0.6.1-release-recovery-checklist.md'),
+  join(root, 'docs', 'plans', '2026-07-23-v0.6.2-release-checklist.md'),
   'utf8',
 );
 const cli = readJson('packages/cli/package.json');
@@ -184,7 +184,10 @@ assertRunContains(consumer, [
   '--version',
   'publish --help',
 ]);
-assert(!String(consumer.run).includes('feishu-docx-engine-0.1.0.tgz'), 'CLI consumer smoke must not install a local engine tarball');
+assert(
+  !/feishu-docx-engine-\d+\.\d+\.\d+\.tgz/.test(String(consumer.run)),
+  'CLI consumer smoke must not install a local engine tarball',
+);
 
 const publishCli = requiredStep(steps, 'Publish CLI with provenance');
 assertRunContains(publishCli, [

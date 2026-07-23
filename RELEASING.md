@@ -134,6 +134,7 @@ npx skills add 'liyun95/feishu-md-sync#vX.Y.Z' --skill feishu-md-sync --global -
 | `v0.5.0` | Verified Zdoc round trips, explicit baseline adoption, nested hierarchy recovery, and resumable scoped publishing. | Published |
 | `v0.6.0` | Failed immutable tag; workflow stopped at clean-checkout typechecking before any npm package or GitHub Release was published. | Tagged, unpublished |
 | `v0.6.1` | Recovery release for the shared Docx engine, engine-backed scoped writes, nested-list/native-table verification, and dependency-ordered provenance. | Published |
+| `v0.6.2` | Eventual Code readback, settled Whiteboard revisions, protected Supademo identity, and engine 0.1.0 batch compatibility. | Ready for release |
 
 If an immutable tag fails before publication, keep that tag unchanged and advance the affected package to the next patch version. A still-unpublished independently versioned dependency may retain its candidate version, but its provenance must bind to the new recovery tag and commit.
 
