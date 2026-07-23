@@ -4,6 +4,7 @@ import {
   createDocumentSnapshot,
   createFeishuDocxEngine,
   prepareMutationBatch,
+  preparedMutationBatchFingerprint,
   type DocxTransport,
   type DocumentSnapshot,
   type MutationIntent,
@@ -724,6 +725,31 @@ describe('read-only recovery assessment', () => {
       checkpoint: { prewriteSnapshot: before, completedOperations: [evidence('not-a-prefix', before)] },
     })).resolves.toEqual({ disposition: 'manual_inspection_required', reason: 'checkpoint_not_prefix' });
     expect(transport.fetches).toBe(0);
+    expect(transport.writes).toBe(0);
+  });
+
+  it('accepts an engine 0.1.0 prepared batch and checkpoint after the 0.1.1 patch upgrade', async () => {
+    const before = snapshot(baseBlocks());
+    const batch = structuredClone(prepared(before, [{
+      operationId: 'assert-a', kind: 'assert', blockId: 'a',
+      expectedHash: before.nodes[1]!.canonicalHash,
+    }]));
+    batch.engineVersion = '0.1.0';
+    batch.fingerprint = preparedMutationBatchFingerprint(batch);
+    const transport = new RecoveryTransport(before);
+
+    await expect(createFeishuDocxEngine({ transport }).assessRecovery({
+      batch,
+      checkpoint: {
+        prewriteSnapshot: before,
+        completedOperations: [evidence('assert-a', before)],
+      },
+    })).resolves.toEqual({
+      disposition: 'resume_possible',
+      completedOperationIds: ['assert-a'],
+      pendingOperationIds: [],
+    });
+    expect(transport.fetches).toBe(1);
     expect(transport.writes).toBe(0);
   });
 

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "tag": "v0.6.2",
+  "publishEngine": true,
+  "cli": {
+    "name": "feishu-md-sync",
+    "version": "0.6.2",
+    "integrity": "sha512-/1oChd2rQ9S7pLG67y5AWiAzlOcjNu8vHpNAZFOXqOo5yMb1F1iy4PAf9E/H97QS5NRVZCsjRHQwj6WYTNxQEg==",
+    "sha256": "bdde7c84293af5aef4ca87411dc24e63b3ea8f8d19087b29f94c74766448aaaa"
+  },
+  "engine": {
+    "name": "feishu-docx-engine",
+    "version": "0.1.1",
+    "integrity": "sha512-tMtFldj6f5BwGgJ/TekgFYPoNLANWTykke+zaPKaAOvIEOppwmHnHXNNr3XDPpR/Us8OOLKq15kGxDL7VNfZ+w==",
+    "sha256": "72b3acb0bf555bf70918e0409dc1e52fec395ef5c83f091ed6293efe7591eb45",
+    "provenance": {
+      "tag": "v0.6.2",
+      "ref": "refs/tags/v0.6.2",
+      "commit": "self"
+    }
+  }
+}

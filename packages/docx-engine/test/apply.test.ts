@@ -449,6 +449,33 @@ describe('verified mutation execution', () => {
     expect(transport.writeCount).toBe(0);
   });
 
+  it('accepts a prepared batch from engine 0.1.0 after the 0.1.1 patch upgrade', async () => {
+    const transport = new MemoryTransport();
+    transport.postCreateReadbackMisses = 2;
+    const prepared = structuredClone(batch(transport, [{
+      operationId: 'insert-code-from-0.1.0',
+      kind: 'insert',
+      parentBlockId: 'root',
+      insertAfterBlockId: 'a',
+      insertBeforeBlockId: 'b',
+      desired: [{ kind: 'code', language: 'bash', text: 'echo compatible' }],
+    }]));
+    prepared.engineVersion = '0.1.0';
+    prepared.fingerprint = preparedMutationBatchFingerprint(prepared);
+
+    await expect(createFeishuDocxEngine({ transport }).apply({
+      batch: prepared,
+      journal: journal(),
+    })).resolves.toMatchObject({
+      operations: [expect.objectContaining({
+        operationId: 'insert-code-from-0.1.0',
+        createdBlockIds: ['new-1'],
+        verified: true,
+      })],
+    });
+    expect(transport.writeCount).toBe(1);
+  });
+
   it('checks every prepared physical assertion before the first write', async () => {
     const transport = new MemoryTransport();
     const prepared = structuredClone(batch(transport, [{

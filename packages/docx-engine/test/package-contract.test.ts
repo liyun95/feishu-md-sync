@@ -11,6 +11,7 @@ interface RootPackage {
 }
 
 interface EnginePackage {
+  version: string;
   scripts: Record<string, string>;
   devDependencies: Record<string, string>;
 }
@@ -28,7 +29,8 @@ const engineVitestConfig = readFileSync(
 
 describe('package contract', () => {
   it('exports stable engine identity', () => {
-    expect(ENGINE_VERSION).toBe('0.1.0');
+    expect(ENGINE_VERSION).toBe('0.1.1');
+    expect(enginePackage.version).toBe(ENGINE_VERSION);
     expect(ENGINE_SCHEMA_VERSION).toBe(1);
     expect(ENGINE_CAPABILITIES).toEqual([
       'nested-list-create-v1',

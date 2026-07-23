@@ -4,6 +4,20 @@ All notable changes to the published `feishu-md-sync` package are documented her
 
 ## Unreleased
 
+## [0.6.2] - 2026-07-23
+
+### Changed
+
+- Release `feishu-docx-engine` 0.1.1 and pin `feishu-md-sync` 0.6.2 to that exact engine patch.
+- Keep schema-v1 prepared mutation batches and recovery checkpoints created by engine 0.1.0 valid under engine 0.1.1, while rejecting future or schema-incompatible batches before any transport call.
+- Preserve receipt-tracked Supademo blocks only when component identity, `isShowcase`, local baseline placement, adjacent semantic locators, remote block identity, and remote shape still match exactly.
+
+### Fixed
+
+- Retry eventual post-create Code readback without replaying the successful provider mutation, and retain partial-write evidence when the created block never becomes visible.
+- Accept a later readback revision after image-to-Whiteboard replacement only when exact structural and raw-resource verification proves the intended compound mutation; lagging readback or unrelated drift still fails closed.
+- Wait for npm provenance propagation through one shared integrity, Sigstore, tag, and commit verification loop for both engine and CLI packages.
+
 ## [0.6.1] - 2026-07-22
 
 ### Added
