@@ -18,6 +18,7 @@ All notable changes to the published `feishu-md-sync` package are documented her
 
 - Retry eventual post-create Code readback without replaying the successful provider mutation, and retain partial-write evidence when the created block never becomes visible.
 - Accept a later readback revision after image-to-Whiteboard replacement only when exact structural and raw-resource verification proves the intended compound mutation; lagging readback or unrelated drift still fails closed.
+- Retry an unchanged image-to-Whiteboard structural readback while Feishu materializes the replacement, without replaying the provider mutation; ambiguous candidates, identity changes, and unrelated drift still fail closed with partial-write evidence.
 - Wait for npm provenance propagation through one shared integrity, Sigstore, tag, and commit verification loop for both engine and CLI packages.
 
 ## [0.6.2] - 2026-07-23
