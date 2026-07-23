@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   canonicalHash,
   createDocumentSnapshot,
@@ -67,8 +67,10 @@ class MemoryTransport implements DocxTransport {
   returnMissingCreatedId = false;
   replaceWithNewId = false;
   insertedCodeLanguageOverride?: string;
+  postCreateReadbackMisses = 0;
   lastReplaceInput?: Parameters<DocxTransport['replaceBlock']>[0];
   driftAfterWrite = false;
+  private preCreateBlocks?: ProviderBlock[];
   private nextId = 1;
 
   async resolveDocument(): Promise<{ documentId: string }> {
@@ -79,6 +81,13 @@ class MemoryTransport implements DocxTransport {
     expect(documentId).toBe(this.documentId);
     this.fetchCount += 1;
     if (this.failFetchNumber === this.fetchCount) throw new Error(`fetch failed at ${this.fetchCount}`);
+    if (this.postCreateReadbackMisses > 0 && this.preCreateBlocks) {
+      this.postCreateReadbackMisses -= 1;
+      return {
+        revision: String(this.revision),
+        blocks: structuredClone(this.preCreateBlocks),
+      };
+    }
     return {
       revision: String(this.revision),
       blocks: structuredClone(this.blocks),
@@ -219,6 +228,7 @@ class MemoryTransport implements DocxTransport {
   async createChildren(input: Parameters<DocxTransport['createChildren']>[0]) {
     this.beforeWrite();
     this.createIndexes.push(input.index);
+    if (this.postCreateReadbackMisses > 0) this.preCreateBlocks = structuredClone(this.blocks);
     const parent = this.find(input.parentBlockId);
     const created = input.blocks.map((block) => {
       const blockId = `new-${this.nextId++}`;
@@ -653,6 +663,70 @@ describe('verified mutation execution', () => {
     })).resolves.toMatchObject({
       operations: [{ operationId: 'insert-code-display-language', verified: true }],
     });
+  });
+
+  it('waits for a created Code block to appear in provider readback without repeating the mutation', async () => {
+    const transport = new MemoryTransport();
+    transport.postCreateReadbackMisses = 2;
+
+    const outcome = await createFeishuDocxEngine({ transport }).apply({
+      batch: batch(transport, [{
+        operationId: 'insert-code-eventual-readback',
+        kind: 'insert',
+        parentBlockId: 'root',
+        insertAfterBlockId: 'a',
+        insertBeforeBlockId: 'b',
+        desired: [{ kind: 'code', language: 'bash', text: 'echo eventual' }],
+      }]),
+      journal: journal(),
+    });
+
+    expect(outcome.operations).toEqual([
+      expect.objectContaining({
+        operationId: 'insert-code-eventual-readback',
+        createdBlockIds: ['new-1'],
+        verified: true,
+      }),
+    ]);
+    expect(outcome.finalSnapshot.nodes[0]!.childBlockIds).toEqual(['a', 'new-1', 'b', 'c']);
+    expect(transport.writeCount).toBe(1);
+  });
+
+  it('keeps partial mutation evidence when created Code readback never becomes visible', async () => {
+    vi.useFakeTimers();
+    const transport = new MemoryTransport();
+    transport.postCreateReadbackMisses = Number.MAX_SAFE_INTEGER;
+    try {
+      const applying = createFeishuDocxEngine({ transport }).apply({
+        batch: batch(transport, [{
+          operationId: 'insert-code-readback-timeout',
+          kind: 'insert',
+          parentBlockId: 'root',
+          insertAfterBlockId: 'a',
+          insertBeforeBlockId: 'b',
+          desired: [{ kind: 'code', language: 'bash', text: 'echo timeout' }],
+        }]),
+        journal: journal(),
+      });
+      const rejected = expect(applying).rejects.toMatchObject({
+        name: 'PartialMutationError',
+        evidence: {
+          failedOperation: {
+            operationId: 'insert-code-readback-timeout',
+            kind: 'verification',
+            message: 'Insert segment returned block IDs that do not exist in readback.',
+          },
+          createdBlockIds: ['new-1'],
+          pendingOperationIds: [],
+        },
+      });
+      await vi.runAllTimersAsync();
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(transport.fetchCount).toBeGreaterThan(3);
+    expect(transport.writeCount).toBe(1);
   });
 
   it('verifies a list item with a continuation paragraph followed by a recursive nested list', async () => {

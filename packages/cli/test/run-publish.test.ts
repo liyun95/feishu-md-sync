@@ -1758,6 +1758,99 @@ Next text.`, 'utf8');
     });
   });
 
+  it('waits for Code reconcile create readback without repeating the CLI mutation', async () => {
+    const state = codeReconcileState([
+      headingBlock('build', 'Build'),
+      codeBlock('old-code', 'old', 49),
+      headingBlock('search', 'Search'),
+      textBlock('anchor', 'Anchor.')
+    ]);
+    const staleBlocks = structuredClone(state.blocks());
+    let inserted = false;
+    let postInsertReads = 0;
+    let writes = 0;
+    const adapter = codeReconcileAdapter(state, {
+      fetchDocBlocks: async () => ({
+        blocks: inserted && postInsertReads++ < 2 ? staleBlocks : state.blocks()
+      }),
+      createChildBlocks: async ({ clientToken }) => {
+        writes += 1;
+        const created = codeBlock('created-code', 'new', 49);
+        state.insertAfter('anchor', created);
+        inserted = true;
+        return { blocks: [created], clientToken };
+      }
+    });
+
+    await expect(applyScopedOperations({
+      adapter,
+      doc: 'doc_token',
+      operations: [codeReconcileOperation({
+        desiredContent: 'new',
+        desiredSection: 'Search',
+        afterLocator: { sectionPath: ['Search'], kind: 'text', ordinal: 1 },
+        remoteCodes: [{ section: 'Build', content: 'old', blockId: 'old-code' }]
+      })],
+      callouts: { noteTitle: 'Notes', warningTitle: 'Warning' }
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'code-reconcile-create' })
+    ]));
+
+    expect(postInsertReads).toBeGreaterThanOrEqual(3);
+    expect(writes).toBe(1);
+  });
+
+  it('preserves CLI partial evidence when Code reconcile create readback never appears', async () => {
+    vi.useFakeTimers();
+    const state = codeReconcileState([
+      headingBlock('build', 'Build'),
+      codeBlock('old-code', 'old', 49),
+      headingBlock('search', 'Search'),
+      textBlock('anchor', 'Anchor.')
+    ]);
+    const staleBlocks = structuredClone(state.blocks());
+    let inserted = false;
+    let writes = 0;
+    const adapter = codeReconcileAdapter(state, {
+      fetchDocBlocks: async () => ({ blocks: inserted ? staleBlocks : state.blocks() }),
+      createChildBlocks: async ({ clientToken }) => {
+        writes += 1;
+        const created = codeBlock('created-code', 'new', 49);
+        state.insertAfter('anchor', created);
+        inserted = true;
+        return { blocks: [created], clientToken };
+      }
+    });
+    try {
+      const applying = applyScopedOperations({
+        adapter,
+        doc: 'doc_token',
+        operations: [codeReconcileOperation({
+          desiredContent: 'new',
+          desiredSection: 'Search',
+          afterLocator: { sectionPath: ['Search'], kind: 'text', ordinal: 1 },
+          remoteCodes: [{ section: 'Build', content: 'old', blockId: 'old-code' }]
+        })],
+        callouts: { noteTitle: 'Notes', warningTitle: 'Warning' }
+      });
+      const rejected = expect(applying).rejects.toMatchObject({
+        name: 'PartialWriteError',
+        completedOperations: [expect.objectContaining({
+          kind: 'code-reconcile-create',
+          blockIds: ['created-code']
+        })],
+        failedOperation: expect.objectContaining({ kind: 'code-readback' }),
+        receiptWritten: false
+      });
+      await vi.runAllTimersAsync();
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(writes).toBe(1);
+  });
+
   it('carries a replacement Code ID into reconcile checkpoints', async () => {
     const state = codeReconcileState([
       headingBlock('search', 'Search'),
