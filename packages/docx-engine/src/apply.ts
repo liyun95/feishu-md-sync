@@ -1013,16 +1013,29 @@ async function executeImageWhiteboardReplacement(
   let observed: DocumentSnapshot;
   let lastObserved = current;
   try {
-    observed = await fetchSnapshot(transport, documentId);
-    lastObserved = observed;
-    if (providerRevision !== undefined) {
-      // Image-to-Whiteboard replacement is a compound provider operation. The returned
-      // revision can identify an intermediate accepted write while Whiteboard materialization
-      // advances the document again. Structural and raw-resource verification below still
-      // proves the exact intended effect and rejects every unrelated block change.
-      assertProviderRevisionReached(providerRevision, observed, step.operationId);
+    let discovered: { blockId: string; token: string };
+    for (let attempt = 0; ; attempt += 1) {
+      observed = await fetchSnapshot(transport, documentId);
+      lastObserved = observed;
+      if (providerRevision !== undefined) {
+        // Image-to-Whiteboard replacement is a compound provider operation. The returned
+        // revision can identify an intermediate accepted write while Whiteboard materialization
+        // advances the document again. Structural and raw-resource verification below still
+        // proves the exact intended effect and rejects every unrelated block change.
+        assertProviderRevisionReached(providerRevision, observed, step.operationId);
+      }
+      try {
+        discovered = discoverImageReplacement(step, current, observed, action.targetBlockId);
+        break;
+      } catch (cause) {
+        const delayMs = WHITEBOARD_RETRY_DELAYS_MS[attempt];
+        if (delayMs === undefined ||
+          !isPendingImageReplacementReadback(cause, step, current, observed, action.targetBlockId)) {
+          throw cause;
+        }
+        await delay(delayMs);
+      }
     }
-    const discovered = discoverImageReplacement(step, current, observed, action.targetBlockId);
     const raw = await queryWhiteboardWithRetry(transport, discovered.token);
     const verified = whiteboardEvidence(discovered.token, raw);
     const expectedTexts = svgExpectedTexts(action.svg);
@@ -1208,7 +1221,22 @@ function imageReplacementCandidates(
   const index = beforeParent.childBlockIds.indexOf(action.targetBlockId);
   const preceding = index === 0 ? beforeParent.blockId : beforeParent.childBlockIds[index - 1]!;
   const following = beforeParent.childBlockIds[index + 1];
-  return idsBetween(afterParent.childBlockIds, afterParent.blockId, preceding, following);
+  return idsBetween(afterParent.childBlockIds, afterParent.blockId, preceding, following)
+    .filter((blockId) => blockId !== action.targetBlockId);
+}
+
+function isPendingImageReplacementReadback(
+  cause: unknown,
+  step: PreparedMutationStep,
+  before: DocumentSnapshot,
+  after: DocumentSnapshot,
+  targetBlockId: string,
+): boolean {
+  if (!(cause instanceof EngineExecutionError) || cause.code !== 'readback_assertion_failed') return false;
+  if (before.documentId !== after.documentId || before.canonicalHash !== after.canonicalHash) return false;
+  const target = nodeIndex(after).get(targetBlockId);
+  return target?.blockId === targetBlockId &&
+    imageReplacementCandidates(step, before, after).length === 0;
 }
 
 async function executeInsertSegments(

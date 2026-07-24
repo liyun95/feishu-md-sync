@@ -93,8 +93,20 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
 1. Review the target milestone and confirm all intended pull requests are merged.
 2. Calculate the version from the highest `release:*` impact in the milestone.
 3. Update `packages/cli/package.json`, any separately versioned workspace package manifests, and `package-lock.json`. A CLI dependency on a workspace package must pin the exact release version.
-4. Add or update the changelog and final GitHub Release notes from the milestone pull requests. Create the tag-keyed JSON release manifest with both package identities, npm integrity, SHA-256, whether the engine is published in this release, and the engine provenance tag/ref/commit identity.
-5. Run:
+4. Add or update the changelog and final GitHub Release notes from the milestone pull requests. Create the tag-keyed JSON release manifest scaffold with both package identities, whether the engine is published in this release, and the engine provenance tag/ref/commit identity.
+5. Generate and verify artifact hashes only with the exact toolchain recorded in the manifest. The script packs both packages twice and rejects any byte drift:
+
+   ```bash
+   npx --yes --package node@24.18.0 --package npm@11.18.0 -- \
+     npm ci --ignore-scripts --no-audit --no-fund
+   npx --yes --package node@24.18.0 --package npm@11.18.0 -- \
+     npm run release:manifest:write
+   npx --yes --package node@24.18.0 --package npm@11.18.0 -- \
+     npm run release:manifest:check
+   ```
+
+   The Release PR must pass the dedicated `Release artifacts` workflow, which runs the same check using Node 24.18.0 and npm 11.18.0. Do not hand-edit package integrity or SHA-256 values.
+6. Run:
 
    ```bash
    npm test
@@ -106,13 +118,13 @@ Create a dedicated Release PR rather than publishing directly from an arbitrary 
    npm run docs:build
    ```
 
-6. Run the live Feishu smoke tests with the dedicated test document and identity.
-7. Merge the Release PR after all required checks pass.
-8. Before tagging a release that introduces a new npm package name, confirm the package already exists and has a Trusted Publisher. If npm returns `E404`, obtain separate explicit approval, prepare `0.0.0` from a clean disposable checkout of the merged source, conventionally publish it with `--tag bootstrap --access public`, and configure its Trusted Publisher for this repository's `release.yml` workflow and `npm` environment. Never seed the real candidate version and never move `latest` during bootstrap.
-9. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit only after every new package is bootstrapped and both existing and new package Trusted Publisher settings are verified. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. For a release with workspace packages, the workflow publishes them in dependency order. It publishes `feishu-docx-engine` first, waits for the exact registry integrity, installs that exact registry version in isolation, and only then publishes `feishu-md-sync`. Every candidate package uses npm Trusted Publishing and receives separate signed Sigstore provenance bound to the same tag and commit.
-10. Install the released engine and CLI plus the matching tagged Skill in isolated environments, then run package checks, Skill validation, and a read-only Feishu dogfood.
-11. Confirm every npm package, provenance bundle, GitHub Release, and tagged Skill is available. If a post-publish step fails, rerun the same tag workflow; recovery accepts an existing package only when its registry integrity matches the freshly packed bytes exactly. A mismatched existing version is a hard stop.
-12. Close the milestone.
+7. Run the live Feishu smoke tests with the dedicated test document and identity.
+8. Merge the Release PR after all required checks pass.
+9. Before tagging a release that introduces a new npm package name, confirm the package already exists and has a Trusted Publisher. If npm returns `E404`, obtain separate explicit approval, prepare `0.0.0` from a clean disposable checkout of the merged source, conventionally publish it with `--tag bootstrap --access public`, and configure its Trusted Publisher for this repository's `release.yml` workflow and `npm` environment. Never seed the real candidate version and never move `latest` during bootstrap.
+10. Create and push the matching `vX.Y.Z` Git tag from the merged Release PR commit only after every new package is bootstrapped and both existing and new package Trusted Publisher settings are verified. Repository rules prevent matching release tags from being updated or deleted. The immutable tag triggers `Publish npm package`; approve its protected `npm` environment deployment. For a release with workspace packages, the workflow publishes them in dependency order. It publishes `feishu-docx-engine` first, waits for the exact registry integrity, installs that exact registry version in isolation, and only then publishes `feishu-md-sync`. Every candidate package uses npm Trusted Publishing and receives separate signed Sigstore provenance bound to the same tag and commit.
+11. Install the released engine and CLI plus the matching tagged Skill in isolated environments, then run package checks, Skill validation, and a read-only Feishu dogfood.
+12. Confirm every npm package, provenance bundle, GitHub Release, and tagged Skill is available. If a post-publish step fails, rerun the same tag workflow; recovery accepts an existing package only when its registry integrity matches the freshly packed bytes exactly. A mismatched existing version is a hard stop.
+13. Close the milestone.
 
 `npm run test:skill` permits only an older pre-release development CLI while the next release is being assembled. Release PRs and tagged releases must use `npm run test:skill:release`, which rejects any CLI version outside the Skill's declared compatibility range.
 
@@ -134,7 +146,8 @@ npx skills add 'liyun95/feishu-md-sync#vX.Y.Z' --skill feishu-md-sync --global -
 | `v0.5.0` | Verified Zdoc round trips, explicit baseline adoption, nested hierarchy recovery, and resumable scoped publishing. | Published |
 | `v0.6.0` | Failed immutable tag; workflow stopped at clean-checkout typechecking before any npm package or GitHub Release was published. | Tagged, unpublished |
 | `v0.6.1` | Recovery release for the shared Docx engine, engine-backed scoped writes, nested-list/native-table verification, and dependency-ordered provenance. | Published |
-| `v0.6.2` | Eventual Code readback, settled Whiteboard revisions, protected Supademo identity, and engine 0.1.0 batch compatibility. | Ready for release |
+| `v0.6.2` | Eventual Code readback, settled Whiteboard revisions, protected Supademo identity, and engine 0.1.0 batch compatibility. | Tagged, unpublished; artifact manifest mismatch stopped before npm publish |
+| `v0.6.3` | Recovery release with an exact Node/npm artifact toolchain and PR-time deterministic manifest verification. | Ready for release |
 
 If an immutable tag fails before publication, keep that tag unchanged and advance the affected package to the next patch version. A still-unpublished independently versioned dependency may retain its candidate version, but its provenance must bind to the new recovery tag and commit.
 

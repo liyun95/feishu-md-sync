@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "toolchain": {
+    "node": "24.18.0",
+    "npm": "11.18.0"
+  },
+  "tag": "v0.6.3",
+  "publishEngine": true,
+  "cli": {
+    "name": "feishu-md-sync",
+    "version": "0.6.3",
+    "integrity": "sha512-rK3t4fgu8KAdoti2VHT865kXV9+7bwE0Bj5G0/UNZMXqax5mDlI8RRiyzOXI+XVU+goAGsJN7q4+Xmr5YbBDYw==",
+    "sha256": "b678a10de407fa3ec475b5bdca8437844bf5e4f69cb6a139fb0541d6e2b23339"
+  },
+  "engine": {
+    "name": "feishu-docx-engine",
+    "version": "0.1.1",
+    "integrity": "sha512-yifhK17zMGphedPKYzLlyBMVtmLCrjZF1IjILew/OGd1ZcGGpEY42ZuKcrPbMNgEuclTW+wyzYq6q9cyNU13wg==",
+    "sha256": "a133306d0f76ce6694aadfd2d152aeca95384fea1de62bc459228e30a3089b2b",
+    "provenance": {
+      "tag": "v0.6.3",
+      "ref": "refs/tags/v0.6.3",
+      "commit": "self"
+    }
+  }
+}

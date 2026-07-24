@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   canonicalHash,
   createDocumentSnapshot,
@@ -101,6 +101,9 @@ class ResourceTransport implements DocxTransport {
   svgNoop = false;
   transientOverwriteFailures = 0;
   transientQueryFailures = 0;
+  imageReplacementReadbackMisses = 0;
+  imageReplacementReadbacks = 0;
+  private imageReplacementBeforeBlocks: ProviderBlock[] | undefined;
   private nextId = 1;
 
   async resolveDocument(): Promise<{ documentId: string }> {
@@ -109,6 +112,16 @@ class ResourceTransport implements DocxTransport {
 
   async fetchBlocks(documentId: string) {
     expect(documentId).toBe(this.documentId);
+    if (this.imageReplacementBeforeBlocks) {
+      this.imageReplacementReadbacks += 1;
+      if (this.imageReplacementReadbackMisses > 0) {
+        this.imageReplacementReadbackMisses -= 1;
+        return {
+          revision: String(this.revision),
+          blocks: structuredClone(this.imageReplacementBeforeBlocks),
+        };
+      }
+    }
     return { revision: String(this.revision), blocks: structuredClone(this.blocks) };
   }
 
@@ -240,6 +253,7 @@ class ResourceTransport implements DocxTransport {
   }
 
   private replaceImage(targetId: string): void {
+    this.imageReplacementBeforeBlocks = structuredClone(this.blocks);
     const target = this.find(targetId);
     const parent = this.find(target.parent_id!);
     const children = parent.children as string[];
@@ -641,6 +655,62 @@ describe('verified Whiteboard mutations', () => {
     expect(transport.replaceCalls).toHaveLength(1);
   });
 
+  it('waits for image-to-Whiteboard structure to materialize without repeating the replacement', async () => {
+    vi.useFakeTimers();
+    const transport = new ResourceTransport();
+    transport.imageReplacementReadbackMisses = 2;
+    try {
+      const applying = apply(transport, [boardIntent(transport, {
+        kind: 'svg',
+        value: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>',
+      }, 'image')]);
+      const resolved = expect(applying).resolves.toMatchObject({
+        operations: [{
+          createdBlockIds: ['board-new-1'],
+          resourceTokens: ['board-new-1-token'],
+          verified: true,
+        }],
+      });
+      await vi.runAllTimersAsync();
+      await resolved;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(transport.imageReplacementReadbacks).toBe(4);
+    expect(transport.replaceCalls).toHaveLength(1);
+  });
+
+  it('keeps partial evidence when image-to-Whiteboard structure never materializes', async () => {
+    vi.useFakeTimers();
+    const transport = new ResourceTransport();
+    transport.imageReplacementReadbackMisses = Number.MAX_SAFE_INTEGER;
+    try {
+      const applying = apply(transport, [boardIntent(transport, {
+        kind: 'svg',
+        value: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>',
+      }, 'image')]);
+      const rejected = expect(applying).rejects.toMatchObject({
+        name: 'PartialMutationError',
+        evidence: {
+          failedOperation: {
+            operationId: 'board-svg',
+            kind: 'verification',
+            message: 'Image replacement did not produce one identifiable Whiteboard block.',
+          },
+          createdBlockIds: [],
+          pendingOperationIds: [],
+          recoveryDisposition: 'manual_inspection_required',
+        },
+      });
+      await vi.runAllTimersAsync();
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(transport.imageReplacementReadbacks).toBe(8);
+    expect(transport.replaceCalls).toHaveLength(1);
+  });
+
   it('fails closed when image-replacement readback is behind the provider revision', async () => {
     const transport = new ResourceTransport();
     transport.futureProviderRevision = true;
@@ -666,6 +736,7 @@ describe('verified Whiteboard mutations', () => {
     }, 'image')], mutationJournal)).rejects.toBeInstanceOf(PartialMutationError);
     expect(mutationJournal.entries).toEqual([]);
     expect(transport.replaceCalls).toHaveLength(1);
+    expect(transport.imageReplacementReadbacks).toBe(1);
   });
 
   it('returns manual partial evidence after an accepted overwrite whose readback is unavailable', async () => {
@@ -744,6 +815,8 @@ describe('verified Whiteboard mutations', () => {
       kind: 'svg',
       value: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>',
     }, 'image')])).rejects.toBeInstanceOf(PartialMutationError);
+    expect(ambiguous.imageReplacementReadbacks).toBe(1);
+    expect(ambiguous.replaceCalls).toHaveLength(1);
   });
 
   it('never journals image replacement when provider response is lost and raw verification fails', async () => {
